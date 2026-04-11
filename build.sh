@@ -3,7 +3,7 @@ set -e
 
 echo "=== Installing client dependencies ==="
 cd client
-npm install --include=dev
+NODE_ENV=development npm install
 
 echo "=== Building React frontend ==="
 npm run build
