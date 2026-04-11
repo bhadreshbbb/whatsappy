@@ -11,6 +11,7 @@ import Contacts from "./pages/Contacts";
 import Analytics from "./pages/Analytics";
 import Settings from "./pages/Settings";
 import Chat from "./pages/Chat";
+import Gallery from "./pages/Gallery";
 
 // Separate component so useLocation works inside BrowserRouter
 function AppLayout({ sidebarOpen, setSidebarOpen }) {
@@ -34,6 +35,7 @@ function AppLayout({ sidebarOpen, setSidebarOpen }) {
             <Route path="/analytics" element={<Analytics />} />
             <Route path="/settings" element={<Settings />} />
             <Route path="/chat" element={<Chat />} />
+            <Route path="/gallery" element={<Gallery />} />
           </Routes>
         </main>
       </div>

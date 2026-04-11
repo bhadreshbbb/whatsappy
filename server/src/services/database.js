@@ -39,6 +39,8 @@ async function loadFromMongo() {
       if (!db.product_catalog) db.product_catalog = [];
       if (!db.chat_conversations) db.chat_conversations = [];
       if (!db.chat_messages) db.chat_messages = [];
+      if (!db.gallery_folders) db.gallery_folders = [];
+      if (!db.gallery_images) db.gallery_images = [];
       if (!db._counters) db._counters = {};
       console.log('[DB] Loaded from MongoDB Atlas');
       return true;
@@ -78,6 +80,8 @@ let db = {
   product_catalog: [],   // Shopify product catalog per channel
   chat_conversations: [], // WhatsApp chat conversations
   chat_messages: [],      // WhatsApp chat messages
+  gallery_folders: [],    // Media gallery folders
+  gallery_images: [],     // Uploaded images with Meta media IDs
   _counters: {}
 };
 
@@ -91,6 +95,8 @@ function loadDb() {
       if (!db.product_catalog) db.product_catalog = [];
       if (!db.chat_conversations) db.chat_conversations = [];
       if (!db.chat_messages) db.chat_messages = [];
+      if (!db.gallery_folders) db.gallery_folders = [];
+      if (!db.gallery_images) db.gallery_images = [];
       if (!db._counters) db._counters = {};
     } catch (e) {
       console.error('Error loading DB:', e);
@@ -129,6 +135,8 @@ export function getDb() {
     product_catalog: db.product_catalog,
     chat_conversations: db.chat_conversations,
     chat_messages: db.chat_messages,
+    gallery_folders: db.gallery_folders,
+    gallery_images: db.gallery_images,
     prepare: (sql) => ({
       get: (...params) => executeQuery(sql, params, 'get'),
       all: (...params) => executeQuery(sql, params, 'all'),

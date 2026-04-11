@@ -17,6 +17,7 @@ import { whatsappRoutes } from './routes/whatsapp.routes.js';
 import { contactsRoutes } from './routes/contacts.routes.js';
 import { productsRoutes } from './routes/products.routes.js';
 import { chatRoutes } from './routes/chat.routes.js';
+import { galleryRoutes } from './routes/gallery.routes.js';
 import { initDb } from './services/database.js';
 import { startAutomation } from './jobs/automation.js';
 import { errorHandler } from './middleware/errorHandler.js';
@@ -92,6 +93,7 @@ app.use('/api/whatsapp',   whatsappRoutes);
 app.use('/api/contacts',   contactsRoutes);
 app.use('/api/products',   productsRoutes);
 app.use('/api/chat',       chatRoutes);
+app.use('/api/gallery',    galleryRoutes);
 
 // Serve built React frontend — must be BEFORE errorHandler
 const clientDist = path.join(__dirname, '../../client/dist');
