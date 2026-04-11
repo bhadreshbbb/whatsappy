@@ -11,8 +11,10 @@
     "dev": "concurrently \"npm run dev:server\" \"npm run dev:client\"",
     "dev:server": "cd server && npm run dev",
     "dev:client": "cd client && npm run dev",
-    "build": "cd client && npm run build",
-    "start": "cd server && npm start"
+    "build": "npm run build:client && npm run build:server",
+    "build:client": "cd client && npm install && node ./node_modules/vite/bin/vite.js build",
+    "build:server": "cd server && npm install",
+    "start": "cd server && node src/index.js"
   },
   "devDependencies": {
     "concurrently": "^8.2.2"
