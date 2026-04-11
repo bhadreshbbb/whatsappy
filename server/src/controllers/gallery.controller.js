@@ -1,5 +1,4 @@
 import { getDb } from '../services/database.js';
-import FormData from 'form-data';
 import { v4 as uuidv4 } from 'uuid';
 
 function getCredentials() {
@@ -21,16 +20,17 @@ async function uploadToMeta(buffer, filename, mimeType) {
   const creds = getCredentials();
   if (!creds) throw new Error('WhatsApp credentials not configured. Add token and Phone ID in Settings.');
 
+  // Use native FormData + Blob (Node.js 18+ built-in, works with native fetch)
   const form = new FormData();
   form.append('messaging_product', 'whatsapp');
   form.append('type', mimeType);
-  form.append('file', buffer, { filename, contentType: mimeType });
+  form.append('file', new Blob([buffer], { type: mimeType }), filename);
 
   const res = await fetch(
     `https://graph.facebook.com/v25.0/${creds.phoneId}/media`,
     {
       method: 'POST',
-      headers: { Authorization: `Bearer ${creds.token}`, ...form.getHeaders() },
+      headers: { Authorization: `Bearer ${creds.token}` },
       body: form,
     }
   );
