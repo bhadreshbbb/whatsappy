@@ -3,7 +3,7 @@ services:
     name: whatsway-pro
     runtime: node
     rootDir: .
-    buildCommand: cd client && npm install && npm run build && cd ../server && npm install
+    buildCommand: chmod +x build.sh && ./build.sh
     startCommand: cd server && node src/index.js
     envVars:
       - key: PORT
