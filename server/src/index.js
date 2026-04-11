@@ -93,17 +93,18 @@ app.use('/api/contacts',   contactsRoutes);
 app.use('/api/products',   productsRoutes);
 app.use('/api/chat',       chatRoutes);
 
-app.use(errorHandler);
-
-// Serve built React frontend in production
+// Serve built React frontend — must be BEFORE errorHandler
 const clientDist = path.join(__dirname, '../../client/dist');
 if (fs.existsSync(clientDist)) {
   app.use(express.static(clientDist));
-  app.get('*', (req, res) => {
+  // All non-API routes → serve React app (client-side routing)
+  app.get(/^(?!\/api).*$/, (req, res) => {
     res.sendFile(path.join(clientDist, 'index.html'));
   });
   console.log('[Static] Serving frontend from client/dist');
 }
+
+app.use(errorHandler);
 
 initDb().then(() => {
   startAutomation();
