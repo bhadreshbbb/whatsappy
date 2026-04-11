@@ -39,6 +39,47 @@ async function uploadToMeta(buffer, filename, mimeType) {
   return data.id;
 }
 
+// ── Image Preview — fetches from Meta using media_id ──────────────────────
+
+export async function previewImage(req, res) {
+  try {
+    const db = getDb();
+    const channelId = req.headers['x-channel-id'] || 'demo';
+    const { id } = req.params;
+
+    const img = (db.gallery_images || []).find(i => i.id === id && i.channel_id === channelId);
+    if (!img) return res.status(404).json({ error: 'Image not found' });
+
+    const creds = getCredentials();
+    if (!creds) return res.status(400).json({ error: 'WhatsApp credentials not configured' });
+
+    // Step 1: Get the download URL from Meta
+    const metaRes = await fetch(
+      `https://graph.facebook.com/v25.0/${img.media_id}`,
+      { headers: { Authorization: `Bearer ${creds.token}` } }
+    );
+    const metaData = await metaRes.json();
+    if (!metaRes.ok || !metaData.url) {
+      return res.status(502).json({ error: 'Could not get image URL from Meta' });
+    }
+
+    // Step 2: Download the actual image from Meta's CDN
+    const imgRes = await fetch(metaData.url, {
+      headers: { Authorization: `Bearer ${creds.token}` }
+    });
+    if (!imgRes.ok) return res.status(502).json({ error: 'Could not download image from Meta' });
+
+    // Step 3: Stream it back to the browser
+    res.setHeader('Content-Type', img.mime_type || 'image/jpeg');
+    res.setHeader('Cache-Control', 'public, max-age=86400'); // cache 1 day
+    const arrayBuffer = await imgRes.arrayBuffer();
+    res.send(Buffer.from(arrayBuffer));
+  } catch (err) {
+    console.error('[Gallery] Preview error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+}
+
 // ── Folders ────────────────────────────────────────────────────────────────
 
 export function getFolders(req, res) {

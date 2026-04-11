@@ -2,7 +2,7 @@ import { Router } from 'express';
 import multer from 'multer';
 import {
   getFolders, createFolder, deleteFolder,
-  getImages, uploadImage, deleteImage,
+  getImages, uploadImage, deleteImage, previewImage,
 } from '../controllers/gallery.controller.js';
 
 const router  = Router();
@@ -25,5 +25,6 @@ router.delete('/folders/:id',      deleteFolder);
 router.get('/folders/:folderId/images',          getImages);
 router.post('/folders/:folderId/upload', upload.single('file'), uploadImage);
 router.delete('/images/:id',             deleteImage);
+router.get('/images/:id/preview',        previewImage);
 
 export { router as galleryRoutes };

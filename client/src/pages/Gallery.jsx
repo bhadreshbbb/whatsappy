@@ -263,9 +263,20 @@ export default function Gallery() {
               <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
                 {images.map(img => (
                   <div key={img.id} className="group relative bg-white/5 border border-white/10 rounded-2xl overflow-hidden hover:border-green-600/40 transition-all">
-                    {/* Thumbnail placeholder */}
-                    <div className="aspect-square bg-gradient-to-br from-green-900/20 to-slate-800 flex items-center justify-center">
-                      <Image size={28} className="text-slate-600" />
+                    {/* Image preview */}
+                    <div className="aspect-square bg-gradient-to-br from-green-900/20 to-slate-800 overflow-hidden">
+                      <img
+                        src={`/api/gallery/images/${img.id}/preview`}
+                        alt={img.filename}
+                        className="w-full h-full object-cover"
+                        onError={e => {
+                          e.target.style.display = 'none';
+                          e.target.nextSibling.style.display = 'flex';
+                        }}
+                      />
+                      <div className="w-full h-full items-center justify-center hidden">
+                        <Image size={28} className="text-slate-600" />
+                      </div>
                     </div>
 
                     {/* Info */}
