@@ -1,278 +1,524 @@
-import React, { useEffect, useState, useRef } from "react";
-import { Plus, Edit2, Trash2, X, MessageSquare, Globe, Image, Check, ChevronDown, ChevronUp, ChevronLeft, ChevronRight } from "lucide-react";
-import { templatesApi } from "../api";
-import { translateText } from "../translate";
+import React, { useEffect, useState } from "react";
+import {
+  Plus, Trash2, RefreshCw, CheckCircle2, Clock, XCircle,
+  AlertCircle, Settings2, Send, Image, Type, Link,
+  MessageSquare, Zap, Copy, Check, FileText, X
+} from "lucide-react";
 
-// ─── Constants ────────────────────────────────────────────────────────────────
+const BASE = `/api/meta-templates`;
+const GALLERY_API = `/api/gallery`;
+const CH = () => ({ 'x-channel-id': localStorage.getItem('channelId') || 'demo' });
+
+async function api(path, opts = {}) {
+  const res = await fetch(`${BASE}${path}`, {
+    headers: { ...CH(), 'Content-Type': 'application/json', ...opts.headers },
+    ...opts,
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || 'Request failed');
+  return data;
+}
 
 const CATEGORIES = [
-  { id:"abandoned_cart", label:"Abandoned Cart" },
-  { id:"abandoned_checkout", label:"Checkout Abandoned" },
-  { id:"product_view",   label:"Abandoned Product View" },
-  { id:"product_recom",  label:"Product Recommendation (Carousel)" },
-  { id:"post_purchase",  label:"Post-Purchase Upsell" },
-  { id:"discount",       label:"Discount Offer" },
-  { id:"poll",           label:"Native WhatsApp Poll (Trending)" },
-  { id:"flow",           label:"WhatsApp Flow (Next-Gen)" },
+  { value: 'MARKETING',      label: 'Marketing' },
+  { value: 'UTILITY',        label: 'Utility' },
+  { value: 'AUTHENTICATION', label: 'Authentication' },
 ];
 
 const LANGUAGES = [
-  { code:"en", flag:"🇺🇸", label:"English"    },
-  { code:"hi", flag:"🇮🇳", label:"Hindi"      },
-  { code:"gu", flag:"🇮🇳", label:"Gujarati"   },
-  { code:"mr", flag:"🇮🇳", label:"Marathi"    },
-  { code:"bn", flag:"🇧🇩", label:"Bengali"    },
-  { code:"ta", flag:"🇮🇳", label:"Tamil"      },
-  { code:"te", flag:"🇮🇳", label:"Telugu"     },
-  { code:"ur", flag:"🇵🇰", label:"Urdu"       },
-  { code:"ar", flag:"🇦🇪", label:"Arabic"     },
+  { value: 'en', label: '🇺🇸 English' },
+  { value: 'hi', label: '🇮🇳 Hindi' },
+  { value: 'gu', label: '🇮🇳 Gujarati' },
+  { value: 'ta', label: '🇮🇳 Tamil' },
+  { value: 'te', label: '🇮🇳 Telugu' },
+  { value: 'mr', label: '🇮🇳 Marathi' },
+  { value: 'bn', label: '🇧🇩 Bengali' },
+  { value: 'ar', label: '🇦🇪 Arabic' },
 ];
 
-const PRODUCT_IMAGES = [
-  { label:"Auto (from tracker)",   url:"{{product_image}}", preview:null },
-  { label:"Blue Kurti",            url:"https://picsum.photos/seed/bluekurti/400/300",    preview:"https://picsum.photos/seed/bluekurti/80/80"    },
-  { label:"Red Saree",             url:"https://picsum.photos/seed/redsaree/400/300",     preview:"https://picsum.photos/seed/redsaree/80/80"     },
-  { label:"Lehenga Choli",         url:"https://picsum.photos/seed/lehenga/400/300",      preview:"https://picsum.photos/seed/lehenga/80/80"      },
-  { label:"Cotton Shirt",          url:"https://picsum.photos/seed/cottonshirt/400/300",  preview:"https://picsum.photos/seed/cottonshirt/80/80"  },
-  { label:"Denim Jeans",           url:"https://picsum.photos/seed/denimjeans/400/300",   preview:"https://picsum.photos/seed/denimjeans/80/80"   },
-];
-
-const PREVIEW_VARS = {
-  name: "Priya",
-  product_name: "Blue Kurti",
-  product_price: "799",
-  currency: "INR",
-  product_image: "https://picsum.photos/seed/bluekurti/400/300",
-  cart_url: "https://shop.example.com/cart?sid=sess_1",
-  product_url: "https://shop.example.com/products/blue-kurti",
-  total_amount: "1599",
+const STATUS_CONFIG = {
+  APPROVED:       { color: 'text-green-400',  bg: 'bg-green-500/10 border-green-500/20',   icon: CheckCircle2, label: 'Approved' },
+  PENDING:        { color: 'text-yellow-400', bg: 'bg-yellow-500/10 border-yellow-500/20', icon: Clock,        label: 'Pending Review' },
+  REJECTED:       { color: 'text-red-400',    bg: 'bg-red-500/10 border-red-500/20',       icon: XCircle,      label: 'Rejected' },
+  DRAFT:          { color: 'text-slate-400',  bg: 'bg-slate-500/10 border-slate-500/20',   icon: FileText,     label: 'Draft' },
+  SUBMIT_ERROR:   { color: 'text-red-400',    bg: 'bg-red-500/10 border-red-500/20',       icon: AlertCircle,  label: 'Submit Error' },
+  NO_CREDENTIALS: { color: 'text-slate-400',  bg: 'bg-slate-500/10 border-slate-500/20',   icon: AlertCircle,  label: 'No Credentials' },
 };
 
-const BLANK_CARD = { image:"{{product_image}}", title:"Buy Now", url:"{{product_url}}" };
-
-const BLANK = {
-  name:"", language:"en", category:"abandoned_cart", use_visitor_lang: false,
-  header_type:"none", header_text:"", header_image_url:"",
-  body_text:"Hi {{name}}! 👋 You left something in your cart. Check it out!",
-  footer_text:"", buttons:[], carousel_cards: [],
+const BLANK_TPL = {
+  name: '', category: 'MARKETING', language: 'en',
+  header_type: 'NONE', header_text: '',
+  body: '', footer: '', buttons: [], variable_labels: [],
 };
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+export default function Templates() {
+  const [templates, setTemplates]         = useState([]);
+  const [view, setView]                   = useState('list');
+  const [form, setForm]                   = useState(BLANK_TPL);
+  const [selected, setSelected]           = useState(null);
+  const [loading, setLoading]             = useState(false);
+  const [refreshing, setRefreshing]       = useState({});
+  const [error, setError]                 = useState('');
+  const [copied, setCopied]               = useState(null);
+  const [galleries, setGalleries]         = useState([]);
+  const [galleryImages, setGalleryImages] = useState([]);
+  const [productConfig, setProductConfig] = useState({});
 
-function fillVars(text = "") {
-  return text.replace(/\{\{(\w+)\}\}/g, (_, k) => PREVIEW_VARS[k] || `[${k}]`);
-}
+  useEffect(() => { loadTemplates(); }, []);
 
-// ─── WhatsApp Preview Component ───────────────────────────────────────────────
-function WAPreview({ tmpl }) {
-  if (!tmpl) return null;
-  const isCarousel = tmpl.category === "product_recom";
-  const isPoll = tmpl.category === "poll";
-  const isFlow = tmpl.category === "flow";
-  
-  const cards = tmpl.carousel_cards 
-    ? (typeof tmpl.carousel_cards === 'string' ? JSON.parse(tmpl.carousel_cards) : tmpl.carousel_cards) 
-    : [];
+  async function loadTemplates() {
+    setLoading(true);
+    try { const d = await api('/'); setTemplates(d.templates); }
+    catch (e) { setError(e.message); }
+    finally { setLoading(false); }
+  }
 
-  const pollOptions = tmpl.poll_options
-    ? (typeof tmpl.poll_options === 'string' ? JSON.parse(tmpl.poll_options) : tmpl.poll_options)
-    : ["Option 1", "Option 2"];
+  async function loadGallery() {
+    try {
+      const d = await fetch(`${GALLERY_API}/folders`, { headers: CH() }).then(r => r.json());
+      setGalleries(d.folders || []);
+    } catch (_) {}
+  }
 
-  const CheckIcon = () => (
-    <svg width="16" height="11" viewBox="0 0 16 11" fill="none" className="inline ml-1 text-slate-500">
-      <path d="M1 5L5 9L15 1" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-      <path d="M5 5L9 9L19 1" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" transform="translate(-4, 0)"/>
-    </svg>
-  );
+  async function loadFolderImages(folderId) {
+    try {
+      const d = await fetch(`${GALLERY_API}/folders/${folderId}/images`, { headers: CH() }).then(r => r.json());
+      setGalleryImages(d.images || []);
+    } catch (_) {}
+  }
 
-  const LinkIcon = () => (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="inline mr-2">
-      <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6M15 3h6v6M10 14L21 3" />
-    </svg>
-  );
+  async function submitTemplate() {
+    setError('');
+    if (!form.name.trim()) return setError('Template name is required');
+    if (!form.body.trim()) return setError('Body text is required');
+    setLoading(true);
+    try {
+      const d = await api('/', { method: 'POST', body: JSON.stringify(form) });
+      setTemplates(prev => [d.template, ...prev]);
+      setView('list'); setForm(BLANK_TPL);
+    } catch (e) { setError(e.message); }
+    finally { setLoading(false); }
+  }
 
-  const FlowIcon = () => (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="inline mr-2">
-      <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
-      <polyline points="3.27 6.96 12 12.01 20.73 6.96" />
-      <line x1="12" y1="22.08" x2="12" y2="12" />
-    </svg>
-  );
+  async function handleRefreshStatus(tpl) {
+    setRefreshing(r => ({ ...r, [tpl.id]: true }));
+    try {
+      const d = await api(`/${tpl.id}/refresh`);
+      setTemplates(prev => prev.map(t => t.id === tpl.id ? d.template : t));
+    } catch (e) { setError(e.message); }
+    finally { setRefreshing(r => ({ ...r, [tpl.id]: false })); }
+  }
+
+  async function deleteTpl(tpl) {
+    if (!confirm(`Delete template "${tpl.name}"?`)) return;
+    try {
+      await api(`/${tpl.id}`, { method: 'DELETE' });
+      setTemplates(prev => prev.filter(t => t.id !== tpl.id));
+    } catch (e) { setError(e.message); }
+  }
+
+  async function saveProductConfig() {
+    setLoading(true);
+    try {
+      const d = await api(`/${selected.id}/product-config`, { method: 'PUT', body: JSON.stringify(productConfig) });
+      setTemplates(prev => prev.map(t => t.id === selected.id ? d.template : t));
+      setView('list');
+    } catch (e) { setError(e.message); }
+    finally { setLoading(false); }
+  }
+
+  function openConfig(tpl) {
+    setSelected(tpl);
+    const vars = extractVars(tpl.body);
+    setProductConfig(tpl.product_config || {
+      header_image_id: '',
+      products: [{ title: '', price: '', link: '', image_id: '' }],
+      var_map: vars.reduce((a, v) => ({ ...a, [v]: '' }), {}),
+      custom_values: {},
+    });
+    loadGallery();
+    setView('config');
+  }
+
+  function extractVars(text) {
+    return [...new Set([...(text || '').matchAll(/\{\{(\d+)\}\}/g)].map(m => m[1]))];
+  }
+
+  function addVar(field) {
+    const vars = extractVars(form[field]);
+    const next = vars.length ? Math.max(...vars.map(Number)) + 1 : 1;
+    setForm(f => ({ ...f, [field]: f[field] + ` {{${next}}}` }));
+  }
+
+  function addButton(type) {
+    setForm(f => ({
+      ...f,
+      buttons: [...f.buttons,
+        type === 'URL'          ? { type: 'URL', text: 'Shop Now', url: 'https://yourstore.com/{{1}}' }
+        : type === 'QUICK_REPLY' ? { type: 'QUICK_REPLY', text: 'View Product' }
+        :                          { type: 'PHONE_NUMBER', text: 'Call Us', phone_number: '+91XXXXXXXXXX' }
+      ],
+    }));
+  }
+
+  function copyName(name) {
+    navigator.clipboard.writeText(name);
+    setCopied(name); setTimeout(() => setCopied(null), 1500);
+  }
+
+  if (view === 'create') return <CreateView form={form} setForm={setForm} error={error} setError={setError}
+    loading={loading} onSubmit={submitTemplate} onBack={() => { setView('list'); setError(''); }}
+    extractVars={extractVars} addVar={addVar} addButton={addButton} />;
+
+  if (view === 'config') return <ConfigView tpl={selected} config={productConfig} setConfig={setProductConfig}
+    galleries={galleries} galleryImages={galleryImages} loadFolderImages={loadFolderImages}
+    error={error} loading={loading} onSave={saveProductConfig}
+    onBack={() => { setView('list'); setError(''); }} extractVars={extractVars} />;
 
   return (
-    <div className="phone-frame glow-wapp scale-90 lg:scale-100">
-       <div className="phone-notch"></div>
-       
-       {/* WhatsApp Header Simulation */}
-       <div className="bg-[#1f2c34] pt-8 pb-3 px-4 flex items-center gap-3 border-b border-white/5">
-          <ChevronLeft size={20} className="text-[#00a9ff]"/>
-          <div className="w-9 h-9 rounded-full bg-slate-700 flex items-center justify-center text-xs font-bold text-white/50">WA</div>
-          <div className="flex-1">
-             <h4 className="text-[13px] font-bold text-white leading-none">WhatsApp Marketing</h4>
-             <span className="text-[10px] text-wapp/70 flex items-center gap-1.5 mt-1">
-                <span className="w-1.5 h-1.5 bg-wapp rounded-full live-dot"></span>
-                online
-             </span>
-          </div>
-       </div>
+    <div className="flex flex-col gap-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-white text-xl font-bold">Meta Templates</h1>
+          <p className="text-slate-400 text-sm mt-0.5">Create, submit for approval, then configure product data</p>
+        </div>
+        <button onClick={() => { setView('create'); setError(''); }}
+          className="flex items-center gap-2 bg-green-600 hover:bg-green-500 text-white px-4 py-2 rounded-xl text-sm font-medium">
+          <Plus size={16} /> New Template
+        </button>
+      </div>
 
-       {/* Message Area */}
-       <div className="h-[calc(100%-110px)] overflow-y-auto p-4 space-y-4 wa-bg-pattern bg-[#0b141a]">
-          {/* Main Bubble */}
-          <div className="relative animate-float">
-             <svg className="absolute -left-2 top-0 text-[#1f2c34]" width="10" height="15">
-               <path fill="currentColor" d="M10 0 L10 15 L0 0 Z" />
-             </svg>
-             
-             <div className="bg-[#1f2c34] rounded-tr-xl rounded-b-xl overflow-hidden shadow-xl border border-white/5">
-                {tmpl.header_type === "image" && (
-                  <div className="h-36 bg-slate-800 relative group overflow-hidden">
-                    <img src={fillVars(tmpl.header_image_url === "{{product_image}}" ? PREVIEW_VARS.product_image : tmpl.header_image_url)} 
-                         className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110" alt=""/>
-                    {tmpl.personalize_image && (
-                      <div className="absolute inset-0 flex items-center justify-center bg-black/40 backdrop-blur-[1px]">
-                         <span className="text-white font-black text-lg bg-black/30 px-3 py-1 rounded-lg border border-white/20 shadow-2xl">
-                            Hi {PREVIEW_VARS.name}! 👋
-                         </span>
-                      </div>
+      {error && <ErrorBar msg={error} onClose={() => setError('')} />}
+
+      {loading && templates.length === 0 && <p className="text-slate-400 text-sm">Loading...</p>}
+
+      {templates.length === 0 && !loading && (
+        <div className="flex flex-col items-center justify-center py-20 text-slate-500 gap-3">
+          <FileText size={48} className="opacity-20" />
+          <p>No templates yet. Create your first Meta template.</p>
+          <p className="text-xs text-center max-w-sm">Templates need Meta approval before you can send campaigns. Usually takes a few minutes to a few hours.</p>
+        </div>
+      )}
+
+      <div className="flex flex-col gap-4">
+        {templates.map(tpl => {
+          const sc = STATUS_CONFIG[tpl.meta_status] || STATUS_CONFIG['DRAFT'];
+          const Icon = sc.icon;
+          return (
+            <div key={tpl.id} className="bg-white/[0.03] border border-white/10 rounded-2xl p-5 hover:border-white/20 transition-all">
+              <div className="flex items-start justify-between gap-4">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-3 flex-wrap">
+                    <span className="text-white font-semibold font-mono">{tpl.name}</span>
+                    <button onClick={() => copyName(tpl.name)} className="text-slate-500 hover:text-slate-300" title="Copy name">
+                      {copied === tpl.name ? <Check size={13} className="text-green-400" /> : <Copy size={13} />}
+                    </button>
+                    <span className={`flex items-center gap-1 text-xs px-2.5 py-1 rounded-full border font-medium ${sc.bg} ${sc.color}`}>
+                      <Icon size={11} /> {sc.label}
+                    </span>
+                    <span className="text-xs text-slate-500 bg-white/5 px-2 py-0.5 rounded-full">{tpl.category}</span>
+                    <span className="text-xs text-slate-500 bg-white/5 px-2 py-0.5 rounded-full">{tpl.language}</span>
+                  </div>
+                  <p className="text-slate-400 text-sm mt-2 line-clamp-2">{tpl.body}</p>
+                  <div className="flex items-center gap-3 mt-2 flex-wrap">
+                    {tpl.header_type !== 'NONE' && (
+                      <span className="text-xs text-slate-500 flex items-center gap-1">
+                        {tpl.header_type === 'IMAGE' ? <Image size={11} /> : <Type size={11} />} {tpl.header_type} Header
+                      </span>
                     )}
-                    <div className="absolute inset-0 bg-gradient-to-t from-black/40 to-transparent"/>
+                    {tpl.footer && <span className="text-xs text-slate-500">Footer</span>}
+                    {tpl.buttons?.length > 0 && <span className="text-xs text-slate-500">{tpl.buttons.length} Button{tpl.buttons.length > 1 ? 's' : ''}</span>}
+                    {tpl.product_config && <span className="text-xs text-green-400 flex items-center gap-1"><CheckCircle2 size={11} /> Product config set</span>}
                   </div>
-                )}
-
-                <div className="px-3.5 py-3 relative">
-                  <p className="text-[#e9edef] text-[13px] leading-relaxed whitespace-pre-wrap">{fillVars(tmpl.body_text)}</p>
-                  
-                  {isPoll && (
-                    <div className="mt-4 space-y-2">
-                       {pollOptions.map((opt, i) => (
-                         <div key={i} className="poll-option group">
-                            <span>{opt}</span>
-                            <div className="w-4 h-4 rounded-full border border-white/20 group-hover:bg-wapp/20 group-hover:border-wapp transition-all"/>
-                         </div>
-                       ))}
-                       <p className="text-[9px] text-center text-slate-500 font-medium">Select one option</p>
-                    </div>
+                  {tpl.rejected_reason && <p className="text-xs text-red-400 mt-2">Rejection: {tpl.rejected_reason}</p>}
+                  {tpl.meta_error && <p className="text-xs text-red-400 mt-2 font-mono text-ellipsis overflow-hidden">{tpl.meta_error}</p>}
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <button onClick={() => handleRefreshStatus(tpl)} disabled={refreshing[tpl.id]}
+                    className="p-2 rounded-lg bg-white/5 hover:bg-white/10 text-slate-400 hover:text-white disabled:opacity-50" title="Refresh status from Meta">
+                    <RefreshCw size={14} className={refreshing[tpl.id] ? 'animate-spin' : ''} />
+                  </button>
+                  {tpl.meta_status === 'APPROVED' && (
+                    <button onClick={() => openConfig(tpl)}
+                      className="flex items-center gap-1.5 text-xs bg-green-600/20 hover:bg-green-600/40 border border-green-600/30 text-green-400 px-3 py-1.5 rounded-lg">
+                      <Settings2 size={13} /> Configure Products
+                    </button>
                   )}
-
-                  {tmpl.footer_text && <p className="text-slate-400 text-[10px] mt-2 italic border-t border-white/5 pt-1">{fillVars(tmpl.footer_text)}</p>}
-                  <div className="text-right mt-1.5 flex items-center justify-end gap-1">
-                     <span className="text-[9px] text-slate-500">10:45 AM</span>
-                     <CheckIcon/>
-                  </div>
+                  <button onClick={() => deleteTpl(tpl)} className="p-2 rounded-lg bg-white/5 hover:bg-red-500/20 text-slate-400 hover:text-red-400">
+                    <Trash2 size={14} />
+                  </button>
                 </div>
-             </div>
-
-             {/* Dynamic Buttons */}
-             {!isCarousel && !isPoll && (
-                <div className="mt-1.5 space-y-1">
-                   {isFlow ? (
-                      <div className="bg-[#1f2c34] rounded-xl py-2.5 text-center border border-white/5 shadow-sm active:bg-white/5 transition-all flex items-center justify-center gap-2 cursor-pointer group">
-                        <FlowIcon/>
-                        <span className="text-[#00a9ff] text-sm font-semibold">{tmpl.flow_name || "Open Shop Flow"}</span>
-                      </div>
-                   ) : (
-                      tmpl.buttons && (typeof tmpl.buttons === 'string' ? JSON.parse(tmpl.buttons) : tmpl.buttons).map((btn, i) => (
-                        <div key={i} className="bg-[#1f2c34] rounded-xl py-2.5 text-center border border-white/5 shadow-sm active:bg-white/5 transition-all flex items-center justify-center gap-2 cursor-pointer">
-                          {btn.type === 'url' && <LinkIcon/>}
-                          <span className="text-[#00a9ff] text-sm font-semibold">{btn.text}</span>
-                        </div>
-                      ))
-                   )}
-                </div>
-             )}
-          </div>
-
-          {/* Carousel Special View */}
-          {isCarousel && cards.length > 0 && (
-             <div className="flex gap-2.5 overflow-x-auto pb-4 scrollbar-hide snap-x mt-2">
-                {cards.map((card, i) => (
-                  <div key={i} className="min-w-[200px] bg-[#1f2c34] rounded-2xl overflow-hidden shadow-xl snap-center border border-white/5 group">
-                    <div className="h-28 bg-slate-800 relative">
-                      <img src={fillVars(card.image === "{{product_image}}" ? PREVIEW_VARS.product_image : card.image)} 
-                           className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-700" alt=""/>
-                      <div className="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent opacity-40"/>
-                    </div>
-                    <div className="p-2.5 bg-[#1f2c34]">
-                        <button className="w-full bg-white/[0.03] hover:bg-white/[0.08] py-2 px-3 rounded-lg text-[#00a9ff] text-[11px] font-bold transition-all border border-white/5 flex items-center justify-center">
-                           <LinkIcon/> {card.title || "Buy Now"}
-                        </button>
-                    </div>
-                  </div>
-                ))}
-             </div>
-          )}
-       </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
 
-
-// ─── Card Preview Component ───────────────────────────────────────────────────
-function CardPreview({ t }) {
-  const isCarousel = t.category === "product_recom";
-  const isPoll = t.category === "poll";
-  const isFlow = t.category === "flow";
-  const buttons = t.buttons ? (typeof t.buttons === 'string' ? JSON.parse(t.buttons) : t.buttons) : [];
-  const cards = t.carousel_cards ? (typeof t.carousel_cards === 'string' ? JSON.parse(t.carousel_cards) : t.carousel_cards) : [];
-  const pollOptions = t.poll_options ? (typeof t.poll_options === 'string' ? JSON.parse(t.poll_options) : t.poll_options) : [];
-
-  // Support both new format (body_text) and old format (components[].text)
-  let bodyText = t.body_text || '';
-  if (!bodyText && t.components) {
-    try {
-      const comps = typeof t.components === 'string' ? JSON.parse(t.components) : t.components;
-      bodyText = comps.find(c => c.type === 'body')?.text || comps[0]?.text || '';
-    } catch {}
-  }
+function CreateView({ form, setForm, error, setError, loading, onSubmit, onBack, extractVars, addVar, addButton }) {
+  const f = (k, v) => setForm(p => ({ ...p, [k]: v }));
+  const bodyVars   = extractVars(form.body);
+  const headerVars = extractVars(form.header_text);
 
   return (
-    <div className="bg-[#0b141a] rounded-xl px-2.5 pt-2.5 pb-1 border border-white/5 h-44 overflow-hidden mt-3 wa-bg-pattern">
-      <div className="max-w-[88%]">
-        <div className="bg-[#1f2c34] rounded-tr-xl rounded-b-xl overflow-hidden shadow-lg border border-white/5">
-          {t.header_type === 'image' && t.header_image_url && (
-            <img
-              src={t.header_image_url === '{{product_image}}' ? PREVIEW_VARS.product_image : t.header_image_url}
-              className="w-full h-14 object-cover" alt=""
-            />
-          )}
-          <div className="px-2 py-1.5">
-            <p className="text-[#e9edef] text-[9px] leading-snug line-clamp-3">{fillVars(bodyText)}</p>
-            {t.footer_text && <p className="text-slate-400 text-[8px] mt-0.5 italic line-clamp-1">{fillVars(t.footer_text)}</p>}
-            <div className="text-right mt-0.5"><span className="text-[7px] text-slate-500">10:45 AM ✓✓</span></div>
+    <div className="flex flex-col gap-6 max-w-3xl">
+      <div className="flex items-center gap-3">
+        <button onClick={onBack} className="text-slate-400 hover:text-white"><X size={20} /></button>
+        <h1 className="text-white text-xl font-bold">Create Meta Template</h1>
+      </div>
+      {error && <ErrorBar msg={error} onClose={() => setError('')} />}
+
+      <div className="bg-white/[0.03] border border-white/10 rounded-2xl p-6 flex flex-col gap-5">
+        <div className="grid grid-cols-3 gap-4">
+          <div className="flex flex-col gap-1.5">
+            <label className="text-slate-400 text-xs font-medium">Template Name *</label>
+            <input value={form.name} onChange={e => f('name', e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, '_'))}
+              placeholder="product_promo_v1" className="input text-sm font-mono" />
+            <p className="text-slate-600 text-xs">lowercase + underscores only</p>
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <label className="text-slate-400 text-xs font-medium">Category</label>
+            <select value={form.category} onChange={e => f('category', e.target.value)} className="input text-sm">
+              {CATEGORIES.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
+            </select>
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <label className="text-slate-400 text-xs font-medium">Language</label>
+            <select value={form.language} onChange={e => f('language', e.target.value)} className="input text-sm">
+              {LANGUAGES.map(l => <option key={l.value} value={l.value}>{l.label}</option>)}
+            </select>
           </div>
         </div>
 
-        {isPoll && pollOptions.length > 0 && (
-          <div className="mt-1 space-y-0.5">
-            {pollOptions.slice(0, 2).map((opt, i) => (
-              <div key={i} className="bg-[#1f2c34] rounded-lg py-0.5 px-2 text-[#e9edef] text-[8px] border border-white/5">{opt}</div>
+        <div className="flex flex-col gap-2">
+          <label className="text-slate-400 text-xs font-medium">Header Type</label>
+          <div className="flex gap-2">
+            {['NONE', 'IMAGE', 'TEXT'].map(t => (
+              <button key={t} onClick={() => f('header_type', t)}
+                className={`px-3 py-1.5 rounded-lg text-xs font-medium border ${form.header_type === t ? 'bg-green-600/20 border-green-600/40 text-green-400' : 'bg-white/5 border-white/10 text-slate-400 hover:border-white/20'}`}>
+                {t === 'IMAGE' && <Image size={11} className="inline mr-1" />}
+                {t === 'TEXT' && <Type size={11} className="inline mr-1" />}
+                {t}
+              </button>
+            ))}
+          </div>
+          {form.header_type === 'TEXT' && (
+            <div className="flex gap-2 items-end">
+              <textarea value={form.header_text} onChange={e => f('header_text', e.target.value)}
+                placeholder="Header text with {{1}} variables" rows={2} className="input text-sm flex-1 resize-none" />
+              <button onClick={() => addVar('header_text')} className="var-btn">+ Var</button>
+            </div>
+          )}
+          {form.header_type === 'IMAGE' && (
+            <p className="text-xs text-slate-500 bg-white/5 px-3 py-2 rounded-lg">
+              Image header — select from Gallery after approval in the Configure Products step.
+            </p>
+          )}
+          {headerVars.length > 0 && <VarLabels vars={headerVars} labels={form.variable_labels} onChange={v => f('variable_labels', v)} prefix="Header" />}
+        </div>
+
+        <div className="flex flex-col gap-2">
+          <div className="flex items-center justify-between">
+            <label className="text-slate-400 text-xs font-medium">
+              Body Text * <span className="text-slate-600">— use {`{{1}}`} {`{{2}}`} {`{{3}}`} for variables</span>
+            </label>
+            <button onClick={() => addVar('body')} className="var-btn">+ Add Variable</button>
+          </div>
+          <textarea value={form.body} onChange={e => f('body', e.target.value)}
+            placeholder={"Hi {{1}}! 👋 Check out {{2}} for just ₹{{3}}.\n\nLimited time offer — tap below to shop!"} rows={5}
+            className="input text-sm resize-none" />
+          <p className="text-xs text-slate-600">{form.body.length}/1024</p>
+          {bodyVars.length > 0 && <VarLabels vars={bodyVars} labels={form.variable_labels} onChange={v => f('variable_labels', v)} prefix="Body" />}
+        </div>
+
+        <div className="flex flex-col gap-1.5">
+          <label className="text-slate-400 text-xs font-medium">Footer <span className="text-slate-600">(optional)</span></label>
+          <input value={form.footer} onChange={e => f('footer', e.target.value)}
+            placeholder="Reply STOP to unsubscribe" className="input text-sm" />
+        </div>
+
+        <div className="flex flex-col gap-3">
+          <div className="flex items-center justify-between">
+            <label className="text-slate-400 text-xs font-medium">Buttons <span className="text-slate-600">(max 3)</span></label>
+            {form.buttons.length < 3 && (
+              <div className="flex gap-1.5">
+                <button onClick={() => addButton('URL')} className="var-btn"><Link size={11} className="inline mr-1" />URL</button>
+                <button onClick={() => addButton('QUICK_REPLY')} className="var-btn"><Zap size={11} className="inline mr-1" />Quick Reply</button>
+                <button onClick={() => addButton('PHONE_NUMBER')} className="var-btn"><MessageSquare size={11} className="inline mr-1" />Phone</button>
+              </div>
+            )}
+          </div>
+          {form.buttons.map((btn, i) => (
+            <div key={i} className="flex gap-2 items-center bg-white/5 rounded-xl p-3">
+              <span className="text-xs text-slate-500 w-24 shrink-0">{btn.type}</span>
+              <input value={btn.text} onChange={e => { const b = [...form.buttons]; b[i] = { ...b[i], text: e.target.value }; f('buttons', b); }}
+                placeholder="Button label" className="input text-xs flex-1" />
+              {btn.type === 'URL' && (
+                <input value={btn.url} onChange={e => { const b = [...form.buttons]; b[i] = { ...b[i], url: e.target.value }; f('buttons', b); }}
+                  placeholder="https://..." className="input text-xs flex-1 font-mono" />
+              )}
+              {btn.type === 'PHONE_NUMBER' && (
+                <input value={btn.phone_number || ''} onChange={e => { const b = [...form.buttons]; b[i] = { ...b[i], phone_number: e.target.value }; f('buttons', b); }}
+                  placeholder="+91XXXXXXXXXX" className="input text-xs flex-1 font-mono" />
+              )}
+              <button onClick={() => f('buttons', form.buttons.filter((_, j) => j !== i))} className="text-red-400 hover:text-red-300"><X size={14} /></button>
+            </div>
+          ))}
+        </div>
+
+        <WhatsAppPreview form={form} />
+
+        <div className="flex gap-3 pt-2 border-t border-white/10">
+          <button onClick={onBack} className="px-5 py-2 rounded-xl bg-white/5 hover:bg-white/10 text-slate-300 text-sm">Cancel</button>
+          <button onClick={onSubmit} disabled={loading}
+            className="flex items-center gap-2 px-6 py-2 rounded-xl bg-green-600 hover:bg-green-500 disabled:opacity-50 text-white text-sm font-medium">
+            <Send size={14} /> {loading ? 'Submitting to Meta...' : 'Submit to Meta for Approval'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ConfigView({ tpl, config, setConfig, galleries, galleryImages, loadFolderImages, error, loading, onSave, onBack, extractVars }) {
+  const vars = extractVars(tpl.body);
+  const set  = (k, v) => setConfig(p => ({ ...p, [k]: v }));
+  const setProduct = (i, k, v) => setConfig(p => {
+    const arr = [...(p.products || [])]; arr[i] = { ...arr[i], [k]: v };
+    return { ...p, products: arr };
+  });
+  const [selFolder, setSelFolder] = useState('');
+
+  return (
+    <div className="flex flex-col gap-6 max-w-3xl">
+      <div className="flex items-center gap-3">
+        <button onClick={onBack} className="text-slate-400 hover:text-white"><X size={20} /></button>
+        <div>
+          <h1 className="text-white text-xl font-bold">Configure Products</h1>
+          <p className="text-slate-400 text-sm font-mono">{tpl.name}</p>
+        </div>
+      </div>
+      {error && <ErrorBar msg={error} />}
+
+      <div className="bg-white/[0.03] border border-white/10 rounded-2xl p-6 flex flex-col gap-6">
+
+        {tpl.header_type === 'IMAGE' && (
+          <div className="flex flex-col gap-3">
+            <label className="text-white font-medium text-sm">Header Image <span className="text-slate-400 font-normal">(select from Gallery)</span></label>
+            <GalleryPicker galleries={galleries} galleryImages={galleryImages} selectedId={config.header_image_id}
+              selFolder={selFolder} onSelectFolder={id => { setSelFolder(id); loadFolderImages(id); }}
+              onSelect={img => set('header_image_id', img.id)} />
+            {config.header_image_id && (
+              <img src={`/api/gallery/images/${config.header_image_id}/preview`} alt=""
+                className="w-32 h-32 object-cover rounded-xl border border-white/10" />
+            )}
+          </div>
+        )}
+
+        {vars.length > 0 && (
+          <div className="flex flex-col gap-3">
+            <label className="text-white font-medium text-sm">Variable Mapping</label>
+            <p className="text-slate-500 text-xs">Map each {`{{N}}`} to the data that should replace it when sending</p>
+            {vars.map(v => (
+              <div key={v} className="flex items-center gap-3 bg-white/5 rounded-xl p-3">
+                <span className="text-green-400 font-mono text-sm w-12 shrink-0">{`{{${v}}}`}</span>
+                <select value={(config.var_map || {})[v] || ''} className="input text-sm flex-1"
+                  onChange={e => set('var_map', { ...(config.var_map || {}), [v]: e.target.value })}>
+                  <option value="">— Select field —</option>
+                  <optgroup label="Customer"><option value="customer_name">Customer Name</option><option value="phone">Phone</option></optgroup>
+                  <optgroup label="Product"><option value="product_title">Product Title</option><option value="product_price">Product Price</option><option value="product_link">Product Link</option></optgroup>
+                  <optgroup label="Cart"><option value="cart_total">Cart Total</option><option value="cart_link">Cart Link</option></optgroup>
+                  <optgroup label="Fixed"><option value="custom">Custom Text</option></optgroup>
+                </select>
+                {(config.var_map || {})[v] === 'custom' && (
+                  <input placeholder="Fixed value..." className="input text-sm flex-1"
+                    value={(config.custom_values || {})[v] || ''}
+                    onChange={e => set('custom_values', { ...(config.custom_values || {}), [v]: e.target.value })} />
+                )}
+              </div>
             ))}
           </div>
         )}
 
-        {isFlow && t.flow_name && (
-          <div className="mt-1 bg-[#1f2c34] rounded-lg py-1 text-center text-[#00a9ff] text-[8px] font-bold border border-white/5">
-            {t.flow_name}
+        <div className="flex flex-col gap-3">
+          <div className="flex items-center justify-between">
+            <label className="text-white font-medium text-sm">Product List</label>
+            <button onClick={() => set('products', [...(config.products || []), { title: '', price: '', link: '', image_id: '' }])}
+              className="var-btn"><Plus size={12} className="inline mr-1" />Add Product</button>
           </div>
-        )}
+          {(config.products || []).map((prod, i) => (
+            <div key={i} className="bg-white/5 border border-white/10 rounded-2xl p-4 flex flex-col gap-3">
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400 text-xs font-medium">Product {i + 1}</span>
+                {(config.products || []).length > 1 && (
+                  <button onClick={() => set('products', (config.products || []).filter((_, j) => j !== i))} className="text-red-400 hover:text-red-300"><X size={13} /></button>
+                )}
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-slate-500 text-xs">Title</label>
+                  <input value={prod.title} onChange={e => setProduct(i, 'title', e.target.value)} placeholder="Blue Cotton Kurti" className="input text-sm" />
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-slate-500 text-xs">Price</label>
+                  <input value={prod.price} onChange={e => setProduct(i, 'price', e.target.value)} placeholder="₹799" className="input text-sm" />
+                </div>
+                <div className="col-span-2 flex flex-col gap-1.5">
+                  <label className="text-slate-500 text-xs">Product Link</label>
+                  <input value={prod.link} onChange={e => setProduct(i, 'link', e.target.value)} placeholder="https://yourstore.com/product/..." className="input text-sm font-mono" />
+                </div>
+                <div className="col-span-2 flex flex-col gap-2">
+                  <label className="text-slate-500 text-xs">Product Image (from Gallery)</label>
+                  <GalleryPicker galleries={galleries} galleryImages={galleryImages} selectedId={prod.image_id}
+                    selFolder={selFolder} onSelectFolder={id => { setSelFolder(id); loadFolderImages(id); }}
+                    onSelect={img => setProduct(i, 'image_id', img.id)} />
+                  {prod.image_id && (
+                    <img src={`/api/gallery/images/${prod.image_id}/preview`} alt="" className="w-20 h-20 object-cover rounded-xl border border-white/10" />
+                  )}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
 
-        {!isCarousel && !isPoll && !isFlow && buttons.length > 0 && (
-          <div className="mt-1 bg-[#1f2c34] rounded-lg py-1 text-center text-[#00a9ff] text-[8px] font-bold border border-white/5">
-            {buttons[0].text}
-          </div>
-        )}
+        <div className="flex gap-3 pt-2 border-t border-white/10">
+          <button onClick={onBack} className="px-5 py-2 rounded-xl bg-white/5 hover:bg-white/10 text-slate-300 text-sm">Cancel</button>
+          <button onClick={onSave} disabled={loading}
+            className="flex items-center gap-2 px-6 py-2 rounded-xl bg-green-600 hover:bg-green-500 disabled:opacity-50 text-white text-sm font-medium">
+            <CheckCircle2 size={14} /> {loading ? 'Saving...' : 'Save Product Config'}
+          </button>
+        </div>
       </div>
+    </div>
+  );
+}
 
-      {isCarousel && cards.length > 0 && (
-        <div className="flex gap-1 mt-1 overflow-hidden">
-          {cards.slice(0, 3).map((card, i) => (
-            <div key={i} className="min-w-[56px] bg-[#1f2c34] rounded-lg overflow-hidden border border-white/5 flex-shrink-0">
-              <img
-                src={card.image === '{{product_image}}' ? PREVIEW_VARS.product_image : card.image}
-                className="w-full h-9 object-cover" alt=""
-              />
-              <p className="text-[7px] text-[#00a9ff] text-center py-0.5 font-bold truncate px-1">{card.title}</p>
+function GalleryPicker({ galleries, galleryImages, selectedId, onSelectFolder, selFolder, onSelect }) {
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex gap-2 flex-wrap">
+        {galleries.map(f => (
+          <button key={f.id} onClick={() => onSelectFolder(f.id)}
+            className={`text-xs px-3 py-1.5 rounded-lg border ${selFolder === f.id ? 'bg-green-600/20 border-green-600/40 text-green-400' : 'bg-white/5 border-white/10 text-slate-400 hover:border-white/20'}`}>
+            {f.name} ({f.imageCount})
+          </button>
+        ))}
+        {galleries.length === 0 && <p className="text-slate-500 text-xs">No gallery folders — upload images in My Gallery first.</p>}
+      </div>
+      {galleryImages.length > 0 && (
+        <div className="flex gap-2 flex-wrap">
+          {galleryImages.map(img => (
+            <div key={img.id} onClick={() => onSelect(img)}
+              className={`relative cursor-pointer rounded-xl overflow-hidden border-2 transition-all ${selectedId === img.id ? 'border-green-500' : 'border-transparent hover:border-white/30'}`}
+              style={{ width: 64, height: 64 }}>
+              <img src={`/api/gallery/images/${img.id}/preview`} alt={img.filename} className="w-full h-full object-cover" />
+              {selectedId === img.id && (
+                <div className="absolute inset-0 bg-green-500/30 flex items-center justify-center">
+                  <Check size={18} className="text-white" />
+                </div>
+              )}
             </div>
           ))}
         </div>
@@ -281,369 +527,63 @@ function CardPreview({ t }) {
   );
 }
 
-// ─── Child Components ─────────────────────────────────────────────────────────
-
-function ImagePicker({ value, onChange }) {
-  const [open, setOpen] = useState(false);
-  const selected = PRODUCT_IMAGES.find(p => p.url === value);
+function VarLabels({ vars, labels, onChange, prefix }) {
   return (
-    <div className="relative">
-      <button type="button" onClick={() => setOpen(!open)} className="w-full flex items-center gap-2 p-2 rounded-lg bg-white/5 border border-white/10 text-left text-xs">
-        {selected?.preview ? <img src={selected.preview} className="w-6 h-6 rounded object-cover"/> : <div className="w-6 h-6 bg-green-500/10 rounded flex items-center justify-center text-[10px]">🤖</div>}
-        <span className="flex-1 truncate">{selected?.label || "Custom Image URL"}</span>
-        <ChevronDown size={14}/>
-      </button>
-      {open && (
-        <div className="absolute top-full left-0 right-0 mt-1 p-2 bg-[#0d1424] border border-white/10 rounded-xl z-20 grid grid-cols-3 gap-1 shadow-2xl">
-          {PRODUCT_IMAGES.map(img => (
-            <button key={img.url} onClick={() => { onChange(img.url); setOpen(false); }} className="p-1 rounded hover:bg-white/5">
-               {img.preview ? <img src={img.preview} className="w-full h-10 object-cover rounded"/> : <div className="h-10 bg-green-500/10 rounded flex items-center justify-center text-lg">🤖</div>}
-            </button>
-          ))}
-          <div className="col-span-3 pt-1 border-t border-white/5 mt-1">
-             <input className="input text-[10px] py-1" placeholder="Or custom URL..." value={value} onChange={e=>onChange(e.target.value)}/>
-          </div>
+    <div className="bg-white/5 rounded-xl p-3 flex flex-col gap-2">
+      <p className="text-slate-400 text-xs font-medium">{prefix} Variable Labels <span className="text-slate-600">(your reference only)</span></p>
+      {vars.map(v => (
+        <div key={v} className="flex items-center gap-2">
+          <span className="text-green-400 font-mono text-xs w-10">{`{{${v}}}`}</span>
+          <input placeholder={`e.g. customer_name`}
+            value={(labels || []).find(l => l.var === v)?.label || ''}
+            onChange={e => {
+              const next = [...(labels || []).filter(l => l.var !== v)];
+              if (e.target.value) next.push({ var: v, label: e.target.value });
+              onChange(next);
+            }} className="input text-xs flex-1" />
         </div>
-      )}
+      ))}
     </div>
   );
 }
 
-// ─── Main Page ────────────────────────────────────────────────────────────────
-export default function Templates() {
-  const [templates, setTemplates] = useState([]);
-  const [showModal, setShowModal] = useState(false);
-  const [editing, setEditing] = useState(null);
-  const [form, setForm] = useState(BLANK);
-  const [saving, setSaving] = useState(false);
-  const [translating, setTranslating] = useState(false);
-  const [filterCat, setFilterCat] = useState("");
-  const [validationErr, setValidationErr] = useState("");
-
-  const load = async () => {
-    const data = await templatesApi.list();
-    setTemplates(data || []);
-  };
-
-  useEffect(() => { load(); }, []);
-
-  const openCreate = () => { setEditing(null); setForm(BLANK); setShowModal(true); };
-  const openEdit = t => {
-    setEditing(t);
-    setForm({
-      ...t,
-      carousel_cards: t.carousel_cards ? (typeof t.carousel_cards === 'string' ? JSON.parse(t.carousel_cards) : t.carousel_cards) : [],
-      buttons: t.buttons ? (typeof t.buttons === 'string' ? JSON.parse(t.buttons) : t.buttons) : [],
-    });
-    setShowModal(true);
-  };
-
-  const save = async () => {
-    setValidationErr("");
-    const errs = [];
-    if (!form.name || !form.name.trim()) errs.push("• Template Name is required.");
-    if (!form.body_text || !form.body_text.trim()) errs.push("• Message Body is required.");
-    
-    if (form.category === 'poll') {
-       if (!form.poll_options || form.poll_options.length < 2) errs.push("• Poll must have at least 2 options.");
-       else if (form.poll_options.some(o => !o.trim())) errs.push("• All poll options must contain text.");
-    }
-    else if (form.category === 'product_recom') {
-       if (!form.carousel_cards || form.carousel_cards.length === 0) errs.push("• Carousel must have at least 1 slide.");
-       else if (form.carousel_cards.some(c => !c.title.trim() || !c.url.trim())) errs.push("• All carousel slides must have a label and URL.");
-    }
-    else if (form.category === 'flow') {
-       if (!form.flow_name || !form.flow_name.trim()) errs.push("• Flow Configuration button label is required.");
-    }
-    else {
-       if (form.buttons && form.buttons.some(b => !b.text.trim() || !b.url.trim())) errs.push("• All action buttons must have text and a URL.");
-    }
-
-    if (errs.length > 0) {
-      setValidationErr(errs.join("\n"));
-      return;
-    }
-
-    setSaving(true);
-    try {
-      const payload = { ...form, 
-        carousel_cards: JSON.stringify(form.carousel_cards || []),
-        buttons: JSON.stringify(form.buttons || []),
-        poll_options: JSON.stringify(form.poll_options || []),
-      };
-      if (editing) await templatesApi.update(editing.id, payload);
-      else await templatesApi.create(payload);
-      await load(); setShowModal(false);
-    } finally { setSaving(false); }
-  };
-
-  const magicRephrase = () => {
-    setTranslating(true);
-    setTimeout(() => {
-       const variants = [
-         "Ready to level up? 🚀 Your {{product_name}} is waiting for its new home!",
-         "Psst... {{name}}! 🤫 We saved your {{product_name}} just for you. Grab it before it's gone!",
-         "Final call! ⏰ Complete your order for {{product_name}} and enjoy direct delivery!"
-       ];
-       f("body_text", variants[Math.floor(Math.random()*variants.length)]);
-       setTranslating(false);
-    }, 800);
-  };
-
-  const f = (k, v) => {
-    setForm(p => {
-      const next = { ...p, [k]:v };
-      // ── Auto-defaults based on Category ──
-      if (k === 'category') {
-        if (v === 'abandoned_cart' || v === 'discount') {
-           if (!next.buttons.length) next.buttons = [{ type: 'url', text: 'Complete Order 🛍', url: '{{cart_url}}' }];
-        } else if (v === 'product_view') {
-           if (!next.buttons.length) next.buttons = [{ type: 'url', text: 'View Product 🛍', url: '{{product_url}}' }];
-        } else if (v === 'product_recom' || v === 'post_purchase') {
-           if (!next.carousel_cards.length) next.carousel_cards = [
-             { image:'https://picsum.photos/seed/bluekurti/400/300', title:'Blue Kurti', url:'{{product_url}}' },
-             { image:'https://picsum.photos/seed/redsaree/400/300', title:'Red Saree', url:'{{product_url}}' }
-           ];
-        } else if (v === 'poll') {
-           next.poll_options = ["Yes, interested!", "Tell me more", "Not now"];
-        } else if (v === 'flow') {
-           next.flow_name = "Selection Assistant";
-        }
-      }
-      return next;
-    });
-  };
-
-  const addCard = () => {
-    if (form.carousel_cards.length >= 4) return;
-    f("carousel_cards", [...form.carousel_cards, { ...BLANK_CARD, url: '{{product_url}}' }]);
-  };
-
-  const updateCard = (i, k, v) => {
-    const next = [...form.carousel_cards];
-    next[i] = { ...next[i], [k]:v };
-    f("carousel_cards", next);
-  };
-
-  const removeCard = (i) => f("carousel_cards", form.carousel_cards.filter((_,idx)=>idx!==i));
-
-  const AutoFill = ({ onSelect }) => (
-    <div className="flex gap-1 mt-1.5 min-h-[22px]">
-       {[
-          { l: "Cart URL", v: "{{cart_url}}", color: "bg-orange-500/10 text-orange-400 border-orange-400/20" },
-          { l: "Prod URL", v: "{{product_url}}", color: "bg-blue-500/10 text-blue-400 border-blue-400/20" }
-       ].map(btn => (
-         <button key={btn.v} onClick={()=>onSelect(btn.v)} className={`px-2 py-0.5 rounded text-[8px] font-bold border transition-all hover:scale-105 active:scale-95 ${btn.color}`}>
-            🤖 {btn.l}
-         </button>
-       ))}
+function WhatsAppPreview({ form }) {
+  const preview = (form.body || '')
+    .replace(/\{\{1\}\}/g, 'Priya').replace(/\{\{2\}\}/g, 'Blue Kurti')
+    .replace(/\{\{3\}\}/g, '₹799').replace(/\{\{4\}\}/g, 'link')
+    .replace(/\{\{(\d+)\}\}/g, (_, n) => `[Var${n}]`);
+  return (
+    <div className="flex flex-col gap-2">
+      <label className="text-slate-400 text-xs font-medium">Live Preview</label>
+      <div className="bg-[#0a1929] rounded-2xl p-4 flex justify-center">
+        <div className="w-64 bg-[#1a2a1a] rounded-2xl overflow-hidden shadow-xl">
+          {form.header_type === 'IMAGE' && (
+            <div className="w-full h-32 bg-green-900/30 flex items-center justify-center gap-2">
+              <Image size={22} className="text-green-600" />
+              <span className="text-green-600 text-xs">Image Header</span>
+            </div>
+          )}
+          {form.header_type === 'TEXT' && form.header_text && (
+            <div className="px-3 pt-3 font-bold text-white text-sm">{form.header_text.replace(/\{\{(\d+)\}\}/g, (_, n) => `[Var${n}]`)}</div>
+          )}
+          <div className="p-3">
+            <p className="text-white text-sm whitespace-pre-wrap">{preview || 'Your message will appear here...'}</p>
+            {form.footer && <p className="text-slate-500 text-xs mt-2">{form.footer}</p>}
+            {form.buttons?.map((btn, i) => (
+              <div key={i} className="mt-1.5 border-t border-white/10 pt-1.5 text-center text-green-400 text-xs py-1">{btn.text}</div>
+            ))}
+          </div>
+        </div>
+      </div>
     </div>
   );
+}
 
+function ErrorBar({ msg, onClose }) {
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h2 className="text-xl font-bold text-white">Message Architect</h2>
-        <button onClick={openCreate} className="btn-primary px-6"><Plus size={18}/> New Template</button>
-      </div>
-
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {templates.map(t => (
-          <div key={t.id} className="card p-5 group relative border-white/5 hover:border-blue-500/30 transition-all">
-             <div className="flex justify-between items-start mb-3">
-                <div className="flex-1 min-w-0">
-                   <h3 className="font-bold text-white truncate">{t.name}</h3>
-                   <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
-                     <span className="text-[9px] text-wapp/80 bg-wapp/10 px-1.5 py-0.5 rounded font-medium uppercase tracking-wide">{t.category?.replace(/_/g,' ')}</span>
-                     {t.language && <span className="text-[9px] text-slate-400 bg-white/5 px-1.5 py-0.5 rounded uppercase">{t.language}</span>}
-                   </div>
-                </div>
-                <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
-                   <button onClick={()=>openEdit(t)} className="p-2 bg-white/5 rounded-lg hover:text-blue-400"><Edit2 size={14}/></button>
-                   <button onClick={async() => { if(confirm('Delete?')){ await templatesApi.delete(t.id); load(); } }} className="p-2 bg-white/5 rounded-lg hover:text-red-400"><Trash2 size={14}/></button>
-                </div>
-             </div>
-             <CardPreview t={t}/>
-          </div>
-        ))}
-      </div>
-
-      {showModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
-           <div className="bg-[#0d1424] border border-white/10 rounded-3xl w-full max-w-6xl max-h-[90vh] overflow-hidden flex flex-col">
-              <div className="px-8 py-5 border-b border-white/5 flex items-center justify-between">
-                 <h3 className="text-lg font-bold text-white">{editing ? 'Optimize Template' : 'Architect New Message'}</h3>
-                 <button onClick={()=>setShowModal(false)} className="p-2 hover:bg-white/5 rounded-full text-slate-500"><X/></button>
-              </div>
-
-              <div className="flex-1 overflow-y-auto grid grid-cols-1 lg:grid-cols-2 gap-0">
-                 {/* Builder */}
-                 <div className="p-8 space-y-6 border-r border-white/5">
-                    <div className="grid grid-cols-2 gap-4">
-                       <div>
-                          <label className="label">Template Name</label>
-                          <input className="input" value={form.name} onChange={e=>f("name",e.target.value)} placeholder="e.g. Winter Sale Recovery"/>
-                       </div>
-                       <div>
-                          <label className="label">Focus Category</label>
-                          <select className="input" value={form.category} onChange={e=>f("category",e.target.value)}>
-                             {CATEGORIES.map(c=><option key={c.id} value={c.id}>{c.label}</option>)}
-                          </select>
-                       </div>
-                    </div>
-
-                    <div>
-                       <label className="label flex justify-between items-end">
-                          Message Body
-                          <div className="group relative">
-                             <span className="text-[10px] text-blue-400 cursor-help border-b border-blue-400/30">Variable Guide</span>
-                             <div className="absolute right-0 bottom-full mb-2 w-64 p-3 bg-slate-900 border border-white/10 rounded-xl shadow-2xl opacity-0 group-hover:opacity-100 transition-opacity z-50 pointer-events-none">
-                                <p className="text-[10px] font-bold text-white mb-2 uppercase tracking-widest">Available Tags</p>
-                                <div className="space-y-1.5">
-                                   {[
-                                      { t:"{{name}}", d:"Customer Name" },
-                                      { t:"{{product_name}}", d:"Item Name" },
-                                      { t:"{{product_price}}", d:"Unit Price" },
-                                      { t:"{{currency}}", d:"e.g. INR / USD" },
-                                      { t:"{{product_url}}", d:"Direct Link" },
-                                      { t:"{{cart_url}}", d:"Recovery Link" }
-                                   ].map(v => (
-                                      <div key={v.t} className="flex justify-between text-[9px]">
-                                         <code className="text-green-400">{v.t}</code>
-                                         <span className="text-slate-500">{v.d}</span>
-                                      </div>
-                                   ))}
-                                </div>
-                             </div>
-                          </div>
-                       </label>
-                       <textarea className="input min-h-[120px]" value={form.body_text} onChange={e=>f("body_text",e.target.value)} placeholder="Craft your message..."/>
-                    </div>
-
-                     {form.category === 'product_recom' && (
-                        <div className="space-y-4">
-                           <div className="flex items-center justify-between">
-                              <p className="label font-bold text-blue-400 text-[10px]">Carousel Slides ({form.carousel_cards.length}/4)</p>
-                              <button onClick={addCard} className="btn-secondary py-1 px-3 text-[10px]"><Plus size={12}/> Add Slide</button>
-                           </div>
-                           
-                           <div className="grid grid-cols-2 gap-3">
-                              {form.carousel_cards.map((card, i) => (
-                                 <div key={i} className="p-3 rounded-2xl bg-white/[0.02] border border-white/5 relative group/card">
-                                    <button onClick={()=>removeCard(i)} className="absolute -top-2 -right-2 w-6 h-6 bg-red-500 rounded-full flex items-center justify-center opacity-0 group-hover/card:opacity-100 transition-opacity z-10"><X size={12} className="text-white"/></button>
-                                    <div className="space-y-2">
-                                       <ImagePicker value={card.image} onChange={v=>updateCard(i, "image", v)}/>
-                                       <input className="input text-[10px] py-1" placeholder="Label" value={card.title} onChange={e=>updateCard(i, "title", e.target.value)}/>
-                                       <AutoFill onSelect={v=>updateCard(i, "url", v)}/>
-                                    </div>
-                                 </div>
-                              ))}
-                           </div>
-                        </div>
-                     )}
-
-                     {form.category === 'poll' && (
-                        <div className="space-y-4">
-                           <p className="label font-bold text-purple-400">Poll Options</p>
-                           {form.poll_options?.map((opt, i) => (
-                              <div key={i} className="flex gap-2">
-                                <input className="input text-xs" value={opt} onChange={e => {
-                                   const next = [...form.poll_options];
-                                   next[i] = e.target.value;
-                                   f("poll_options", next);
-                                }}/>
-                                <button onClick={() => f("poll_options", form.poll_options.filter((_,idx)=>idx!==i))} className="p-2 text-slate-500 hover:text-red-400"><Trash2 size={14}/></button>
-                              </div>
-                           ))}
-                           <button onClick={() => f("poll_options", [...(form.poll_options||[]), "New Option"])} className="btn-secondary w-full py-2 text-xs"><Plus size={14}/> Add Option</button>
-                        </div>
-                     )}
-
-                     {form.category === 'flow' && (
-                        <div className="space-y-4">
-                           <p className="label font-bold text-orange-400 uppercase tracking-widest">Flow Configuration</p>
-                           <div>
-                              <label className="text-[10px] text-slate-500 mb-1 block">Button Label</label>
-                              <input className="input" value={form.flow_name} onChange={e=>f("flow_name", e.target.value)} placeholder="e.g. Open Selection Assistant"/>
-                           </div>
-                           <div className="p-4 bg-orange-500/5 rounded-2xl border border-orange-500/10">
-                              <p className="text-[10px] text-orange-400 font-bold mb-1">PRO-TIP</p>
-                              <p className="text-[10px] text-slate-400">Flows allow users to fill forms, choose options, or look up orders directly in WhatsApp.</p>
-                           </div>
-                        </div>
-                     )}
-
-                     {(!['product_recom', 'poll', 'flow'].includes(form.category)) && (
-                        <div className="space-y-4">
-                            <div className="flex items-center justify-between">
-                               <p className="label font-bold text-green-400">Standard Attachment</p>
-                               <label className="flex items-center gap-2 cursor-pointer group">
-                                  <input type="checkbox" className="hidden" checked={form.personalize_image} onChange={e=>f("personalize_image", e.target.checked)}/>
-                                  <span className={`text-[9px] font-black uppercase tracking-tighter px-2 py-0.5 rounded border transition-all ${form.personalize_image ? 'bg-wapp text-black border-wapp' : 'text-slate-500 border-white/10 group-hover:border-white/20'}`}>
-                                     {form.personalize_image ? '🔥 Personalized' : 'Static Image'}
-                                  </span>
-                               </label>
-                            </div>
-                            <div className="flex gap-2">
-                                {["none","image","text"].map(h => (
-                                    <button key={h} onClick={()=>f("header_type", h)} className={`flex-1 py-1.5 rounded-xl text-[10px] border capitalize font-bold transition-all ${form.header_type===h ? 'bg-green-500/10 border-green-400 text-white' : 'border-white/10 text-slate-500'}`}>{h}</button>
-                                ))}
-                            </div>
-                            {form.header_type === 'image' && <ImagePicker value={form.header_image_url} onChange={v=>f("header_image_url", v)}/>}
-                            
-                            {form.buttons.length > 0 && (
-                               <div className="pt-2 space-y-3">
-                                  <p className="text-[10px] uppercase tracking-widest text-slate-500 font-bold leading-none mb-1">Primary CTA Button</p>
-                                  {form.buttons.map((btn, idx) => (
-                                     <div key={idx} className="space-y-1.5">
-                                        <div className="flex gap-2">
-                                           <input className="input text-xs py-2 flex-[2]" value={btn.text} onChange={e=>{
-                                              const next = [...form.buttons];
-                                              next[idx] = { ...next[idx], text: e.target.value };
-                                              f("buttons", next);
-                                           }} placeholder="Button Text"/>
-                                           <input className="input text-[10px] py-1.5 flex-[3]" value={btn.url} onChange={e=> {
-                                              const next = [...form.buttons];
-                                              next[idx] = { ...next[idx], url: e.target.value };
-                                              f("buttons", next);
-                                           }} placeholder="Link URL"/>
-                                        </div>
-                                        <AutoFill onSelect={v => {
-                                           const next = [...form.buttons];
-                                           next[idx] = { ...next[idx], url: v };
-                                           f("buttons", next);
-                                        }}/>
-                                     </div>
-                                  ))}
-                               </div>
-                            )}
-                        </div>
-                     )}
-
-                     {validationErr && (
-                        <div className="p-3 bg-red-500/10 border border-red-500/20 rounded-xl mt-4 text-red-400 text-xs whitespace-pre-line font-medium shadow-sm">
-                           ❌ Validation Errors:<br/>
-                           {validationErr}
-                        </div>
-                     )}
-
-                    <div className="pt-4 flex gap-4">
-                       <button onClick={()=>setShowModal(false)} className="btn-secondary flex-1">Cancel</button>
-                       <button onClick={save} disabled={saving} className="btn-primary flex-1 justify-center">{saving ? 'Architecting...' : 'Deploy Template'}</button>
-                    </div>
-                 </div>
-
-                 {/* Preview */}
-                 <div className="p-8 bg-black/20 flex flex-col">
-                    <p className="label text-center mb-8 uppercase tracking-[0.2em] text-slate-500">Real-time WhatsApp UI</p>
-                    <div className="flex-1 flex items-center justify-center">
-                       <WAPreview tmpl={form}/>
-                    </div>
-                 </div>
-              </div>
-           </div>
-        </div>
-      )}
+    <div className="flex items-center gap-2 bg-red-500/10 border border-red-500/20 text-red-400 text-xs px-4 py-3 rounded-xl">
+      <AlertCircle size={14} /> {msg}
+      {onClose && <button onClick={onClose} className="ml-auto"><X size={12} /></button>}
     </div>
   );
 }

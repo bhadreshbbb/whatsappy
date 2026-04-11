@@ -41,6 +41,7 @@ async function loadFromMongo() {
       if (!db.chat_messages) db.chat_messages = [];
       if (!db.gallery_folders) db.gallery_folders = [];
       if (!db.gallery_images) db.gallery_images = [];
+      if (!db.meta_templates) db.meta_templates = [];
       if (!db._counters) db._counters = {};
       console.log('[DB] Loaded from MongoDB Atlas');
       return true;
@@ -82,6 +83,7 @@ let db = {
   chat_messages: [],      // WhatsApp chat messages
   gallery_folders: [],    // Media gallery folders
   gallery_images: [],     // Uploaded images with Meta media IDs
+  meta_templates: [],     // WhatsApp templates submitted to Meta for approval
   _counters: {}
 };
 
@@ -97,6 +99,7 @@ function loadDb() {
       if (!db.chat_messages) db.chat_messages = [];
       if (!db.gallery_folders) db.gallery_folders = [];
       if (!db.gallery_images) db.gallery_images = [];
+      if (!db.meta_templates) db.meta_templates = [];
       if (!db._counters) db._counters = {};
     } catch (e) {
       console.error('Error loading DB:', e);
@@ -137,6 +140,7 @@ export function getDb() {
     chat_messages: db.chat_messages,
     gallery_folders: db.gallery_folders,
     gallery_images: db.gallery_images,
+    meta_templates: db.meta_templates,
     prepare: (sql) => ({
       get: (...params) => executeQuery(sql, params, 'get'),
       all: (...params) => executeQuery(sql, params, 'all'),

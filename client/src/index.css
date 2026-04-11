@@ -17,6 +17,7 @@
   .badge { @apply inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold; }
   .stat-card { @apply card p-5 flex flex-col gap-2; }
   .table-row { @apply border-b border-white/5 hover:bg-white/[0.02] transition-colors; }
+  .var-btn { @apply text-xs px-2.5 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-slate-300 transition-all; }
 }
 
 @keyframes livePulse {
