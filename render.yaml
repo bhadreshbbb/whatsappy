@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: whatsway-pro
+    runtime: node
+    rootDir: server
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    envVars:
+      - key: PORT
+        value: 10000
+      - key: CHANNEL_ID
+        value: demo
+      - key: NODE_ENV
+        value: production
+      - key: FREEIPAPI_TOKEN
+        sync: false
+      - key: MONGODB_URI
+        sync: false

@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Website Visitor Automation Map</title>
+    <script type="module">
+      import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
+      mermaid.initialize({ startOnLoad: true, theme: 'dark' });
+    </script>
+    <style>
+        body { background: #0d1424; color: white; font-family: sans-serif; padding: 40px; margin: 0; }
+        .container { max-width: 1000px; margin: 0 auto; background: rgba(255,255,255,0.02); padding: 40px; border-radius: 20px; }
+        h1 { text-align: center; color: #38bdf8; }
+        .mermaid { display: flex; justify-content: center; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>👁️ Website Visitor Automations (No Cart)</h1>
+        <p style="text-align: center; color: #94a3b8; margin-bottom: 30px;">This shows the exact automated rounds sent to a user who only views pages but never adds anything to their cart.</p>
+        
+        <div class="mermaid">
+        graph TD
+            ENTRY((User browses Homepage / Generic Pages)) -->|Logs Session| ENGINE{Automation Engine Wakes Up}
+            
+            ENGINE -->|Checks: Did they add to cart?| CHK_CART{NO Cart Event}
+            CHK_CART -->|If NO -> Begin Visitor Stages| ROUND1
+            
+            subgraph "The 'Set & Forget' Multi-Round Flow"
+                ROUND1[Round 1 (2 Hrs Later)<br/>WA: 'Hey! Noticed you looking around. Need help?']
+                ROUND2[Round 2 (24 Hrs Later)<br/>WA: Here is our Trending 5-Product Carousel!]
+                ROUND3[Round 3 (48 Hrs Later)<br/>WA: Special 5% Discount to try us out]
+                ROUND4[Round 4 (72 Hrs Later)<br/>WA: Final chance, deal expires tonight]
+                
+                ROUND1 -->|Automated Delay| ROUND2
+                ROUND2 -->|Automated Delay| ROUND3
+                ROUND3 -->|Automated Delay| ROUND4
+            end
+            
+            %% Conversion Pivot!
+            ROUND1 -.->|User clicks link & Buys| SUCCESS(((Checkout completed!)))
+            ROUND2 -.->|User clicks Carousel & Buys| SUCCESS
+            ROUND3 -.->|User uses code & Buys| SUCCESS
+            
+            SUCCESS ===>|Instantly triggers Tracker| GUARD[STATUS GUARD ACTIVATED]
+            GUARD -->|Cancels all remaining rounds!| CANCEL[🚫 Stop all generic texts]
+            
+            classDef blue fill:#0369a1,stroke:#bae6fd,color:#fff;
+            classDef purple fill:#6b21a8,stroke:#d8b4fe,color:#fff;
+            classDef green fill:#15803d,stroke:#86efac,color:#fff;
+            classDef red fill:#991b1b,stroke:#fca5a5,color:#fff;
+            
+            class ENTRY,ENGINE,CHK_CART blue;
+            class ROUND1,ROUND2,ROUND3,ROUND4 purple;
+            class SUCCESS green;
+            class GUARD,CANCEL red;
+        </div>
+    </div>
+</body>
+</html>

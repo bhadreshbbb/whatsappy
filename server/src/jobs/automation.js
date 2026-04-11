@@ -1,0 +1,491 @@
+import { whatsappService } from '../services/whatsapp.service.js';
+import { getDb } from '../services/database.js';
+import { aiService } from '../services/ai.service.js';
+import { translateComponents } from '../services/translate.service.js';
+import { saveChatMessage } from '../controllers/chat.controller.js';
+import { upgradeStatus } from '../utils/statusMachine.js';
+
+let cronInterval;
+
+/**
+ * Universal Automation Engine v3
+ *
+ * Campaign Flow:
+ *
+ *  FLOW 1 — website_visit (status: active)
+ *    User only visited home/listing pages, never viewed a product.
+ *    4 stages of product recommendation messages using Shopify catalog.
+ *    After stage 4 → status stays 'active' (no upgrade, they're cold).
+ *
+ *  FLOW 2 — product_view (status: product_view)
+ *    User viewed a product page then left.
+ *    4 stages using the exact product they viewed (last_product_* on visitor).
+ *    After stage 4 → status = 'hot_user'.
+ *
+ *  FLOW 3 — abandoned_cart (cart_events not recovered)
+ *    User added to cart but didn't buy.
+ *    4 stages of cart recovery with product image + cart link.
+ *    After stage 4 → status = 'cart_followup_complete' (+ hot_user).
+ *
+ *  FLOW 4 — post_cart_upsell (status: cart_followup_complete)
+ *    All 4 cart reminders sent, user still hasn't bought.
+ *    Now send product upsell / recommendation messages from catalog.
+ *    Keeps user engaged until they buy.
+ *
+ *  FLOW 5 — post_purchase (status: purchased)
+ *    AI-powered upsell recommendations based on what they bought.
+ */
+
+export function startAutomation() {
+  console.log('Starting automation engine...');
+  cronInterval = setInterval(() => {
+    runAutomation().catch(err => console.error('[Automation] Error:', err));
+  }, 60 * 1000);
+  console.log('Automation engine active - monitoring tracker events');
+}
+
+async function runAutomation() {
+  const db = getDb();
+  const channelId = process.env.CHANNEL_ID || 'demo';
+
+  const campaigns = (db.abandoned_cart_campaigns || []).filter(c => c.channel_id === channelId && c.is_active);
+
+  for (const cam of campaigns) {
+    try {
+      const delayMs = (cam.delay_hours || 0) * 60 * 60 * 1000;
+      const targetTime = new Date(Date.now() - delayMs).toISOString();
+
+      // ────────────────────────────────────────────────────────────────────
+      // FLOW 1: Website Visit — home/listing page only visitors (status=active)
+      // ────────────────────────────────────────────────────────────────────
+      if (cam.campaign_type === 'website_visit') {
+        const visitors = db.website_visitors.filter(v => {
+          if (v.channel_id !== channelId || !v.phone) return false;
+          // Only pure home/listing page visitors — product viewers and cart users have different status
+          if (v.status !== 'active') return false;
+
+          const isInitial  = !v.whatsapp_sent;
+          const isFollowup = v.whatsapp_sent && (v.followup_count || 0) < 4;
+          if (isFollowup) {
+            const hoursSince = v.whatsapp_sent_at ? (Date.now() - new Date(v.whatsapp_sent_at).getTime()) / 3600000 : Infinity;
+            const requiredGap = (v.followup_count || 1) * 24; // 1=24h, 2=48h, 3=72h
+            if (hoursSince < requiredGap) return false;
+          }
+          return (isInitial || isFollowup) && v.visited_at < targetTime;
+        }).slice(0, 5);
+
+        await sendMultiple(db, cam, visitors, 'visit');
+      }
+
+      // ────────────────────────────────────────────────────────────────────
+      // FLOW 2: Product View — user viewed a product, left without cart
+      // ────────────────────────────────────────────────────────────────────
+      else if (cam.campaign_type === 'product_view') {
+        // Target product_views table (has exact product data)
+        const views = db.product_views.filter(v => {
+          if (v.channel_id !== channelId || !v.phone) return false;
+          const isInitial  = !v.whatsapp_sent;
+          const isFollowup = v.whatsapp_sent && (v.followup_count || 0) < 4;
+          if (isFollowup) {
+            const hoursSince = v.whatsapp_sent_at ? (Date.now() - new Date(v.whatsapp_sent_at).getTime()) / 3600000 : Infinity;
+            const requiredGap = (v.followup_count || 1) * 24; // progressive 24/48/72
+            if (hoursSince < requiredGap) return false;
+          }
+          // Check live visitor status — skip if user has progressed past product_view
+          const visitor = db.website_visitors.find(vis => vis.phone === v.phone || vis.session_id === v.session_id);
+          if (visitor && isBlockedByStatus(visitor.status, 'product_view')) return false;
+          return (isInitial || isFollowup) && v.created_at < targetTime;
+        }).slice(0, 5);
+
+        await sendMultiple(db, cam, views, 'view');
+      }
+
+      // ────────────────────────────────────────────────────────────────────
+      // FLOW 3: Abandoned Cart & Checkout — added to cart or checkout started
+      // ────────────────────────────────────────────────────────────────────
+      else if (cam.campaign_type === 'abandoned_cart' || cam.campaign_type === 'abandoned_checkout' || cam.campaign_type === 'discount') {
+        const carts = db.cart_events.filter(c => {
+          if (c.channel_id !== channelId || !c.phone || c.recovered) return false;
+          const isInitial  = !c.whatsapp_sent;
+          const isFollowup = c.whatsapp_sent && (c.followup_count || 0) < 4;
+          if (isFollowup) {
+            const hoursSince = c.whatsapp_sent_at ? (Date.now() - new Date(c.whatsapp_sent_at).getTime()) / 3600000 : Infinity;
+            const requiredGap = (c.followup_count || 1) * 24; // progressive 24/48/72
+            if (hoursSince < requiredGap) return false;
+          }
+          // Check live visitor status — if they just purchased, skip (STATUS GUARD will catch it too)
+          const visitor = db.website_visitors.find(vis => vis.phone === c.phone || vis.session_id === c.session_id);
+          if (visitor && isBlockedByStatus(visitor.status, cam.campaign_type)) return false;
+          if (cam.campaign_type === 'abandoned_cart' && c.event_type === 'checkout_started') return false;
+          if (cam.campaign_type === 'abandoned_checkout' && c.event_type === 'add_to_cart') return false;
+
+          return (c.event_type === 'add_to_cart' || c.event_type === 'checkout_started') &&
+                 (isInitial || isFollowup) && c.created_at < targetTime;
+        }).slice(0, 5);
+
+        await sendMultiple(db, cam, carts, 'cart');
+      }
+
+      // ────────────────────────────────────────────────────────────────────
+      // FLOW 4: Post-Cart Upsell — all 4 cart reminders sent, still no purchase
+      //         Target: status = 'followup_complete'
+      // ────────────────────────────────────────────────────────────────────
+      else if (cam.campaign_type === 'post_cart_upsell') {
+        const targets = db.website_visitors.filter(v => {
+          if (v.channel_id !== channelId || !v.phone) return false;
+          if (v.status !== 'followup_complete') return false;
+          const isInitial  = !v.upsell_sent;
+          const isFollowup = v.upsell_sent; // INFINITE WEEKLY LOOP (No < 4 limit)
+          if (isFollowup) {
+            const hoursSince = (Date.now() - new Date(v.upsell_sent_at).getTime()) / 3600000;
+            if (hoursSince < 168) return false; // 168h (7 days) between weekly upsells
+          } else if (isInitial) {
+            // Wait exactly 1 week from the moment they finished Stage 4 (which updated 'v.updated_at')
+            const hoursSinceUpgrade = v.updated_at ? (Date.now() - new Date(v.updated_at).getTime()) / 3600000 : 0;
+            if (hoursSinceUpgrade < 168) return false;
+          }
+          return isInitial || isFollowup;
+        }).slice(0, 5);
+
+        await sendMultiple(db, cam, targets, 'upsell');
+      }
+
+      // ────────────────────────────────────────────────────────────────────
+      // FLOW 5: Post-Purchase — bought something, now upsell related products
+      // ────────────────────────────────────────────────────────────────────
+      else if (cam.campaign_type === 'post_purchase') {
+        const customers = db.website_visitors.filter(v =>
+          v.channel_id === channelId && v.phone && v.status === 'purchased' &&
+          (v.last_purchase_at || v.visited_at) < targetTime && !v.whatsapp_sent
+        ).slice(0, 5);
+
+        await sendMultiple(db, cam, customers, 'customer');
+      }
+
+      // ────────────────────────────────────────────────────────────────────
+      // FLOW 6: Custom Broadcast — filtered manual or automatic targeted pushes
+      // ────────────────────────────────────────────────────────────────────
+      else if (cam.campaign_type === 'custom_broadcast') {
+        const filters = cam.status_filters || [];
+        const targets = db.website_visitors.filter(v => {
+          if (v.channel_id !== channelId || !v.phone || v.is_opted_out) return false;
+          if (filters.length > 0 && !filters.includes(v.status)) return false;
+          
+          const executions = db.abandoned_cart_executions.filter(x => x.campaign_id === cam.id && x.phone === v.phone);
+          const isInitial = executions.length === 0;
+
+          if (cam.is_one_time) {
+            return isInitial; // Only send once ever
+          }
+
+          const isFollowup = executions.length > 0 && executions.length < 4;
+          if (isFollowup) {
+            const lastSent = new Date(executions[executions.length - 1].sent_at).getTime();
+            const hoursSince = (Date.now() - lastSent) / 3600000;
+            if (hoursSince < (cam.delay_hours || 24)) return false;
+          }
+          return isInitial || isFollowup;
+        }).slice(0, 5);
+
+        await sendMultiple(db, cam, targets, 'broadcast');
+      }
+
+    } catch (err) { console.error(`[Automation] Cam ${cam.id} error:`, err); }
+  }
+
+  db.save();
+}
+
+/**
+ * Status hierarchy — higher index = more advanced in funnel.
+ * A campaign is only allowed to run if the user's status matches its intended level.
+ * If a user has progressed further, the campaign is silently skipped and the correct
+ * campaign (matching their new status) will pick them up on the next 60s tick.
+ *
+ * Status → allowed campaign types
+ * ─────────────────────────────────────────────────────────────────
+ * active               → website_visit
+ * product_view         → product_view          (blocks website_visit)
+ * abandoned_cart       → abandoned_cart/discount (blocks website_visit + product_view)
+ * cart_followup_complete → post_cart_upsell     (blocks cart recovery)
+ * purchased            → post_purchase          (blocks everything else)
+ */
+const STATUS_ALLOWED = {
+  active:                  ['website_visit'],
+  product_view:            ['product_view'],
+  abandoned_cart:          ['abandoned_cart', 'discount'],
+  abandoned_checkout:      ['abandoned_checkout', 'discount'],
+  followup_complete:       ['post_cart_upsell'],
+  purchased:               ['post_purchase'],
+};
+
+function isBlockedByStatus(visitorStatus, campaignType) {
+  if (campaignType === 'custom_broadcast') return false; // Allowed unconditionally (relies on query filters)
+  if (!visitorStatus) return false;
+  const allowed = STATUS_ALLOWED[visitorStatus];
+  if (!allowed) return false; // unknown status — don't block
+  return !allowed.includes(campaignType);
+}
+
+async function sendMultiple(db, cam, events, type) {
+  const channelId = process.env.CHANNEL_ID || 'demo';
+
+  for (const evt of events) {
+    try {
+      // ── LIVE STATUS GUARD: re-fetch visitor status at send time ──
+      // The user may have changed status SINCE this batch was assembled.
+      // This ensures we never send a lower-funnel campaign to a higher-funnel user.
+      const visitor = db.website_visitors.find(v => v.phone === evt.phone);
+      
+      if (visitor?.is_opted_out) {
+        console.log(`[Status Guard] Skipped "${cam.name}" for ${evt.phone} — user is opted out`);
+        continue;
+      }
+
+      const liveStatus = visitor?.status;
+
+      if (liveStatus && isBlockedByStatus(liveStatus, cam.campaign_type)) {
+        console.log(`[Status Guard] Skipped "${cam.name}" for ${evt.phone} — user is now "${liveStatus}", campaign needs different status`);
+        // Do NOT mark as sent — the correct campaign will pick them up automatically
+        continue;
+      }
+
+      // Determine current stage
+      const currentStage = (type === 'upsell' || type === 'broadcast')
+        ? (evt.upsell_count || 0) + 1
+        : (evt.followup_count || 0) + 1;
+
+      // ── DEDUP CHECK ──
+      const alreadySent = db.abandoned_cart_executions.find(x =>
+        x.campaign_id === cam.id && x.phone === evt.phone && (x.stage || 1) === currentStage
+      );
+      if (alreadySent) {
+        console.log(`[De-dupe] Already sent stage ${currentStage} of ${cam.name} to ${evt.phone}`);
+        continue;
+      }
+
+      // ── TEMPLATE SELECTION (4-stage array & infinite loop support) ──
+      const stageTemplates = cam.template_ids || [];
+      const tIdMap = stageTemplates.length > 0
+           ? stageTemplates[(currentStage - 1) % stageTemplates.length]
+           : cam.template_id;
+      const templateId = tIdMap || cam.template_id;
+      const templateName = `${cam.campaign_type} stage-${currentStage}`;
+
+      // ── BUILD VARIABLES ──
+      const variables = buildVariables(db, cam, evt, visitor, type, channelId);
+
+      // ── AI UPSELL for post_purchase and post_cart_upsell ──
+      if (cam.campaign_type === 'post_purchase') {
+        const recentPurchase = db.purchase_history.find(p => p.phone === evt.phone) || {};
+        let purchasedItem = 'product';
+        try {
+          const arr = JSON.parse(recentPurchase.products || '[]');
+          if (arr.length) purchasedItem = arr.map(p => p.name).join(', ');
+        } catch (_) {}
+        const upsell = await aiService.recommendUpsell(purchasedItem);
+        variables.product_name  = upsell.name;
+        variables.product_price = String(upsell.price);
+        variables.product_image = upsell.image;
+        variables.ai_reason     = upsell.reason;
+      }
+
+      if (cam.campaign_type === 'post_cart_upsell') {
+        // Pick 3 random products from catalog as upsell recommendations
+        const catalog = db.product_catalog.filter(p => p.channel_id === channelId);
+        const picks = catalog.length > 0
+          ? catalog.sort(() => 0.5 - Math.random()).slice(0, 3)
+          : [];
+        
+        if (picks.length > 0) {
+          variables.product_name  = picks[0].name;
+          variables.product_price = picks[0].price;
+          variables.product_image = picks[0].image;
+          variables.product_url   = picks[0].url;
+          variables.product_list  = picks.map(p => `• ${p.name} — ₹${p.price}`).join('\n');
+          variables.recommended_products = JSON.stringify(picks);
+        }
+      }
+
+      // ── SEND ──
+      const templateRecord = db.message_templates.find(t => t.id == templateId);
+      if (!templateRecord) {
+        console.warn(`[Automation] Template ${templateId} not found for campaign ${cam.name}, skipping ${evt.phone}`);
+        continue;
+      }
+
+      // Build components from new-format (body_text) or fall back to old components field
+      let components;
+      const storedComponents = templateRecord.components ? JSON.parse(templateRecord.components) : [];
+      if (storedComponents.length > 0) {
+        components = storedComponents;
+      } else if (templateRecord.body_text) {
+        components = [{ type: 'body', text: templateRecord.body_text }];
+        if (templateRecord.header_type === 'text' && templateRecord.header_text) {
+          components.unshift({ type: 'header', text: templateRecord.header_text });
+        }
+        if (templateRecord.footer_text) {
+          components.push({ type: 'footer', text: templateRecord.footer_text });
+        }
+        const btns = templateRecord.buttons
+          ? (typeof templateRecord.buttons === 'string' ? JSON.parse(templateRecord.buttons) : templateRecord.buttons)
+          : [];
+        if (btns.length) components.push({ type: 'buttons', buttons: btns });
+      } else {
+        console.warn(`[Automation] Template ${templateId} has no body text, skipping ${evt.phone}`);
+        continue;
+      }
+
+      // ── PER-USER LANGUAGE TRANSLATION ──
+      const userLang = cam.target_language === 'per_user'
+        ? (evt.language || visitor?.language || 'en')
+        : (cam.target_language || 'en');
+
+      if (userLang && userLang !== 'en') {
+        components = await translateComponents(components, userLang);
+        console.log(`[Lang] Translating to ${userLang} for ${evt.phone} (${evt.name || 'user'})`);
+      }
+
+      const sendResult = await whatsappService.sendMessage(evt.phone, components, variables);
+
+      // ── SAVE TO CHAT INBOX (live update) ──
+      saveChatMessage(db, evt.phone, sendResult.resolvedText || '', channelId, {
+        wamid: sendResult.messageId || null,
+        campaignName: cam.name,
+        templateName,
+      });
+
+      // ── LOG EXECUTION ──
+      db.abandoned_cart_executions.push({
+        id: (db.abandoned_cart_executions.length || 0) + 1,
+        campaign_id: cam.id,
+        phone: evt.phone,
+        name: evt.name,
+        template_id: templateId,
+        template_name: templateName,
+        stage: currentStage,
+        language: userLang,
+        status: 'sent',
+        sent_at: new Date().toISOString(),
+        product_image: variables.product_image || ''
+      });
+
+      // ── UPDATE EVENT STATE ──
+      if (type === 'upsell') {
+        evt.upsell_sent    = 1;
+        evt.upsell_count   = currentStage;
+        evt.upsell_sent_at = new Date().toISOString();
+      } else {
+        evt.whatsapp_sent    = 1;
+        evt.followup_count   = currentStage;
+        evt.whatsapp_sent_at = new Date().toISOString();
+      }
+
+      // ── STAGE 4 STATUS PROMOTIONS ──
+      if (currentStage === 4) {
+        const vIdx = db.website_visitors.findIndex(v => v.phone === evt.phone);
+        if (vIdx >= 0) {
+          // ANY campaign reaching stage 4 without converting upgrades to followup_complete
+          // so they drop into the universal product recommendation engine (post_cart_upsell)
+          if (upgradeStatus(db.website_visitors[vIdx], 'followup_complete')) {
+            console.log(`[Stage 4] ${evt.phone} → followup_complete (universal upsell targeting begins)`);
+          }
+        }
+      }
+
+      cam.total_sent = (cam.total_sent || 0) + 1;
+      cam.last_run_at = new Date().toISOString();
+      console.log(`[Automation] ${cam.name} stage-${currentStage} → ${evt.phone}`);
+
+    } catch (e) { console.error(`[Automation] Send error for ${evt.phone}:`, e); }
+  }
+}
+
+/**
+ * Build WhatsApp message variables depending on campaign type.
+ * Each type has different dynamic data sources.
+ */
+function buildVariables(db, cam, evt, visitor, type, channelId) {
+  const base = {
+    name: evt.name || visitor?.name || 'Customer',
+    total_amount: (evt.total_amount || 0).toLocaleString(),
+    currency: evt.currency || null,
+    cart_url: evt.cart_url || '',
+    shopify_carousel: typeof evt.shopify_carousel === 'string'
+      ? evt.shopify_carousel
+      : JSON.stringify(evt.shopify_carousel || [])
+  };
+
+  if (type === 'cart') {
+    // FLOW 3 — cart product data comes from the cart_event itself
+    return {
+      ...base,
+      product_name:  evt.product_name  || extractFirstProductName(evt.products),
+      product_image: evt.product_image || '',
+      product_url:   evt.product_url   || '',
+      product_price: evt.product_price || String(evt.total_amount || ''),
+      product_list:  buildProductList(evt.products),
+    };
+  }
+
+  if (type === 'view') {
+    // FLOW 2 — use the exact product the visitor was looking at
+    return {
+      ...base,
+      product_name:  evt.product_name  || '',
+      product_image: evt.product_image || '',
+      product_url:   evt.product_url   || '',
+      product_price: evt.product_price || '',
+      product_list:  evt.product_name ? `• ${evt.product_name}` : '',
+    };
+  }
+
+  if (type === 'visit') {
+    // FLOW 1 — inject catalog product recommendations for home/listing page visitors
+    const catalog = db.product_catalog.filter(p => p.channel_id === channelId);
+    const picks = catalog.length > 0
+      ? catalog.sort(() => 0.5 - Math.random()).slice(0, 3)
+      : [];
+
+    const firstPick = picks[0] || {};
+    return {
+      ...base,
+      product_name:  firstPick.name  || 'our latest collection',
+      product_image: firstPick.image || '',
+      product_url:   firstPick.url   || '',
+      product_price: firstPick.price || '',
+      product_list:  picks.map(p => `• ${p.name} — ₹${p.price}`).join('\n') || 'Check our latest products',
+      recommended_products: JSON.stringify(picks),
+    };
+  }
+
+  if (type === 'upsell') {
+    // FLOW 4 — post_cart_upsell variables fall back to last_product if catalog is empty. 
+    // They are primarily overwritten by the sendMultiple block above using 3 random picks.
+    return {
+      ...base,
+      product_name:  visitor?.last_product_name  || 'exclusive offer',
+      product_image: visitor?.last_product_image || '',
+      product_url:   visitor?.last_product_url   || '',
+      product_price: visitor?.last_product_price || '',
+      product_list:  visitor?.last_product_name ? `• ${visitor.last_product_name}` : 'our best products',
+    };
+  }
+
+  // FLOW 5 & 6 — post_purchase / broadcast: filled in by AI service after this call
+  return { ...base, product_name: '', product_image: '', product_price: '', ai_reason: '' };
+}
+
+function extractFirstProductName(productsJson) {
+  try {
+    const arr = JSON.parse(productsJson || '[]');
+    return arr[0]?.name || '';
+  } catch (_) { return ''; }
+}
+
+function buildProductList(productsJson) {
+  try {
+    const arr = JSON.parse(productsJson || '[]');
+    return arr.map(p => `• ${p.name} — ₹${(p.price || 0).toLocaleString()}`).join('\n');
+  } catch (_) { return ''; }
+}

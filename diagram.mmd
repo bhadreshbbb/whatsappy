@@ -1,0 +1,40 @@
+graph TD
+    NEW_USER[New User Uses Site] -->|Just Browses| V_HOME[Visits Home/Listing Pages]
+    NEW_USER -->|Clicks Product| V_PROD[Views Specific Product]
+    NEW_USER -->|High Intent| V_CART[Adds items to Cart]
+    
+    V_HOME --> STAT_VIS[Status: Active Visitor]
+    V_PROD --> STAT_PROD[Status: Product Viewer]
+    V_CART --> STAT_CART[Status: Abandoned Cart]
+
+    STAT_VIS --> CAM_HOME{Website Visit Campaign}
+    CAM_HOME --> MSG_HOME[WA: Hey noticed you browsing]
+
+    STAT_PROD --> CAM_PROD{Product View Campaign}
+    CAM_PROD --> PROD_MSG1[WA: Like the Blue Kurti?]
+    PROD_MSG1 --> PROD_MSG2[WA: People also bought this]
+
+    STAT_CART --> CAM_CART{Cart Recovery Campaign}
+    CAM_CART --> CART_MSG1[WA: Cart Waiting + 10% Off]
+    CART_MSG1 --> CART_MSG2[WA: Last Chance!]
+
+    CART_MSG2 -.-> ST_HOT[Status Upgraded to: HOT USER]
+    PROD_MSG2 -.-> ST_HOT
+
+    MSG_HOME -.-> CHECKOUT[Checkout Completed]
+    PROD_MSG1 -.-> CHECKOUT
+    CART_MSG1 -.-> CHECKOUT
+    NEW_USER --> CHECKOUT
+    
+    CHECKOUT ===> STAT_GUARD[STATUS GUARD ACTIVATED]
+    
+    STAT_GUARD --> CANCEL_SPAM[Auto-Cancel all annoying reminders]
+    STAT_GUARD --> STAT_PURCH[Status: Purchased]
+
+    STAT_PURCH --> CAM_POST{Post-Purchase Campaign}
+    
+    CAM_POST --> THANK_MSG[WA: Thank you for your order]
+    THANK_MSG -->|3 days later Upsell| UPSELL_MSG[WA: Since you bought this you might like]
+    UPSELL_MSG -->|30 days later| REORDER_MSG[WA: Get 20 percent off your next purchase]
+    
+    REORDER_MSG -.-> CHECKOUT
