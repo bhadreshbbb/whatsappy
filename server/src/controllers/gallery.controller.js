@@ -8,9 +8,10 @@ function getCredentials() {
   if (token && phoneId) return { token, phoneId };
   try {
     const db = getDb();
-    const settings = db.channel_settings[0];
-    if (settings?.whatsapp_token && settings?.phone_number_id) {
-      return { token: settings.whatsapp_token, phoneId: settings.phone_number_id };
+    const row = db.channel_settings[0];
+    const s = JSON.parse(row?.settings || '{}');
+    if (s?.whatsapp_token && s?.whatsapp_phone_id) {
+      return { token: s.whatsapp_token, phoneId: s.whatsapp_phone_id };
     }
   } catch (_) {}
   return null;
