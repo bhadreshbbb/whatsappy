@@ -3,7 +3,7 @@ import { NavLink } from "react-router-dom";
 import {
   LayoutDashboard, Users, Megaphone, FileText,
   ShoppingCart, BookUser, BarChart3, Settings,
-  MessageSquare, ChevronLeft, ChevronRight, Zap, Images,
+  MessageSquare, ChevronLeft, ChevronRight, Zap, ImagePlus,
 } from "lucide-react";
 
 const NAV = [
@@ -12,7 +12,7 @@ const NAV = [
   { to: "/visitors",    icon: Users,             label: "Live Visitors" },
   { to: "/campaigns",   icon: Megaphone,         label: "Campaigns" },
   { to: "/templates",   icon: FileText,          label: "Templates" },
-  { to: "/gallery",     icon: Images,            label: "My Gallery" },
+  { to: "/gallery",     icon: ImagePlus,         label: "My Gallery" },
   { to: "/cart-events", icon: ShoppingCart,      label: "Cart Events" },
   { to: "/contacts",    icon: BookUser,          label: "Contacts" },
   { to: "/analytics",  icon: BarChart3,          label: "Analytics" },
