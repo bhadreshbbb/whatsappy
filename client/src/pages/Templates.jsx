@@ -113,6 +113,7 @@ export default function Templates() {
   const [galleryImages, setGalleryImages] = useState([]);
   const [productConfig, setProductConfig] = useState({});
   const [previewTpl, setPreviewTpl]       = useState(null);   // template to preview in modal
+  const [sendPayloadModal, setSendPayloadModal] = useState(null); // { payload, api_url, curl_command, ... }
 
   useEffect(() => { loadTemplates(); }, []);
 
@@ -139,12 +140,31 @@ export default function Templates() {
       if (form.carousel_cards.some(c => !c.body.trim())) return setError('All carousel cards need body text');
     } else if (!form.body.trim()) return setError('Body text is required');
     setLoading(true);
+
+    // ── Console: log what we're about to submit ──────────────────────────────
+    const channelId = localStorage.getItem('channelId') || 'demo';
+    console.group('%c📤 SUBMITTING META TEMPLATE', 'color:#22c55e;font-weight:bold;font-size:13px');
+    console.log('%cPOST /api/meta-templates', 'color:#86efac;font-weight:bold');
+    console.log('Headers:', { 'x-channel-id': channelId, 'Content-Type': 'application/json' });
+    console.log('Form data (will be processed by server):', form);
+    console.log(`Cards: ${form.carousel_cards?.length || 0} · Auto-mode: ${form.auto_product_mode}`);
+    console.groupEnd();
+
     try {
       const d = await api('/', { method: 'POST', body: JSON.stringify(form) });
+      console.group('%c✅ META TEMPLATE SUBMISSION RESULT', 'color:#22c55e;font-weight:bold');
+      console.log('Status:', d.template?.meta_status);
+      console.log('Template ID:', d.template?.id);
+      console.log('Meta Template ID:', d.template?.meta_template_id);
+      if (d.template?.meta_error) console.error('Meta error:', d.template.meta_error);
+      console.groupEnd();
       setTemplates(prev => [d.template, ...prev]);
       setLastCreated(d.template);
       setView('success');
-    } catch (e) { setError(e.message); }
+    } catch (e) {
+      console.error('[MetaTemplate] Submit failed:', e.message);
+      setError(e.message);
+    }
     finally { setLoading(false); }
   }
 
@@ -180,6 +200,35 @@ export default function Templates() {
   }
   function openCreate() { setView('create'); setError(''); setForm(BLANK_TPL); loadGallery(); }
   function copyName(name) { navigator.clipboard.writeText(name); setCopied(name); setTimeout(()=>setCopied(null),1500); }
+
+  async function checkSendPayload(tpl) {
+    try {
+      const d = await fetch(`${BASE}/${tpl.id}/send-payload`, { headers: CH() }).then(r => r.json());
+      setSendPayloadModal({ ...d, tplName: tpl.name });
+
+      // ── Console: full /messages API call details ────────────────────────────
+      console.group('%c📨 WHATSAPP SEND MESSAGE PAYLOAD', 'color:#f97316;font-weight:bold;font-size:13px');
+      console.log(`%c${d.method} ${d.api_url}`, 'color:#fdba74;font-weight:bold');
+      console.log('Authorization:', d.auth_header || 'Bearer <YOUR_WHATSAPP_TOKEN>');
+      console.log('Content-Type:', 'application/json');
+      console.log('%cFull Payload:', 'color:#fb923c;font-weight:bold');
+      console.log(JSON.stringify(d.payload, null, 2));
+      if (d.products?.length > 0) {
+        console.log('%cCurrent Products in Message:', 'color:#fb923c');
+        d.products.forEach((p, i) => console.log(`  Card ${i + 1}:`, p));
+      }
+      if (d.last_refresh) console.log('Last Product Refresh:', d.last_refresh);
+      if (d.next_refresh) console.log('Next 6h Refresh:', d.next_refresh);
+      if (d.curl_command) {
+        console.log('%c\n── CURL ──────────────────────────────────────', 'color:#64748b');
+        console.log(d.curl_command);
+      }
+      console.groupEnd();
+    } catch (e) {
+      console.error('[MetaTemplate] Failed to fetch send payload:', e.message);
+      setError(e.message);
+    }
+  }
 
   // ── SUCCESS VIEW ─────────────────────────────────────────────────────────
   if (view === 'success' && lastCreated) return (
@@ -296,11 +345,17 @@ export default function Templates() {
                 </div>
 
                 {/* Right: actions */}
-                <div className="flex items-center gap-1.5 shrink-0">
-                  <button onClick={() => setPreviewTpl(tpl)} title="Preview message"
+                <div className="flex items-center gap-1.5 shrink-0 flex-wrap justify-end">
+                  <button onClick={() => setPreviewTpl(tpl)} title="Preview WhatsApp message"
                     className="flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-slate-400 hover:text-white transition-all border border-white/5 hover:border-white/15">
                     <Phone size={12} /> Preview
                   </button>
+                  {tpl.meta_status === 'APPROVED' && (
+                    <button onClick={() => checkSendPayload(tpl)} title="View /messages API payload"
+                      className="flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-lg bg-orange-500/10 hover:bg-orange-500/20 border border-orange-500/20 text-orange-400 transition-all">
+                      <Send size={12} /> Send Payload
+                    </button>
+                  )}
                   <button onClick={() => handleRefresh(tpl)} disabled={refreshing[tpl.id]} title="Refresh status from Meta"
                     className="p-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-slate-400 hover:text-white disabled:opacity-40 transition-all">
                     <RefreshCw size={13} className={refreshing[tpl.id] ? 'animate-spin' : ''} />
@@ -323,6 +378,8 @@ export default function Templates() {
 
       {/* Preview Modal */}
       {previewTpl && <WaPreviewModal tpl={previewTpl} onClose={() => setPreviewTpl(null)} />}
+      {/* Send Payload Modal */}
+      {sendPayloadModal && <SendPayloadModal data={sendPayloadModal} onClose={() => setSendPayloadModal(null)} />}
     </div>
   );
 }
@@ -431,6 +488,22 @@ function CreateView({ form, setForm, error, setError, loading, onSubmit, onBack,
     try {
       const d = await api('/preview-payload', { method: 'POST', body: JSON.stringify(form) });
       setPayloadModal(d);
+
+      // ── Console: full API call details ──────────────────────────────────────
+      console.group('%c📋 META TEMPLATE CREATION PAYLOAD', 'color:#3b82f6;font-weight:bold;font-size:13px');
+      console.log(`%c${d.method} ${d.meta_api_url}`, 'color:#93c5fd;font-weight:bold');
+      console.log('Authorization:', d.auth_header || 'Bearer <YOUR_WHATSAPP_TOKEN>');
+      console.log('Content-Type:', 'application/json');
+      console.log('%cFull Payload:', 'color:#a5b4fc;font-weight:bold');
+      console.log(JSON.stringify(d.payload, null, 2));
+      if (d.notes?.cards_count !== 'N/A (standard template)') {
+        console.log(`Carousel Cards: ${d.notes?.cards_count} · Language: ${d.notes?.language_sent}`);
+      }
+      if (d.curl_command) {
+        console.log('%c\n── CURL ──────────────────────────────────────', 'color:#64748b');
+        console.log(d.curl_command);
+      }
+      console.groupEnd();
     } catch (e) { setError(e.message); }
     finally { setPayloadLoading(false); }
   }
@@ -1687,6 +1760,136 @@ function PayloadModal({ data, onClose }) {
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-600/20 hover:bg-blue-600/40 border border-blue-500/30 text-blue-400 text-xs font-medium transition-all">
             {copied ? <Check size={12}/> : <Copy size={12}/>}
             {copied ? 'Copied!' : 'Copy JSON'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SEND PAYLOAD MODAL — shows the /messages API payload for campaign sending
+function SendPayloadModal({ data, onClose }) {
+  const [copied, setCopied]       = useState(false);
+  const [tab, setTab]             = useState('payload');   // 'payload' | 'curl' | 'products'
+  const payloadStr = JSON.stringify(data.payload, null, 2);
+  const hasProducts = (data.products || []).filter(p => p.title).length > 0;
+
+  function copyContent() {
+    const text = tab === 'curl' ? (data.curl_command || '') : tab === 'products' ? JSON.stringify(data.products, null, 2) : payloadStr;
+    navigator.clipboard.writeText(text);
+    setCopied(true); setTimeout(() => setCopied(false), 1500);
+  }
+
+  const cards = data.payload?.template?.components?.find(c => c.type === 'carousel')?.cards || [];
+  const missingImages = cards.filter(c => !c.components?.find(h => h.type === 'header')?.parameters?.[0]?.image?.id &&
+    !c.components?.find(h => h.type === 'header')?.parameters?.[0]?.image?.link);
+
+  return (
+    <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-[#111827] border border-white/10 rounded-2xl w-full max-w-3xl max-h-[90vh] flex flex-col" onClick={e => e.stopPropagation()}>
+
+        {/* Header */}
+        <div className="flex items-center justify-between px-5 py-3.5 border-b border-white/10">
+          <div className="flex items-center gap-2.5">
+            <Send size={15} className="text-orange-400"/>
+            <span className="text-white font-semibold text-sm">WhatsApp /messages Send Payload</span>
+            <span className="text-xs px-2 py-0.5 rounded-full bg-orange-500/15 text-orange-400 border border-orange-500/20 font-mono">v25.0</span>
+          </div>
+          <button onClick={onClose} className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-white/10 transition-all"><X size={15}/></button>
+        </div>
+
+        {/* API info bar */}
+        <div className="px-5 py-2.5 border-b border-white/5 bg-white/[0.02] flex flex-col gap-1 text-xs">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="font-mono text-orange-300 font-bold">{data.method || 'POST'} {data.api_url}</span>
+          </div>
+          <div className="flex items-center gap-4 text-slate-400">
+            <span>Authorization: <span className="text-slate-300 font-mono">{data.auth_header || 'Bearer <YOUR_TOKEN>'}</span></span>
+            <span>Content-Type: <span className="text-slate-300">application/json</span></span>
+          </div>
+          {data.last_refresh && (
+            <div className="flex items-center gap-3 text-slate-500">
+              <span className="flex items-center gap-1"><RefreshCw size={9}/> Last refresh: {new Date(data.last_refresh).toLocaleString()}</span>
+              {data.next_refresh && <span>· Next: {new Date(data.next_refresh).toLocaleString()}</span>}
+            </div>
+          )}
+        </div>
+
+        {/* Warnings */}
+        {missingImages.length > 0 && (
+          <div className="px-5 py-2.5 border-b border-white/5 bg-yellow-500/5">
+            <p className="text-yellow-400 text-xs flex items-center gap-1">
+              <AlertCircle size={11}/>
+              {missingImages.length} card{missingImages.length > 1 ? 's' : ''} missing image id/link — run a 6h refresh or assign gallery images to set header_media_id.
+            </p>
+          </div>
+        )}
+
+        {/* Tabs */}
+        <div className="flex gap-1 px-5 pt-3 border-b border-white/5">
+          {[
+            { id: 'payload', label: 'JSON Payload', icon: FileText },
+            { id: 'curl',    label: 'cURL Command', icon: Copy },
+            ...(hasProducts ? [{ id: 'products', label: `Products (${data.products?.filter(p=>p.title).length})`, icon: ShoppingCart }] : []),
+          ].map(({ id, label, icon: Icon }) => (
+            <button key={id} onClick={() => setTab(id)}
+              className={`flex items-center gap-1.5 text-xs px-3 py-2 rounded-t-lg border border-b-0 font-medium transition-all ${
+                tab === id ? 'bg-[#111827] border-white/10 text-white' : 'border-transparent text-slate-500 hover:text-slate-300'
+              }`}>
+              <Icon size={11}/> {label}
+            </button>
+          ))}
+        </div>
+
+        {/* Content */}
+        <div className="flex-1 overflow-y-auto p-5">
+          {tab === 'payload' && (
+            <pre className="text-xs font-mono text-slate-300 leading-relaxed whitespace-pre-wrap break-all">
+              {payloadStr}
+            </pre>
+          )}
+          {tab === 'curl' && (
+            <div className="flex flex-col gap-3">
+              <p className="text-slate-500 text-xs">Replace <code className="bg-white/5 px-1 rounded">{'{{RECIPIENT_PHONE}}'}</code> with the actual phone number (e.g. <code className="bg-white/5 px-1 rounded">+919876543210</code>) before sending.</p>
+              <pre className="text-xs font-mono text-green-300 leading-relaxed whitespace-pre-wrap break-all bg-black/30 rounded-xl p-4 border border-white/5">
+                {data.curl_command || 'No curl command available — credentials may not be configured.'}
+              </pre>
+            </div>
+          )}
+          {tab === 'products' && (
+            <div className="flex flex-col gap-3">
+              <p className="text-slate-500 text-xs">These are the products currently in each carousel card. Auto-refreshed every 6 hours from trending + abandoned cart data.</p>
+              <div className="flex flex-col gap-2">
+                {(data.products || []).filter(p => p.title).map((p, i) => (
+                  <div key={i} className="flex items-center gap-3 bg-white/[0.03] border border-white/5 rounded-xl p-3">
+                    {p.image
+                      ? <img src={p.image} alt="" className="w-12 h-12 object-cover rounded-lg shrink-0" onError={e=>e.target.style.display='none'}/>
+                      : <div className="w-12 h-12 bg-white/5 rounded-lg shrink-0 flex items-center justify-center"><Image size={16} className="text-slate-600"/></div>
+                    }
+                    <div className="flex-1 min-w-0">
+                      <p className="text-white text-sm font-medium truncate">Card {i + 1}: {p.title}</p>
+                      <div className="flex items-center gap-3 mt-0.5">
+                        {p.price && <span className="text-green-400 text-xs">{p.price}</span>}
+                        {p.link  && <span className="text-slate-500 text-xs font-mono truncate max-w-[200px]">{p.link}</span>}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="px-5 py-3 border-t border-white/10 flex items-center justify-between gap-3">
+          <p className="text-slate-500 text-xs">
+            This payload is sent per-recipient — replace <code className="bg-white/5 px-1 rounded">{'{{RECIPIENT_PHONE}}'}</code> with each phone number.
+          </p>
+          <button onClick={copyContent}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-orange-600/20 hover:bg-orange-600/40 border border-orange-500/30 text-orange-400 text-xs font-medium transition-all shrink-0">
+            {copied ? <Check size={12}/> : <Copy size={12}/>}
+            {copied ? 'Copied!' : 'Copy'}
           </button>
         </div>
       </div>

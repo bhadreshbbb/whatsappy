@@ -250,13 +250,27 @@ export async function previewPayload(req, res) {
       components,
     };
 
+    // Build real API URL (with actual WABA_ID if creds available)
+    const creds = getCreds(channelId);
+    const apiUrl = creds
+      ? `https://graph.facebook.com/v25.0/${creds.wabaId}/message_templates`
+      : `https://graph.facebook.com/v25.0/{WABA_ID}/message_templates`;
+    const authDisplay = creds
+      ? `Bearer ${creds.token.slice(0, 10)}...${creds.token.slice(-4)}`
+      : 'Bearer <YOUR_WHATSAPP_TOKEN>';
+    const payloadStr = JSON.stringify(payload);
+    const curlCommand = `curl -X POST '${apiUrl}' \\\n  -H 'Authorization: ${creds ? `Bearer ${creds.token}` : '<YOUR_TOKEN>'}' \\\n  -H 'Content-Type: application/json' \\\n  -d '${payloadStr.replace(/'/g, "'\\''")}'`;
+
     // Also log to server console
     console.log('\n[MetaTemplates] DRY-RUN PAYLOAD:\n', JSON.stringify(payload, null, 2));
+    console.log('[MetaTemplates] CURL:\n', curlCommand);
 
     res.json({
       payload,
-      meta_api_url: `https://graph.facebook.com/v25.0/{WABA_ID}/message_templates`,
+      meta_api_url: apiUrl,
       method: 'POST',
+      auth_header: authDisplay,
+      curl_command: curlCommand,
       notes: {
         name_rule: 'lowercase letters, numbers, underscores only',
         language_sent: langMap[tpl.language] || tpl.language,
@@ -367,12 +381,24 @@ export async function getSendPayload(req, res) {
     const payload = buildSendMessagePayload(tpl, tpl.product_config, req.query.to || '{{RECIPIENT_PHONE}}');
     const creds = getCreds(channelId);
 
+    const sendApiUrl = creds
+      ? `https://graph.facebook.com/v25.0/${creds.phoneId}/messages`
+      : 'https://graph.facebook.com/v25.0/{PHONE_NUMBER_ID}/messages';
+    const authDisplay = creds
+      ? `Bearer ${creds.token.slice(0, 10)}...${creds.token.slice(-4)}`
+      : 'Bearer <YOUR_WHATSAPP_TOKEN>';
+    const payloadStr = JSON.stringify(payload);
+    const curlCommand = `curl -X POST '${sendApiUrl}' \\\n  -H 'Authorization: ${creds ? `Bearer ${creds.token}` : '<YOUR_TOKEN>'}' \\\n  -H 'Content-Type: application/json' \\\n  -d '${payloadStr.replace(/'/g, "'\\''")}'`;
+
+    console.log('\n[MetaTemplates] SEND PAYLOAD:\n', JSON.stringify(payload, null, 2));
+    console.log('[MetaTemplates] SEND CURL:\n', curlCommand);
+
     res.json({
       payload,
-      api_url: creds
-        ? `https://graph.facebook.com/v25.0/${creds.phoneId}/messages`
-        : 'https://graph.facebook.com/v25.0/{PHONE_NUMBER_ID}/messages',
+      api_url: sendApiUrl,
       method: 'POST',
+      auth_header: authDisplay,
+      curl_command: curlCommand,
       last_refresh:  tpl.product_config?.last_auto_refresh || null,
       next_refresh:  tpl.product_config?.last_auto_refresh
         ? new Date(new Date(tpl.product_config.last_auto_refresh).getTime() + 6 * 3600 * 1000).toISOString()
