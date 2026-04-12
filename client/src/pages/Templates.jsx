@@ -1,9 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import {
   Plus, Trash2, RefreshCw, CheckCircle2, Clock, XCircle,
   AlertCircle, Settings2, Send, Image, Type, Link,
   Zap, Copy, Check, FileText, X, LayoutGrid, ChevronLeft, ChevronRight,
-  Globe, Loader2, ImagePlus
+  Globe, Loader2, ImagePlus, TrendingUp, ShoppingCart, Flame, Eye, Sparkles
 } from "lucide-react";
 
 const BASE        = `/api/meta-templates`;
@@ -24,16 +24,22 @@ const CATEGORIES = [
   { value: 'MARKETING', label: 'Marketing' },
   { value: 'UTILITY',   label: 'Utility' },
 ];
-
 const LANGUAGES = [
-  { value: 'en', label: '🇺🇸 English' },
-  { value: 'hi', label: '🇮🇳 Hindi' },
-  { value: 'gu', label: '🇮🇳 Gujarati' },
-  { value: 'ta', label: '🇮🇳 Tamil' },
-  { value: 'te', label: '🇮🇳 Telugu' },
-  { value: 'mr', label: '🇮🇳 Marathi' },
-  { value: 'bn', label: '🇧🇩 Bengali' },
-  { value: 'ar', label: '🇦🇪 Arabic' },
+  { value: 'en', label: '🇺🇸 English' }, { value: 'hi', label: '🇮🇳 Hindi' },
+  { value: 'gu', label: '🇮🇳 Gujarati' }, { value: 'ta', label: '🇮🇳 Tamil' },
+  { value: 'te', label: '🇮🇳 Telugu' },  { value: 'mr', label: '🇮🇳 Marathi' },
+  { value: 'bn', label: '🇧🇩 Bengali' }, { value: 'ar', label: '🇦🇪 Arabic' },
+];
+
+const VAR_FIELD_OPTIONS = [
+  { value: 'product_title', label: 'Product Title' },
+  { value: 'product_price', label: 'Product Price' },
+  { value: 'product_link',  label: 'Product Link/URL' },
+  { value: 'product_image', label: 'Product Image URL' },
+  { value: 'customer_name', label: 'Customer Name' },
+  { value: 'cart_total',    label: 'Cart Total' },
+  { value: 'cart_link',     label: 'Cart Link' },
+  { value: 'custom',        label: 'Custom Fixed Text' },
 ];
 
 const STATUS_CONFIG = {
@@ -45,25 +51,30 @@ const STATUS_CONFIG = {
   NO_CREDENTIALS: { color: 'text-slate-400',  bg: 'bg-slate-500/10 border-slate-500/20',   icon: AlertCircle,  label: 'No Credentials' },
 };
 
+const DEFAULT_VAR_MAP = { '1': 'product_title', '2': 'product_price', '3': 'product_link' };
+
 const BLANK_CARD = {
   body: '{{1}}\n₹{{2}}',
   buttons: [{ type: 'URL', text: 'Buy Now', url: 'https://yourstore.com/{{3}}' }],
-  image_id: '',
-  header_media_id: '',
+  image_id: '', header_media_id: '',
+  source: 'manual',  // 'manual' | 'url' | 'auto'
+  scrape_url: '',
+  var_map: { ...DEFAULT_VAR_MAP },
 };
 
 const BLANK_TPL = {
   name: '', category: 'MARKETING', language: 'en',
-  is_carousel: false,
+  is_carousel: false, auto_product_mode: false,
   header_type: 'NONE', header_text: '',
   body: '', footer: '', buttons: [], variable_labels: [],
   carousel_cards: [{ ...BLANK_CARD }, { ...BLANK_CARD }, { ...BLANK_CARD }],
 };
 
 function extractVars(text) {
-  return [...new Set([...(text || '').matchAll(/\{\{(\d+)\}\}/g)].map(m => m[1]))];
+  return [...new Set([...(text || '').matchAll(/\{\{(\d+)\}\}/g)].map(m => m[1]))].sort((a, b) => +a - +b);
 }
 
+// ── ROOT COMPONENT ─────────────────────────────────────────────────────────────
 export default function Templates() {
   const [templates, setTemplates]         = useState([]);
   const [view, setView]                   = useState('list');
@@ -150,9 +161,8 @@ export default function Templates() {
     if (tpl.is_carousel) {
       setProductConfig(tpl.product_config || {
         cards: tpl.carousel_cards.map(c => ({
-          image_id: c.image_id || '',
-          header_media_id: c.header_media_id || '',
-          title: '', price: '', link: '',
+          image_id: c.image_id || '', header_media_id: c.header_media_id || '',
+          source: c.source || 'manual', title: '', price: '', link: '',
         })),
       });
     } else {
@@ -168,8 +178,7 @@ export default function Templates() {
   }
 
   function openCreate() {
-    setView('create');
-    setError('');
+    setView('create'); setError('');
     setForm(BLANK_TPL);
     loadGallery();
   }
@@ -212,7 +221,6 @@ export default function Templates() {
 
       {error && <ErrorBar msg={error} onClose={() => setError('')} />}
       {loading && templates.length === 0 && <p className="text-slate-400 text-sm">Loading...</p>}
-
       {templates.length === 0 && !loading && (
         <div className="flex flex-col items-center justify-center py-20 text-slate-500 gap-3">
           <FileText size={48} className="opacity-20" />
@@ -224,6 +232,8 @@ export default function Templates() {
         {templates.map(tpl => {
           const sc = STATUS_CONFIG[tpl.meta_status] || STATUS_CONFIG['DRAFT'];
           const Icon = sc.icon;
+          const assignedCards = tpl.product_config?.cards?.filter(c => c.title || c.image_id) || [];
+          const autoProducts  = tpl.product_config?.auto_products || [];
           return (
             <div key={tpl.id} className="bg-white/[0.03] border border-white/10 rounded-2xl p-5 hover:border-white/20 transition-all">
               <div className="flex items-start justify-between gap-4">
@@ -241,24 +251,53 @@ export default function Templates() {
                         <LayoutGrid size={11} /> Carousel ({tpl.carousel_cards?.length} cards)
                       </span>
                     )}
+                    {tpl.auto_product_mode && (
+                      <span className="flex items-center gap-1 text-xs px-2.5 py-1 rounded-full border bg-orange-500/10 border-orange-500/20 text-orange-400">
+                        <Flame size={11} /> Auto-Products
+                      </span>
+                    )}
                     <span className="text-xs text-slate-500 bg-white/5 px-2 py-0.5 rounded-full">{tpl.category}</span>
-                    <span className="text-xs text-slate-500 bg-white/5 px-2 py-0.5 rounded-full">{tpl.language}</span>
                   </div>
-                  <p className="text-slate-400 text-sm mt-2 line-clamp-2">
-                    {tpl.is_carousel
-                      ? `Carousel: ${tpl.carousel_cards?.length || 0} cards — ${tpl.body || tpl.carousel_cards?.[0]?.body || ''}`
-                      : tpl.body}
+
+                  <p className="text-slate-400 text-sm mt-2 line-clamp-1">
+                    {tpl.is_carousel ? `Carousel: ${tpl.carousel_cards?.length || 0} cards — ${tpl.body || tpl.carousel_cards?.[0]?.body || ''}` : tpl.body}
                   </p>
-                  <div className="flex items-center gap-3 mt-1.5 flex-wrap">
-                    {tpl.buttons?.length > 0 && <span className="text-xs text-slate-500">{tpl.buttons.length} button{tpl.buttons.length > 1 ? 's' : ''}</span>}
-                    {tpl.product_config && <span className="text-xs text-green-400 flex items-center gap-1"><CheckCircle2 size={11} /> Product config set</span>}
+
+                  {/* Mini product preview strip */}
+                  {assignedCards.length > 0 && (
+                    <div className="flex items-center gap-2 mt-2 flex-wrap">
+                      {assignedCards.slice(0, 5).map((card, i) => (
+                        <div key={i} className="flex items-center gap-1.5 bg-white/5 rounded-lg px-2 py-1">
+                          {card.image_id
+                            ? <img src={`/api/gallery/images/${card.image_id}/preview`} alt="" className="w-5 h-5 object-cover rounded" />
+                            : card._hot_image_url
+                              ? <img src={card._hot_image_url} alt="" className="w-5 h-5 object-cover rounded" onError={e => e.target.style.display='none'} />
+                              : <Image size={12} className="text-slate-500" />
+                          }
+                          <span className="text-xs text-slate-300 max-w-24 truncate">{card.title || `Card ${i+1}`}</span>
+                          {card.price && <span className="text-xs text-green-400">{card.price}</span>}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Auto-refresh info */}
+                  {tpl.product_config?.last_auto_refresh && (
+                    <p className="text-xs text-orange-400/70 mt-1.5 flex items-center gap-1">
+                      <RefreshCw size={10} /> Auto-updated: {new Date(tpl.product_config.last_auto_refresh).toLocaleString()}
+                    </p>
+                  )}
+
+                  <div className="flex items-center gap-3 mt-1 flex-wrap">
+                    {tpl.product_config && !assignedCards.length && <span className="text-xs text-green-400 flex items-center gap-1"><CheckCircle2 size={11} /> Config saved</span>}
                     {tpl.rejected_reason && <span className="text-xs text-red-400">Rejected: {tpl.rejected_reason}</span>}
+                    {tpl.meta_error && <span className="text-xs text-red-400 font-mono truncate max-w-xs">{tpl.meta_error}</span>}
                   </div>
-                  {tpl.meta_error && <p className="text-xs text-red-400 mt-1 font-mono truncate">{tpl.meta_error}</p>}
                 </div>
+
                 <div className="flex items-center gap-2 shrink-0">
                   <button onClick={() => handleRefresh(tpl)} disabled={refreshing[tpl.id]}
-                    className="p-2 rounded-lg bg-white/5 hover:bg-white/10 text-slate-400 hover:text-white disabled:opacity-50" title="Refresh from Meta">
+                    className="p-2 rounded-lg bg-white/5 hover:bg-white/10 text-slate-400 hover:text-white disabled:opacity-50" title="Refresh status from Meta">
                     <RefreshCw size={14} className={refreshing[tpl.id] ? 'animate-spin' : ''} />
                   </button>
                   {tpl.meta_status === 'APPROVED' && (
@@ -284,7 +323,19 @@ export default function Templates() {
 function CreateView({ form, setForm, error, setError, loading, onSubmit, onBack, galleries, galleryImages, loadFolderImages }) {
   const f = (k, v) => setForm(p => ({ ...p, [k]: v }));
   const [selFolder, setSelFolder] = useState('');
-  const [pickerCard, setPickerCard] = useState(null); // index of card whose picker is open
+  const [pickerCard, setPickerCard] = useState(null);
+  const [hotProducts, setHotProducts] = useState([]);
+  const [hotLoading, setHotLoading] = useState(false);
+
+  async function loadHotProducts() {
+    if (hotProducts.length > 0) return;
+    setHotLoading(true);
+    try {
+      const d = await fetch(`${BASE}/hot-products?limit=6`, { headers: CH() }).then(r => r.json());
+      setHotProducts(d.products || []);
+    } catch (_) {}
+    finally { setHotLoading(false); }
+  }
 
   function addVar(field) {
     const vars = extractVars(form[field]);
@@ -292,17 +343,28 @@ function CreateView({ form, setForm, error, setError, loading, onSubmit, onBack,
     f(field, form[field] + ` {{${next}}}`);
   }
 
-  function addCardVar(idx, field) {
+  function addCardVar(idx) {
     const cards = [...form.carousel_cards];
-    const vars = extractVars(cards[idx][field]);
+    const vars = extractVars(cards[idx].body);
     const next = vars.length ? Math.max(...vars.map(Number)) + 1 : 1;
-    cards[idx] = { ...cards[idx], [field]: cards[idx][field] + ` {{${next}}}` };
+    cards[idx] = { ...cards[idx], body: cards[idx].body + ` {{${next}}}` };
     f('carousel_cards', cards);
   }
 
   function updateCard(idx, key, val) {
     const cards = [...form.carousel_cards];
     cards[idx] = { ...cards[idx], [key]: val };
+    f('carousel_cards', cards);
+  }
+
+  function setCardSource(idx, source) {
+    updateCard(idx, 'source', source);
+    if (source === 'auto') loadHotProducts();
+  }
+
+  function setCardVarMap(idx, varNum, fieldValue) {
+    const cards = [...form.carousel_cards];
+    cards[idx] = { ...cards[idx], var_map: { ...(cards[idx].var_map || {}), [varNum]: fieldValue } };
     f('carousel_cards', cards);
   }
 
@@ -334,9 +396,16 @@ function CreateView({ form, setForm, error, setError, loading, onSubmit, onBack,
   }
 
   function selectCardImage(cardIdx, img) {
-    updateCard(cardIdx, 'image_id', img.id);
-    updateCard(cardIdx, 'header_media_id', img.media_id || '');
+    const cards = [...form.carousel_cards];
+    cards[cardIdx] = { ...cards[cardIdx], image_id: img.id, header_media_id: img.media_id || '' };
+    f('carousel_cards', cards);
     setPickerCard(null);
+  }
+
+  function assignHotProduct(cardIdx, hot) {
+    const cards = [...form.carousel_cards];
+    cards[cardIdx] = { ...cards[cardIdx], source: 'auto', _hot_preview: hot };
+    f('carousel_cards', cards);
   }
 
   return (
@@ -355,7 +424,7 @@ function CreateView({ form, setForm, error, setError, loading, onSubmit, onBack,
             <label className="text-slate-400 text-xs font-medium">Template Name *</label>
             <input value={form.name} onChange={e => f('name', e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, '_'))}
               placeholder="product_catalog_v1" className="input text-sm font-mono" />
-            <p className="text-slate-600 text-xs">lowercase + underscores</p>
+            <p className="text-slate-600 text-xs">lowercase + underscores only</p>
           </div>
           <div className="flex flex-col gap-1.5">
             <label className="text-slate-400 text-xs font-medium">Category</label>
@@ -389,6 +458,21 @@ function CreateView({ form, setForm, error, setError, loading, onSubmit, onBack,
         {/* ── CAROUSEL BUILDER ─────────────────────────────────────────────── */}
         {form.is_carousel && (
           <>
+            {/* Auto-product mode toggle */}
+            <div className="flex items-center justify-between bg-orange-500/5 border border-orange-500/20 rounded-xl px-4 py-3">
+              <div className="flex items-center gap-2">
+                <Flame size={15} className="text-orange-400" />
+                <div>
+                  <p className="text-white text-sm font-medium">Auto-Product Mode</p>
+                  <p className="text-slate-500 text-xs">Daily cron auto-fills cards with trending + abandoned products from your store</p>
+                </div>
+              </div>
+              <label className="toggle-switch">
+                <input type="checkbox" checked={form.auto_product_mode} onChange={e => f('auto_product_mode', e.target.checked)} />
+                <span className="toggle-slider" />
+              </label>
+            </div>
+
             {/* Intro body (optional) */}
             <div className="flex flex-col gap-2">
               <div className="flex items-center justify-between">
@@ -405,148 +489,45 @@ function CreateView({ form, setForm, error, setError, loading, onSubmit, onBack,
             <div className="flex flex-col gap-3">
               <div className="flex items-center justify-between">
                 <label className="text-white font-medium text-sm">
-                  Carousel Cards <span className="text-slate-500 font-normal text-xs">({form.carousel_cards.length}/10 cards — min 2)</span>
+                  Carousel Cards <span className="text-slate-500 font-normal text-xs">({form.carousel_cards.length}/10 — min 2)</span>
                 </label>
                 {form.carousel_cards.length < 10 && (
                   <button onClick={addCard} className="var-btn"><Plus size={12} className="inline mr-1" />Add Card</button>
                 )}
               </div>
 
-              {/* Horizontal scroll preview */}
+              {/* Horizontal preview */}
               <CarouselPreview cards={form.carousel_cards} />
 
               {/* Card editors */}
               <div className="flex flex-col gap-4">
                 {form.carousel_cards.map((card, idx) => (
-                  <div key={idx} className="bg-white/5 border border-white/10 rounded-2xl p-4 flex flex-col gap-3">
-                    <div className="flex items-center justify-between">
-                      <span className="text-purple-400 text-xs font-semibold flex items-center gap-2">
-                        <LayoutGrid size={12} /> Card {idx + 1}
-                      </span>
-                      {form.carousel_cards.length > 2 && (
-                        <button onClick={() => removeCard(idx)} className="text-red-400 hover:text-red-300"><X size={13} /></button>
-                      )}
-                    </div>
-
-                    {/* Example image for Meta submission */}
-                    <div className="flex flex-col gap-2">
-                      <div className="flex items-center justify-between">
-                        <label className="text-slate-500 text-xs flex items-center gap-1">
-                          <ImagePlus size={11} /> Example Image
-                          <span className="text-slate-600 ml-1">(sent to Meta for approval review)</span>
-                        </label>
-                        <button
-                          onClick={() => {
-                            setPickerCard(pickerCard === idx ? null : idx);
-                            if (pickerCard !== idx && galleries.length > 0) {
-                              setSelFolder(galleries[0].id);
-                              loadFolderImages(galleries[0].id);
-                            }
-                          }}
-                          className="var-btn flex items-center gap-1"
-                        >
-                          <Image size={11} /> {card.image_id ? 'Change Image' : 'Select from Gallery'}
-                        </button>
-                      </div>
-
-                      {/* Image preview */}
-                      {card.image_id && (
-                        <div className="flex items-center gap-3">
-                          <img src={`/api/gallery/images/${card.image_id}/preview`} alt=""
-                            className="w-20 h-20 object-cover rounded-xl border border-purple-500/30" />
-                          <div className="text-xs text-slate-400">
-                            <p className="text-green-400 flex items-center gap-1"><CheckCircle2 size={11} /> Image selected</p>
-                            {card.header_media_id && <p className="text-slate-600 font-mono mt-1">media_id: {card.header_media_id.substring(0, 16)}…</p>}
-                          </div>
-                        </div>
-                      )}
-
-                      {/* Inline gallery picker */}
-                      {pickerCard === idx && (
-                        <div className="bg-[#0a1929] border border-white/10 rounded-xl p-3 flex flex-col gap-3">
-                          {galleries.length === 0
-                            ? <p className="text-slate-500 text-xs">No gallery folders yet. Upload images in the Gallery section first.</p>
-                            : (
-                              <>
-                                <div className="flex gap-2 flex-wrap">
-                                  {galleries.map(gf => (
-                                    <button key={gf.id}
-                                      onClick={() => { setSelFolder(gf.id); loadFolderImages(gf.id); }}
-                                      className={`text-xs px-3 py-1.5 rounded-lg border ${selFolder === gf.id ? 'bg-purple-600/20 border-purple-600/40 text-purple-400' : 'bg-white/5 border-white/10 text-slate-400 hover:border-white/20'}`}>
-                                      {gf.name} ({gf.imageCount})
-                                    </button>
-                                  ))}
-                                </div>
-                                {galleryImages.length > 0 && (
-                                  <div className="flex gap-2 flex-wrap">
-                                    {galleryImages.map(img => (
-                                      <button key={img.id} onClick={() => selectCardImage(idx, img)}
-                                        className={`relative rounded-lg overflow-hidden border-2 transition-all ${card.image_id === img.id ? 'border-purple-500' : 'border-transparent hover:border-white/30'}`}>
-                                        <img src={`/api/gallery/images/${img.id}/preview`} alt={img.name}
-                                          className="w-16 h-16 object-cover" />
-                                        {card.image_id === img.id && (
-                                          <div className="absolute inset-0 bg-purple-500/30 flex items-center justify-center">
-                                            <Check size={16} className="text-white" />
-                                          </div>
-                                        )}
-                                      </button>
-                                    ))}
-                                  </div>
-                                )}
-                                {selFolder && galleryImages.length === 0 && (
-                                  <p className="text-slate-500 text-xs">No images in this folder.</p>
-                                )}
-                              </>
-                            )
-                          }
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Card body */}
-                    <div className="flex flex-col gap-1.5">
-                      <div className="flex items-center justify-between">
-                        <label className="text-slate-500 text-xs">
-                          Body Text * <span className="text-slate-600">use {`{{1}}`} {`{{2}}`} for variables</span>
-                        </label>
-                        <button onClick={() => addCardVar(idx, 'body')} className="var-btn">+ Var</button>
-                      </div>
-                      <textarea value={card.body} onChange={e => updateCard(idx, 'body', e.target.value)}
-                        placeholder={"{{1}}\n₹{{2}}"} rows={3} className="input text-sm resize-none" />
-                      <p className="text-slate-600 text-xs">e.g. {`{{1}}`} = product name, {`{{2}}`} = price</p>
-                    </div>
-
-                    {/* Card buttons */}
-                    <div className="flex flex-col gap-2">
-                      <div className="flex items-center justify-between">
-                        <label className="text-slate-500 text-xs">Buttons <span className="text-slate-600">(max 2)</span></label>
-                        {(card.buttons || []).length < 2 && (
-                          <div className="flex gap-1">
-                            <button onClick={() => addCardButton(idx, 'URL')} className="var-btn"><Link size={10} className="inline mr-1" />URL</button>
-                            <button onClick={() => addCardButton(idx, 'QUICK_REPLY')} className="var-btn"><Zap size={10} className="inline mr-1" />Reply</button>
-                          </div>
-                        )}
-                      </div>
-                      {(card.buttons || []).map((btn, bi) => (
-                        <div key={bi} className="flex gap-2 items-center">
-                          <span className="text-xs text-slate-500 w-16 shrink-0">{btn.type === 'URL' ? 'URL' : 'Reply'}</span>
-                          <input value={btn.text} onChange={e => {
-                            const cards = [...form.carousel_cards];
-                            cards[idx].buttons[bi] = { ...btn, text: e.target.value };
-                            f('carousel_cards', cards);
-                          }} placeholder="Button label" className="input text-xs flex-1" />
-                          {btn.type === 'URL' && (
-                            <input value={btn.url} onChange={e => {
-                              const cards = [...form.carousel_cards];
-                              cards[idx].buttons[bi] = { ...btn, url: e.target.value };
-                              f('carousel_cards', cards);
-                            }} placeholder="https://... or use {{3}}" className="input text-xs flex-1 font-mono" />
-                          )}
-                          <button onClick={() => removeCardButton(idx, bi)} className="text-red-400 hover:text-red-300"><X size={13} /></button>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
+                  <CarouselCardEditor
+                    key={idx} card={card} idx={idx}
+                    totalCards={form.carousel_cards.length}
+                    hotProducts={hotProducts} hotLoading={hotLoading}
+                    galleries={galleries} galleryImages={galleryImages}
+                    pickerCard={pickerCard}
+                    selFolder={selFolder}
+                    onSetSelFolder={setSelFolder}
+                    loadFolderImages={loadFolderImages}
+                    onSetPickerCard={setPickerCard}
+                    loadHotProducts={loadHotProducts}
+                    onUpdateCard={updateCard}
+                    onSetSource={(source) => setCardSource(idx, source)}
+                    onSetVarMap={(varNum, val) => setCardVarMap(idx, varNum, val)}
+                    onAddVar={() => addCardVar(idx)}
+                    onRemoveCard={() => removeCard(idx)}
+                    onAddButton={(type) => addCardButton(idx, type)}
+                    onRemoveButton={(bi) => removeCardButton(idx, bi)}
+                    onUpdateButton={(bi, key, val) => {
+                      const cards = [...form.carousel_cards];
+                      cards[idx].buttons[bi] = { ...cards[idx].buttons[bi], [key]: val };
+                      f('carousel_cards', cards);
+                    }}
+                    onSelectImage={(img) => selectCardImage(idx, img)}
+                    onAssignHotProduct={(hot) => assignHotProduct(idx, hot)}
+                  />
                 ))}
               </div>
             </div>
@@ -556,7 +537,6 @@ function CreateView({ form, setForm, error, setError, loading, onSubmit, onBack,
         {/* ── STANDARD BUILDER ─────────────────────────────────────────────── */}
         {!form.is_carousel && (
           <>
-            {/* Header */}
             <div className="flex flex-col gap-2">
               <label className="text-slate-400 text-xs font-medium">Header</label>
               <div className="flex gap-2">
@@ -564,7 +544,7 @@ function CreateView({ form, setForm, error, setError, loading, onSubmit, onBack,
                   <button key={t} onClick={() => f('header_type', t)}
                     className={`px-3 py-1.5 rounded-lg text-xs font-medium border ${form.header_type === t ? 'bg-green-600/20 border-green-600/40 text-green-400' : 'bg-white/5 border-white/10 text-slate-400 hover:border-white/20'}`}>
                     {t === 'IMAGE' && <Image size={11} className="inline mr-1" />}
-                    {t === 'TEXT' && <Type size={11} className="inline mr-1" />}
+                    {t === 'TEXT'  && <Type  size={11} className="inline mr-1" />}
                     {t}
                   </button>
                 ))}
@@ -576,12 +556,8 @@ function CreateView({ form, setForm, error, setError, loading, onSubmit, onBack,
                   <button onClick={() => { const v = extractVars(form.header_text); f('header_text', form.header_text + ` {{${v.length ? Math.max(...v.map(Number)) + 1 : 1}}}`); }} className="var-btn">+ Var</button>
                 </div>
               )}
-              {form.header_type === 'IMAGE' && (
-                <p className="text-xs text-slate-500 bg-white/5 px-3 py-2 rounded-lg">Select image from Gallery after approval.</p>
-              )}
             </div>
 
-            {/* Body */}
             <div className="flex flex-col gap-2">
               <div className="flex items-center justify-between">
                 <label className="text-slate-400 text-xs font-medium">Body * <span className="text-slate-600">use {`{{1}}`} {`{{2}}`} for variables</span></label>
@@ -592,14 +568,12 @@ function CreateView({ form, setForm, error, setError, loading, onSubmit, onBack,
               <p className="text-xs text-slate-600">{form.body.length}/1024</p>
             </div>
 
-            {/* Footer */}
             <div className="flex flex-col gap-1.5">
               <label className="text-slate-400 text-xs font-medium">Footer <span className="text-slate-600">(optional)</span></label>
               <input value={form.footer} onChange={e => f('footer', e.target.value)}
                 placeholder="Reply STOP to unsubscribe" className="input text-sm" />
             </div>
 
-            {/* Buttons */}
             <div className="flex flex-col gap-2">
               <div className="flex items-center justify-between">
                 <label className="text-slate-400 text-xs font-medium">Buttons <span className="text-slate-600">(max 3)</span></label>
@@ -613,18 +587,15 @@ function CreateView({ form, setForm, error, setError, loading, onSubmit, onBack,
               {form.buttons.map((btn, i) => (
                 <div key={i} className="flex gap-2 items-center bg-white/5 rounded-xl p-2.5">
                   <span className="text-xs text-slate-500 w-20 shrink-0">{btn.type}</span>
-                  <input value={btn.text} onChange={e => { const b = [...form.buttons]; b[i] = { ...b[i], text: e.target.value }; f('buttons', b); }}
-                    placeholder="Label" className="input text-xs flex-1" />
+                  <input value={btn.text} onChange={e => { const b = [...form.buttons]; b[i] = { ...b[i], text: e.target.value }; f('buttons', b); }} placeholder="Label" className="input text-xs flex-1" />
                   {btn.type === 'URL' && (
-                    <input value={btn.url} onChange={e => { const b = [...form.buttons]; b[i] = { ...b[i], url: e.target.value }; f('buttons', b); }}
-                      placeholder="https://..." className="input text-xs flex-1 font-mono" />
+                    <input value={btn.url} onChange={e => { const b = [...form.buttons]; b[i] = { ...b[i], url: e.target.value }; f('buttons', b); }} placeholder="https://..." className="input text-xs flex-1 font-mono" />
                   )}
                   <button onClick={() => f('buttons', form.buttons.filter((_, j) => j !== i))} className="text-red-400 hover:text-red-300"><X size={13} /></button>
                 </div>
               ))}
             </div>
 
-            {/* Preview */}
             <StandardPreview form={form} />
           </>
         )}
@@ -641,13 +612,236 @@ function CreateView({ form, setForm, error, setError, loading, onSubmit, onBack,
   );
 }
 
+// ── CAROUSEL CARD EDITOR ──────────────────────────────────────────────────────
+function CarouselCardEditor({
+  card, idx, totalCards,
+  hotProducts, hotLoading, galleries, galleryImages,
+  pickerCard, selFolder,
+  onSetSelFolder, loadFolderImages, onSetPickerCard,
+  loadHotProducts, onUpdateCard, onSetSource, onSetVarMap,
+  onAddVar, onRemoveCard, onAddButton, onRemoveButton,
+  onUpdateButton, onSelectImage, onAssignHotProduct,
+}) {
+  const source = card.source || 'manual';
+  const bodyVars = extractVars(card.body);
+
+  return (
+    <div className="bg-white/5 border border-white/10 rounded-2xl p-4 flex flex-col gap-3">
+      {/* Card header */}
+      <div className="flex items-center justify-between">
+        <span className="text-purple-400 text-xs font-semibold flex items-center gap-2">
+          <LayoutGrid size={12} /> Card {idx + 1}
+        </span>
+        {totalCards > 2 && (
+          <button onClick={onRemoveCard} className="text-red-400 hover:text-red-300 p-1"><X size={13} /></button>
+        )}
+      </div>
+
+      {/* Example image picker */}
+      <div className="flex flex-col gap-2">
+        <div className="flex items-center justify-between">
+          <label className="text-slate-500 text-xs flex items-center gap-1">
+            <ImagePlus size={11} /> Example Image <span className="text-slate-600 ml-1">(sent to Meta for review)</span>
+          </label>
+          <button
+            onClick={() => {
+              onSetPickerCard(pickerCard === idx ? null : idx);
+              if (pickerCard !== idx && galleries.length > 0) {
+                onSetSelFolder(galleries[0].id);
+                loadFolderImages(galleries[0].id);
+              }
+            }}
+            className="var-btn flex items-center gap-1">
+            <Image size={11} /> {card.image_id ? 'Change' : 'Gallery'}
+          </button>
+        </div>
+
+        {card.image_id && (
+          <div className="flex items-center gap-2">
+            <img src={`/api/gallery/images/${card.image_id}/preview`} alt=""
+              className="w-16 h-16 object-cover rounded-xl border border-purple-500/30" />
+            <p className="text-green-400 text-xs flex items-center gap-1"><CheckCircle2 size={10} /> Image set for Meta</p>
+          </div>
+        )}
+
+        {pickerCard === idx && (
+          <InlineGalleryPicker
+            galleries={galleries} galleryImages={galleryImages}
+            selectedId={card.image_id} selFolder={selFolder}
+            onSelectFolder={id => { onSetSelFolder(id); loadFolderImages(id); }}
+            onSelect={onSelectImage}
+            accentColor="purple"
+          />
+        )}
+      </div>
+
+      {/* Product Source Tabs */}
+      <div className="flex flex-col gap-2">
+        <label className="text-slate-500 text-xs font-medium">Product Source</label>
+        <div className="flex gap-1 bg-white/5 rounded-xl p-1">
+          {[
+            { key: 'manual', label: 'Manual', icon: Type },
+            { key: 'url',    label: 'URL Scrape', icon: Globe },
+            { key: 'auto',   label: 'Auto-detect', icon: Sparkles },
+          ].map(({ key, label, icon: Icon }) => (
+            <button key={key} onClick={() => onSetSource(key)}
+              className={`flex-1 flex items-center justify-center gap-1 text-xs py-1.5 rounded-lg font-medium transition-all ${source === key ? (key === 'auto' ? 'bg-orange-600/30 text-orange-300 border border-orange-500/30' : 'bg-purple-600/20 text-purple-300 border border-purple-500/20') : 'text-slate-500 hover:text-slate-300'}`}>
+              <Icon size={11} /> {label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* URL Scrape mode */}
+      {source === 'url' && (
+        <ScrapeUrlInput
+          initialUrl={card.scrape_url}
+          onUrlChange={url => onUpdateCard(idx, 'scrape_url', url)}
+          onFill={(s) => {
+            if (s.title) onUpdateCard(idx, '_scraped_title', s.title);
+            if (s.price) onUpdateCard(idx, '_scraped_price', s.price);
+          }}
+        />
+      )}
+
+      {/* Auto mode */}
+      {source === 'auto' && (
+        <div className="bg-orange-500/5 border border-orange-500/20 rounded-xl p-3 flex flex-col gap-2">
+          <div className="flex items-center justify-between">
+            <p className="text-orange-400 text-xs font-medium flex items-center gap-1">
+              <Flame size={11} /> Top {idx + 1} trending product from your store
+            </p>
+            <button onClick={loadHotProducts} className="text-slate-500 hover:text-slate-300">
+              <RefreshCw size={12} className={hotLoading ? 'animate-spin' : ''} />
+            </button>
+          </div>
+          {hotLoading && <p className="text-slate-500 text-xs">Analyzing your store data...</p>}
+          {!hotLoading && hotProducts.length === 0 && (
+            <p className="text-slate-500 text-xs">No product data yet — will use catalog products. Data builds up as visitors browse your store.</p>
+          )}
+          {hotProducts.length > 0 && (
+            <div className="flex flex-col gap-1.5">
+              <p className="text-slate-500 text-xs mb-1">Select which hot product to assign to this card:</p>
+              {hotProducts.slice(0, 5).map((hot, hi) => (
+                <button key={hi} onClick={() => onAssignHotProduct(hot)}
+                  className={`flex items-center gap-2 p-2 rounded-lg text-left transition-all border ${card._hot_preview?.url === hot.url ? 'border-orange-500/50 bg-orange-500/10' : 'border-white/5 bg-white/5 hover:border-orange-500/30'}`}>
+                  {hot.image
+                    ? <img src={hot.image} alt="" className="w-10 h-10 object-cover rounded-lg shrink-0" onError={e => e.target.style.display='none'} />
+                    : <div className="w-10 h-10 bg-white/5 rounded-lg shrink-0 flex items-center justify-center"><Image size={14} className="text-slate-600" /></div>
+                  }
+                  <div className="flex-1 min-w-0">
+                    <p className="text-white text-xs truncate">{hot.name}</p>
+                    <p className="text-green-400 text-xs">{hot.price}</p>
+                    <div className="flex items-center gap-2 mt-0.5">
+                      {hot.views > 0 && <span className="text-slate-500 text-xs flex items-center gap-0.5"><Eye size={9} />{hot.views} views</span>}
+                      {hot.carts > 0 && <span className="text-orange-400 text-xs flex items-center gap-0.5"><ShoppingCart size={9} />{hot.carts} abandoned</span>}
+                    </div>
+                  </div>
+                  <span className="text-xs bg-orange-500/20 text-orange-400 px-2 py-0.5 rounded-full shrink-0">#{hi + 1}</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Body text */}
+      <div className="flex flex-col gap-1.5">
+        <div className="flex items-center justify-between">
+          <label className="text-slate-500 text-xs">Body Text *</label>
+          <button onClick={onAddVar} className="var-btn">+ Var</button>
+        </div>
+        <textarea value={card.body} onChange={e => onUpdateCard(idx, 'body', e.target.value)}
+          placeholder={"{{1}}\n₹{{2}}"} rows={3} className="input text-sm resize-none" />
+      </div>
+
+      {/* Variable Mapping */}
+      {bodyVars.length > 0 && (
+        <div className="flex flex-col gap-2 bg-green-500/5 border border-green-500/15 rounded-xl p-3">
+          <label className="text-green-400 text-xs font-medium flex items-center gap-1"><Sparkles size={11} /> Variable Mapping</label>
+          <p className="text-slate-500 text-xs -mt-1">Tell the system what each variable represents for dynamic sending</p>
+          {bodyVars.map(v => (
+            <div key={v} className="flex items-center gap-2">
+              <span className="text-green-400 font-mono text-xs w-12 shrink-0">{`{{${v}}}`}</span>
+              <select
+                value={(card.var_map || {})[v] || ''}
+                onChange={e => onSetVarMap(v, e.target.value)}
+                className="input text-xs flex-1">
+                <option value="">— Select meaning —</option>
+                {VAR_FIELD_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+              </select>
+              {(card.var_map || {})[v] === 'custom' && (
+                <input
+                  placeholder="Fixed text"
+                  value={(card.var_map || {})[`${v}_custom`] || ''}
+                  onChange={e => onSetVarMap(`${v}_custom`, e.target.value)}
+                  className="input text-xs flex-1"
+                />
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Buttons */}
+      <div className="flex flex-col gap-2">
+        <div className="flex items-center justify-between">
+          <label className="text-slate-500 text-xs">Buttons <span className="text-slate-600">(max 2)</span></label>
+          {(card.buttons || []).length < 2 && (
+            <div className="flex gap-1">
+              <button onClick={() => onAddButton('URL')} className="var-btn"><Link size={10} className="inline mr-1" />URL</button>
+              <button onClick={() => onAddButton('QUICK_REPLY')} className="var-btn"><Zap size={10} className="inline mr-1" />Reply</button>
+            </div>
+          )}
+        </div>
+        {(card.buttons || []).map((btn, bi) => (
+          <div key={bi} className="flex gap-2 items-center">
+            <span className="text-xs text-slate-500 w-14 shrink-0">{btn.type === 'URL' ? 'URL' : 'Reply'}</span>
+            <input value={btn.text} onChange={e => onUpdateButton(bi, 'text', e.target.value)} placeholder="Button label" className="input text-xs flex-1" />
+            {btn.type === 'URL' && (
+              <input value={btn.url} onChange={e => onUpdateButton(bi, 'url', e.target.value)} placeholder="https://... or {{3}}" className="input text-xs flex-1 font-mono" />
+            )}
+            <button onClick={() => onRemoveButton(bi)} className="text-red-400 hover:text-red-300"><X size={13} /></button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // ── CONFIG VIEW ───────────────────────────────────────────────────────────────
 function ConfigView({ tpl, config, setConfig, galleries, galleryImages, loadFolderImages, error, loading, onSave, onBack }) {
   const set = (k, v) => setConfig(p => ({ ...p, [k]: v }));
-  const [selFolder, setSelFolder] = useState('');
-  const [activeCard, setActiveCard] = useState(0);
+  const [selFolder, setSelFolder]     = useState('');
+  const [activeCard, setActiveCard]   = useState(0);
+  const [hotProducts, setHotProducts] = useState([]);
+  const [hotLoading, setHotLoading]   = useState(false);
+  const [autoRefreshing, setAutoRefreshing] = useState(false);
 
   const isCarousel = tpl.is_carousel;
+
+  useEffect(() => {
+    if (isCarousel) loadHotProducts();
+  }, []);
+
+  async function loadHotProducts() {
+    setHotLoading(true);
+    try {
+      const d = await fetch(`${BASE}/hot-products?limit=6`, { headers: CH() }).then(r => r.json());
+      setHotProducts(d.products || []);
+    } catch (_) {}
+    finally { setHotLoading(false); }
+  }
+
+  async function triggerAutoRefresh() {
+    setAutoRefreshing(true);
+    try {
+      const d = await api(`/${tpl.id}/refresh-auto`, { method: 'POST' });
+      setConfig(d.template.product_config || config);
+      setHotProducts(d.hot_products || []);
+    } catch (e) { console.error(e); }
+    finally { setAutoRefreshing(false); }
+  }
 
   function setCardField(idx, key, val) {
     const cards = [...(config.cards || [])];
@@ -655,10 +849,16 @@ function ConfigView({ tpl, config, setConfig, galleries, galleryImages, loadFold
     set('cards', cards);
   }
 
-  function applyScraped(idx, scraped) {
+  function assignHotProductToCard(cardIdx, hot) {
     const cards = [...(config.cards || [])];
-    if (scraped.title) cards[idx] = { ...cards[idx], title: scraped.title };
-    if (scraped.price) cards[idx] = { ...cards[idx], price: scraped.price };
+    cards[cardIdx] = {
+      ...cards[cardIdx],
+      title: hot.name,
+      price: hot.price,
+      link:  hot.url,
+      _hot_image_url: hot.image,
+      _hot_score: hot.score,
+    };
     set('cards', cards);
   }
 
@@ -678,36 +878,95 @@ function ConfigView({ tpl, config, setConfig, galleries, galleryImages, loadFold
         {/* ── CAROUSEL CONFIG ──────────────────────────────────────────────── */}
         {isCarousel && (
           <>
-            {/* Live carousel preview */}
+            {/* Carousel preview */}
             <div>
               <label className="text-white font-medium text-sm mb-3 block">Carousel Preview</label>
               <CarouselConfigPreview cards={config.cards || []} />
             </div>
 
+            {/* Hot products panel */}
+            <div className="bg-orange-500/5 border border-orange-500/20 rounded-2xl p-4 flex flex-col gap-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Flame size={15} className="text-orange-400" />
+                  <div>
+                    <p className="text-white text-sm font-medium">Hot Products (Trending + Abandoned)</p>
+                    <p className="text-slate-500 text-xs">Click any product to assign it to the active card</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  {tpl.auto_product_mode && (
+                    <button onClick={triggerAutoRefresh} disabled={autoRefreshing}
+                      className="flex items-center gap-1.5 text-xs bg-orange-600/20 hover:bg-orange-600/40 border border-orange-500/30 text-orange-400 px-3 py-1.5 rounded-lg disabled:opacity-50">
+                      <RefreshCw size={12} className={autoRefreshing ? 'animate-spin' : ''} />
+                      {autoRefreshing ? 'Refreshing...' : 'Auto-refresh now'}
+                    </button>
+                  )}
+                  <button onClick={loadHotProducts} disabled={hotLoading} className="p-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-slate-400">
+                    <RefreshCw size={13} className={hotLoading ? 'animate-spin' : ''} />
+                  </button>
+                </div>
+              </div>
+
+              {hotLoading && <p className="text-slate-500 text-xs">Analyzing store data...</p>}
+              {!hotLoading && hotProducts.length === 0 && (
+                <p className="text-slate-500 text-xs">No data yet. Products appear here as visitors browse and abandon carts on your store.</p>
+              )}
+              {hotProducts.length > 0 && (
+                <div className="flex gap-2 overflow-x-auto pb-1">
+                  {hotProducts.map((hot, i) => (
+                    <button key={i} onClick={() => assignHotProductToCard(activeCard, hot)}
+                      className="shrink-0 w-36 bg-white/5 hover:bg-orange-500/10 border border-white/10 hover:border-orange-500/30 rounded-xl overflow-hidden transition-all text-left">
+                      <div className="w-full h-20 overflow-hidden bg-white/5">
+                        {hot.image
+                          ? <img src={hot.image} alt="" className="w-full h-full object-cover" onError={e => e.target.style.display='none'} />
+                          : <div className="w-full h-full flex items-center justify-center"><Image size={16} className="text-slate-600" /></div>
+                        }
+                      </div>
+                      <div className="p-2">
+                        <p className="text-white text-xs truncate font-medium">{hot.name}</p>
+                        {hot.price && <p className="text-green-400 text-xs">{hot.price}</p>}
+                        <div className="flex items-center gap-1 mt-1">
+                          {hot.carts > 0 && <span className="text-orange-400 text-xs flex items-center gap-0.5"><ShoppingCart size={8}/>{hot.carts}</span>}
+                          {hot.views > 0 && <span className="text-slate-500 text-xs flex items-center gap-0.5"><Eye size={8}/>{hot.views}</span>}
+                        </div>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
+              {config.cards?.[activeCard] && (
+                <p className="text-slate-500 text-xs">Clicking assigns to Card {activeCard + 1}. Switch card tabs below to assign others.</p>
+              )}
+            </div>
+
             {/* Card tabs */}
             <div>
               <div className="flex gap-2 flex-wrap mb-4">
-                {(config.cards || []).map((_, i) => (
+                {(config.cards || []).map((c, i) => (
                   <button key={i} onClick={() => setActiveCard(i)}
                     className={`text-xs px-3 py-1.5 rounded-lg border font-medium ${activeCard === i ? 'bg-purple-600/20 border-purple-600/40 text-purple-400' : 'bg-white/5 border-white/10 text-slate-400'}`}>
-                    Card {i + 1} {config.cards[i]?.image_id ? '✓' : ''}
+                    Card {i + 1} {c.image_id || c.title ? '✓' : ''}
                   </button>
                 ))}
               </div>
 
-              {/* Active card editor */}
               {(config.cards || []).map((card, i) => i !== activeCard ? null : (
                 <div key={i} className="bg-white/5 border border-white/10 rounded-2xl p-4 flex flex-col gap-4">
-                  <p className="text-purple-400 text-xs font-semibold">Card {i + 1} of {config.cards.length}</p>
+                  <div className="flex items-center justify-between">
+                    <p className="text-purple-400 text-xs font-semibold">Card {i + 1} of {config.cards.length}</p>
+                    {card._hot_score !== undefined && (
+                      <span className="text-xs text-orange-400 flex items-center gap-1">
+                        <Flame size={10} /> Hot score: {card._hot_score}
+                      </span>
+                    )}
+                  </div>
 
-                  {/* Auto-fill from URL */}
-                  <ScrapeUrlInput
-                    onFill={(scraped) => {
-                      applyScraped(i, scraped);
-                      // If scraped image, show note (can't auto-upload to gallery from here)
-                    }}
-                    externalImageUrl={card._scraped_image_url}
-                  />
+                  {/* URL scrape */}
+                  <ScrapeUrlInput onFill={(s) => {
+                    if (s.title) setCardField(i, 'title', s.title);
+                    if (s.price) setCardField(i, 'price', s.price);
+                  }} />
 
                   <div className="grid grid-cols-2 gap-3">
                     <div className="flex flex-col gap-1.5">
@@ -727,6 +986,18 @@ function ConfigView({ tpl, config, setConfig, galleries, galleryImages, loadFold
                     </div>
                   </div>
 
+                  {/* Hot product image preview */}
+                  {!card.image_id && card._hot_image_url && (
+                    <div className="flex items-center gap-3 bg-orange-500/5 border border-orange-500/20 rounded-xl p-3">
+                      <img src={card._hot_image_url} alt="" className="w-14 h-14 object-cover rounded-lg"
+                        onError={e => e.target.parentElement.style.display='none'} />
+                      <div>
+                        <p className="text-orange-400 text-xs font-medium">Auto-detected image URL</p>
+                        <p className="text-slate-500 text-xs">Upload to Gallery and select below to use as WhatsApp card image</p>
+                      </div>
+                    </div>
+                  )}
+
                   {/* Gallery image picker */}
                   <div className="flex flex-col gap-2">
                     <label className="text-slate-500 text-xs">Card Image <span className="text-slate-600">(from Gallery)</span></label>
@@ -734,10 +1005,7 @@ function ConfigView({ tpl, config, setConfig, galleries, galleryImages, loadFold
                       galleries={galleries} galleryImages={galleryImages}
                       selectedId={card.image_id} selFolder={selFolder}
                       onSelectFolder={id => { setSelFolder(id); loadFolderImages(id); }}
-                      onSelect={img => {
-                        setCardField(i, 'image_id', img.id);
-                        setCardField(i, 'header_media_id', img.media_id || '');
-                      }}
+                      onSelect={img => { setCardField(i, 'image_id', img.id); setCardField(i, 'header_media_id', img.media_id || ''); }}
                     />
                     {card.image_id && (
                       <img src={`/api/gallery/images/${card.image_id}/preview`} alt=""
@@ -745,7 +1013,6 @@ function ConfigView({ tpl, config, setConfig, galleries, galleryImages, loadFold
                     )}
                   </div>
 
-                  {/* Navigation */}
                   <div className="flex gap-2 pt-2">
                     {i > 0 && <button onClick={() => setActiveCard(i - 1)} className="var-btn flex items-center gap-1"><ChevronLeft size={12} />Prev</button>}
                     {i < (config.cards.length - 1) && <button onClick={() => setActiveCard(i + 1)} className="var-btn flex items-center gap-1">Next<ChevronRight size={12} /></button>}
@@ -768,7 +1035,6 @@ function ConfigView({ tpl, config, setConfig, galleries, galleryImages, loadFold
                 {config.header_image_id && <img src={`/api/gallery/images/${config.header_image_id}/preview`} alt="" className="w-32 h-32 object-cover rounded-xl border border-white/10" />}
               </div>
             )}
-
             {extractVars(tpl.body).length > 0 && (
               <div className="flex flex-col gap-3">
                 <label className="text-white font-medium text-sm">Variable Mapping</label>
@@ -778,10 +1044,7 @@ function ConfigView({ tpl, config, setConfig, galleries, galleryImages, loadFold
                     <select value={(config.var_map || {})[v] || ''} className="input text-sm flex-1"
                       onChange={e => set('var_map', { ...(config.var_map || {}), [v]: e.target.value })}>
                       <option value="">— Select —</option>
-                      <optgroup label="Customer"><option value="customer_name">Customer Name</option></optgroup>
-                      <optgroup label="Product"><option value="product_title">Product Title</option><option value="product_price">Product Price</option><option value="product_link">Product Link</option></optgroup>
-                      <optgroup label="Cart"><option value="cart_total">Cart Total</option><option value="cart_link">Cart Link</option></optgroup>
-                      <optgroup label="Fixed"><option value="custom">Custom Text</option></optgroup>
+                      {VAR_FIELD_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
                     </select>
                     {(config.var_map || {})[v] === 'custom' && (
                       <input placeholder="Fixed value" className="input text-sm flex-1"
@@ -792,7 +1055,6 @@ function ConfigView({ tpl, config, setConfig, galleries, galleryImages, loadFold
                 ))}
               </div>
             )}
-
             <div className="flex flex-col gap-3">
               <div className="flex items-center justify-between">
                 <label className="text-white font-medium text-sm">Products</label>
@@ -802,7 +1064,7 @@ function ConfigView({ tpl, config, setConfig, galleries, galleryImages, loadFold
                 <div key={i} className="bg-white/5 border border-white/10 rounded-2xl p-4 flex flex-col gap-3">
                   <div className="flex items-center justify-between">
                     <span className="text-slate-400 text-xs">Product {i + 1}</span>
-                    {(config.products || []).length > 1 && <button onClick={() => set('products', (config.products || []).filter((_, j) => j !== i))} className="text-red-400 hover:text-red-300"><X size={13} /></button>}
+                    {(config.products || []).length > 1 && <button onClick={() => set('products', config.products.filter((_, j) => j !== i))} className="text-red-400 hover:text-red-300"><X size={13} /></button>}
                   </div>
                   <ScrapeUrlInput onFill={(s) => {
                     const a = [...config.products];
@@ -840,8 +1102,8 @@ function ConfigView({ tpl, config, setConfig, galleries, galleryImages, loadFold
 }
 
 // ── Auto-scrape URL input ─────────────────────────────────────────────────────
-function ScrapeUrlInput({ onFill }) {
-  const [url, setUrl]         = useState('');
+function ScrapeUrlInput({ onFill, initialUrl, onUrlChange }) {
+  const [url, setUrl]         = useState(initialUrl || '');
   const [loading, setLoading] = useState(false);
   const [result, setResult]   = useState(null);
   const [err, setErr]         = useState('');
@@ -867,12 +1129,12 @@ function ScrapeUrlInput({ onFill }) {
     <div className="bg-blue-500/5 border border-blue-500/20 rounded-xl p-3 flex flex-col gap-2">
       <label className="text-blue-400 text-xs font-semibold flex items-center gap-1">
         <Globe size={11} /> Auto-fill from Product URL
-        <span className="text-slate-500 font-normal ml-1">(Shopify, WooCommerce, or any website)</span>
+        <span className="text-slate-500 font-normal ml-1">(Shopify, WooCommerce, any site)</span>
       </label>
       <div className="flex gap-2">
         <input
           value={url}
-          onChange={e => setUrl(e.target.value)}
+          onChange={e => { setUrl(e.target.value); onUrlChange?.(e.target.value); }}
           onKeyDown={e => e.key === 'Enter' && handleFetch()}
           placeholder="https://yourstore.myshopify.com/products/product-name"
           className="input text-xs font-mono flex-1"
@@ -894,9 +1156,7 @@ function ScrapeUrlInput({ onFill }) {
             {result.title && <p className="text-white text-xs font-medium truncate">{result.title}</p>}
             {result.price && <p className="text-green-400 text-xs">{result.price}</p>}
             {result.description && <p className="text-slate-500 text-xs mt-0.5 line-clamp-2">{result.description}</p>}
-            <p className="text-blue-400 text-xs mt-1 flex items-center gap-1">
-              <CheckCircle2 size={10} /> Title &amp; price filled in above fields
-            </p>
+            <p className="text-blue-400 text-xs mt-1 flex items-center gap-1"><CheckCircle2 size={10} /> Title &amp; price filled in fields above</p>
           </div>
         </div>
       )}
@@ -904,30 +1164,75 @@ function ScrapeUrlInput({ onFill }) {
   );
 }
 
+// ── Inline Gallery Picker ─────────────────────────────────────────────────────
+function InlineGalleryPicker({ galleries, galleryImages, selectedId, onSelectFolder, selFolder, onSelect, accentColor = 'green' }) {
+  const ac = accentColor === 'purple'
+    ? { active: 'bg-purple-600/20 border-purple-600/40 text-purple-400', sel: 'border-purple-500' }
+    : { active: 'bg-green-600/20 border-green-600/40 text-green-400',   sel: 'border-green-500' };
+  return (
+    <div className="bg-[#0a1929] border border-white/10 rounded-xl p-3 flex flex-col gap-3">
+      {galleries.length === 0
+        ? <p className="text-slate-500 text-xs">No gallery folders. Upload images in Gallery section first.</p>
+        : (
+          <>
+            <div className="flex gap-2 flex-wrap">
+              {galleries.map(gf => (
+                <button key={gf.id} onClick={() => onSelectFolder(gf.id)}
+                  className={`text-xs px-3 py-1.5 rounded-lg border ${selFolder === gf.id ? ac.active : 'bg-white/5 border-white/10 text-slate-400 hover:border-white/20'}`}>
+                  {gf.name} ({gf.imageCount})
+                </button>
+              ))}
+            </div>
+            {galleryImages.length > 0 && (
+              <div className="flex gap-2 flex-wrap">
+                {galleryImages.map(img => (
+                  <button key={img.id} onClick={() => onSelect(img)}
+                    className={`relative rounded-lg overflow-hidden border-2 transition-all ${selectedId === img.id ? ac.sel : 'border-transparent hover:border-white/30'}`}>
+                    <img src={`/api/gallery/images/${img.id}/preview`} alt={img.name} className="w-16 h-16 object-cover" />
+                    {selectedId === img.id && (
+                      <div className="absolute inset-0 bg-green-500/30 flex items-center justify-center">
+                        <Check size={16} className="text-white" />
+                      </div>
+                    )}
+                  </button>
+                ))}
+              </div>
+            )}
+            {selFolder && galleryImages.length === 0 && <p className="text-slate-500 text-xs">No images in this folder.</p>}
+          </>
+        )
+      }
+    </div>
+  );
+}
+
 // ── Carousel Preview (while building) ────────────────────────────────────────
 function CarouselPreview({ cards }) {
-  const samples = ['Blue Kurti', '₹799', 'product-link'];
   return (
     <div className="bg-[#0a1929] rounded-2xl p-4">
       <p className="text-slate-500 text-xs mb-3">Preview (scroll →)</p>
       <div className="flex gap-3 overflow-x-auto pb-2">
         {cards.map((card, i) => {
-          const preview = (card.body || '').replace(/\{\{1\}\}/g, 'Blue Kurti').replace(/\{\{2\}\}/g, '₹799').replace(/\{\{(\d+)\}\}/g, (_, n) => samples[n - 1] || `[${n}]`);
+          const preview = (card.body || '')
+            .replace(/\{\{1\}\}/g, card._scraped_title || 'Blue Kurti')
+            .replace(/\{\{2\}\}/g, card._scraped_price || '₹799')
+            .replace(/\{\{(\d+)\}\}/g, (_, n) => `[Var${n}]`);
+          const hot = card._hot_preview;
           return (
             <div key={i} className="shrink-0 w-44 bg-[#1a2a1a] rounded-2xl overflow-hidden border border-white/10">
-              <div className="w-full h-28 overflow-hidden bg-purple-900/30">
+              <div className="w-full h-28 overflow-hidden bg-purple-900/20">
                 {card.image_id
                   ? <img src={`/api/gallery/images/${card.image_id}/preview`} alt="" className="w-full h-full object-cover" />
-                  : (
-                    <div className="w-full h-full flex flex-col items-center justify-center gap-1">
-                      <Image size={18} className="text-purple-400" />
-                      <span className="text-purple-400 text-xs">Card {i + 1}</span>
-                    </div>
-                  )
+                  : hot?.image
+                    ? <img src={hot.image} alt="" className="w-full h-full object-cover" onError={e => { e.target.style.display='none'; }} />
+                    : <div className="w-full h-full flex flex-col items-center justify-center gap-1">
+                        <Image size={18} className="text-purple-400" />
+                        <span className="text-purple-400 text-xs">{card.source === 'auto' ? '🔥 Auto' : `Card ${i + 1}`}</span>
+                      </div>
                 }
               </div>
               <div className="p-2.5">
-                <p className="text-white text-xs whitespace-pre-wrap">{preview || 'Card body...'}</p>
+                <p className="text-white text-xs whitespace-pre-wrap line-clamp-3">{hot ? `${hot.name}\n${hot.price}` : preview || 'Card body...'}</p>
                 {(card.buttons || []).map((btn, bi) => (
                   <div key={bi} className="mt-1.5 border-t border-white/10 pt-1.5 text-center text-green-400 text-xs">{btn.text}</div>
                 ))}
@@ -940,7 +1245,7 @@ function CarouselPreview({ cards }) {
   );
 }
 
-// ── Carousel Config Preview (with real images) ────────────────────────────────
+// ── Carousel Config Preview ───────────────────────────────────────────────────
 function CarouselConfigPreview({ cards }) {
   return (
     <div className="bg-[#0a1929] rounded-2xl p-4">
@@ -950,13 +1255,15 @@ function CarouselConfigPreview({ cards }) {
             <div className="w-full h-28 bg-purple-900/20 overflow-hidden">
               {card.image_id
                 ? <img src={`/api/gallery/images/${card.image_id}/preview`} alt="" className="w-full h-full object-cover" />
-                : <div className="w-full h-full flex items-center justify-center"><Image size={20} className="text-slate-600" /></div>
+                : card._hot_image_url
+                  ? <img src={card._hot_image_url} alt="" className="w-full h-full object-cover" onError={e => e.target.style.display='none'} />
+                  : <div className="w-full h-full flex items-center justify-center"><Image size={20} className="text-slate-600" /></div>
               }
             </div>
             <div className="p-2.5">
-              <p className="text-white text-xs font-medium truncate">{card.title || `Product ${i + 1}`}</p>
+              <p className="text-white text-xs font-medium truncate">{card.title || `Card ${i + 1}`}</p>
               {card.price && <p className="text-green-400 text-xs">{card.price}</p>}
-              {card.link && <p className="text-slate-500 text-xs truncate">{card.link}</p>}
+              {card._hot_carts > 0 && <p className="text-orange-400 text-xs flex items-center gap-0.5 mt-0.5"><ShoppingCart size={9}/>{card._hot_carts} abandoned</p>}
             </div>
           </div>
         ))}
@@ -999,9 +1306,7 @@ function GalleryPicker({ galleries, galleryImages, selectedId, onSelectFolder, s
   return (
     <div className="flex flex-col gap-2">
       <div className="flex gap-2 flex-wrap">
-        {galleries.length === 0 && (
-          <p className="text-slate-600 text-xs">No gallery folders. Upload images in Gallery section first.</p>
-        )}
+        {galleries.length === 0 && <p className="text-slate-600 text-xs">No gallery folders. Upload in Gallery section first.</p>}
         {galleries.map(f => (
           <button key={f.id} onClick={() => onSelectFolder(f.id)}
             className={`text-xs px-3 py-1.5 rounded-lg border ${selFolder === f.id ? 'bg-green-600/20 border-green-600/40 text-green-400' : 'bg-white/5 border-white/10 text-slate-400 hover:border-white/20'}`}>
@@ -1016,9 +1321,7 @@ function GalleryPicker({ galleries, galleryImages, selectedId, onSelectFolder, s
               className={`relative rounded-xl overflow-hidden border-2 transition-all ${selectedId === img.id ? 'border-green-500' : 'border-transparent hover:border-white/30'}`}>
               <img src={`/api/gallery/images/${img.id}/preview`} alt={img.name} className="w-16 h-16 object-cover" />
               {selectedId === img.id && (
-                <div className="absolute inset-0 bg-green-500/30 flex items-center justify-center">
-                  <Check size={16} className="text-white" />
-                </div>
+                <div className="absolute inset-0 bg-green-500/30 flex items-center justify-center"><Check size={16} className="text-white" /></div>
               )}
             </button>
           ))}

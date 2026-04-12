@@ -250,6 +250,168 @@ export function saveProductConfig(req, res) {
   res.json({ template: tpl });
 }
 
+// ── Get hot/trending products based on views + abandoned cart data ────────────
+export function getHotProducts(req, res) {
+  try {
+    const db = getDb();
+    const channelId = req.headers['x-channel-id'] || 'demo';
+    const limit = Math.min(parseInt(req.query.limit) || 10, 20);
+    const days  = parseInt(req.query.days) || 30;
+    const since = new Date(Date.now() - days * 24 * 3600 * 1000).toISOString();
+
+    const scores = {};
+
+    // ── Score from product views ─────────────────────────────────────────────
+    for (const v of (db.product_views || [])) {
+      if (v.channel_id !== channelId || v.created_at < since) continue;
+      const key = v.product_url || v.product_name;
+      if (!key) continue;
+      if (!scores[key]) scores[key] = { name: v.product_name, url: v.product_url, image: v.product_image, price: v.product_price, views: 0, carts: 0 };
+      scores[key].views++;
+      if (!scores[key].name  && v.product_name)  scores[key].name  = v.product_name;
+      if (!scores[key].image && v.product_image) scores[key].image = v.product_image;
+      if (!scores[key].price && v.product_price) scores[key].price = v.product_price;
+    }
+
+    // ── Score from abandoned cart events (weight × 3) ────────────────────────
+    for (const c of (db.cart_events || [])) {
+      if (c.channel_id !== channelId || c.recovered || c.created_at < since) continue;
+      let productName = c.product_name;
+      let productUrl  = c.product_url;
+      // Try to extract from products JSON array if direct fields empty
+      if (!productName && c.products) {
+        try { const arr = JSON.parse(c.products); productName = arr[0]?.name; productUrl = productUrl || arr[0]?.url; } catch (_) {}
+      }
+      const key = productUrl || productName;
+      if (!key) continue;
+      if (!scores[key]) scores[key] = { name: productName, url: productUrl, image: c.product_image, price: c.product_price, views: 0, carts: 0 };
+      scores[key].carts++;
+      if (!scores[key].name  && productName)   scores[key].name  = productName;
+      if (!scores[key].image && c.product_image) scores[key].image = c.product_image;
+      if (!scores[key].price && c.product_price) scores[key].price = c.product_price;
+    }
+
+    // ── Add catalog products as baseline (so there's always something) ────────
+    for (const p of (db.product_catalog || [])) {
+      if (p.channel_id !== channelId) continue;
+      const key = p.url || p.name;
+      if (!key) continue;
+      if (!scores[key]) scores[key] = { name: p.name, url: p.url, image: p.image, price: p.price, views: 0, carts: 0 };
+      if (!scores[key].name  && p.name)  scores[key].name  = p.name;
+      if (!scores[key].image && p.image) scores[key].image = p.image;
+      if (!scores[key].price && p.price) scores[key].price = p.price;
+    }
+
+    const products = Object.entries(scores)
+      .map(([key, p]) => {
+        const score = (p.views * 1) + (p.carts * 3);
+        return {
+          key,
+          name:         p.name  || key,
+          url:          p.url   || '',
+          image:        p.image || '',
+          price:        p.price || '',
+          views:        p.views,
+          carts:        p.carts,
+          score:        Math.round(score * 10) / 10,
+          is_trending:  p.views >= 3,
+          is_abandoned: p.carts > 0,
+        };
+      })
+      .filter(p => p.name)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, limit);
+
+    res.json({ products, generated_at: new Date().toISOString(), days });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+}
+
+// ── Refresh auto-products for a template ──────────────────────────────────────
+export async function refreshAutoProducts(req, res) {
+  try {
+    const db = getDb();
+    const channelId = req.headers['x-channel-id'] || 'demo';
+    const { id } = req.params;
+
+    const tpl = (db.meta_templates || []).find(t => t.id === id && t.channel_id === channelId);
+    if (!tpl) return res.status(404).json({ error: 'Template not found' });
+    if (!tpl.is_carousel) return res.status(400).json({ error: 'Only carousel templates support auto-products' });
+
+    const hotProducts = computeHotProducts(db, channelId, tpl.auto_product_count || tpl.carousel_cards?.length || 3);
+
+    // Build cards config from hot products
+    const existingCards = (tpl.product_config?.cards) || tpl.carousel_cards.map(() => ({}));
+    const cards = tpl.carousel_cards.map((card, i) => {
+      const hot = hotProducts[i];
+      const existing = existingCards[i] || {};
+      if (!hot) return existing;
+      return {
+        ...existing,
+        title:           hot.name,
+        price:           hot.price,
+        link:            hot.url,
+        // Only update image_id if card is in auto mode and no manual image set
+        image_id:        (card.source === 'auto' || !existing.image_id) ? (existing.image_id || '') : existing.image_id,
+        _hot_image_url:  hot.image,
+        _hot_score:      hot.score,
+        _hot_views:      hot.views,
+        _hot_carts:      hot.carts,
+      };
+    });
+
+    if (!tpl.product_config) tpl.product_config = {};
+    tpl.product_config.cards = cards;
+    tpl.product_config.last_auto_refresh = new Date().toISOString();
+    tpl.product_config.auto_products = hotProducts;
+    db.save();
+
+    res.json({ template: tpl, hot_products: hotProducts });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+}
+
+// Shared helper — used by endpoint and daily cron
+export function computeHotProducts(db, channelId, limit = 10) {
+  const since = new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString();
+  const scores = {};
+
+  for (const v of (db.product_views || [])) {
+    if (v.channel_id !== channelId || v.created_at < since) continue;
+    const key = v.product_url || v.product_name; if (!key) continue;
+    if (!scores[key]) scores[key] = { name: v.product_name, url: v.product_url, image: v.product_image, price: v.product_price, views: 0, carts: 0 };
+    scores[key].views++;
+    if (!scores[key].image && v.product_image) scores[key].image = v.product_image;
+    if (!scores[key].price && v.product_price) scores[key].price = v.product_price;
+  }
+  for (const c of (db.cart_events || [])) {
+    if (c.channel_id !== channelId || c.recovered || c.created_at < since) continue;
+    let pName = c.product_name, pUrl = c.product_url;
+    if (!pName && c.products) { try { const a = JSON.parse(c.products); pName = a[0]?.name; pUrl = pUrl || a[0]?.url; } catch (_) {} }
+    const key = pUrl || pName; if (!key) continue;
+    if (!scores[key]) scores[key] = { name: pName, url: pUrl, image: c.product_image, price: c.product_price, views: 0, carts: 0 };
+    scores[key].carts++;
+    if (!scores[key].image && c.product_image) scores[key].image = c.product_image;
+    if (!scores[key].price && c.product_price) scores[key].price = c.product_price;
+  }
+  for (const p of (db.product_catalog || [])) {
+    if (p.channel_id !== channelId) continue;
+    const key = p.url || p.name; if (!key) continue;
+    if (!scores[key]) scores[key] = { name: p.name, url: p.url, image: p.image, price: p.price, views: 0, carts: 0 };
+    if (!scores[key].name  && p.name)  scores[key].name  = p.name;
+    if (!scores[key].image && p.image) scores[key].image = p.image;
+    if (!scores[key].price && p.price) scores[key].price = p.price;
+  }
+
+  return Object.entries(scores)
+    .map(([, p]) => ({ name: p.name || '', url: p.url || '', image: p.image || '', price: p.price || '', views: p.views, carts: p.carts, score: (p.views * 1) + (p.carts * 3) }))
+    .filter(p => p.name)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit);
+}
+
 // ── Scrape product from URL (Shopify JSON API + OpenGraph fallback) ───────────
 export async function scrapeProduct(req, res) {
   try {

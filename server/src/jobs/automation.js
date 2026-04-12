@@ -4,8 +4,10 @@ import { aiService } from '../services/ai.service.js';
 import { translateComponents } from '../services/translate.service.js';
 import { saveChatMessage } from '../controllers/chat.controller.js';
 import { upgradeStatus } from '../utils/statusMachine.js';
+import { computeHotProducts } from '../controllers/meta-templates.controller.js';
 
 let cronInterval;
+let lastAutoProductRefresh = null; // track last daily refresh
 
 /**
  * Universal Automation Engine v3
@@ -40,8 +42,64 @@ export function startAutomation() {
   console.log('Starting automation engine...');
   cronInterval = setInterval(() => {
     runAutomation().catch(err => console.error('[Automation] Error:', err));
+    refreshAutoProductTemplates().catch(err => console.error('[AutoProducts] Error:', err));
   }, 60 * 1000);
   console.log('Automation engine active - monitoring tracker events');
+}
+
+// ── Daily refresh: update product_config.cards for auto-mode carousel templates ─
+async function refreshAutoProductTemplates() {
+  const db = getDb();
+  const now = new Date();
+  const channelId = process.env.CHANNEL_ID || 'demo';
+
+  // Run once per day at the configured hour (default 9 AM), or if never run today
+  const refreshHour = parseInt(process.env.AUTO_PRODUCT_REFRESH_HOUR || '9');
+  const todayKey = `${now.getFullYear()}-${now.getMonth()}-${now.getDate()}-${refreshHour}`;
+  if (lastAutoProductRefresh === todayKey) return;
+  if (now.getHours() !== refreshHour) return;
+
+  lastAutoProductRefresh = todayKey;
+  console.log('[AutoProducts] Daily refresh starting...');
+
+  const templates = (db.meta_templates || []).filter(t =>
+    t.channel_id === channelId && t.is_carousel && t.auto_product_mode
+  );
+
+  if (templates.length === 0) return;
+
+  const hotProducts = computeHotProducts(db, channelId, 10);
+  if (hotProducts.length === 0) { console.log('[AutoProducts] No hot products found yet'); return; }
+
+  for (const tpl of templates) {
+    try {
+      const cardCount = tpl.carousel_cards?.length || 3;
+      const existingCards = tpl.product_config?.cards || tpl.carousel_cards.map(() => ({}));
+      const cards = tpl.carousel_cards.map((card, i) => {
+        const hot = hotProducts[i % hotProducts.length];
+        const existing = existingCards[i] || {};
+        return {
+          ...existing,
+          title:          hot.name,
+          price:          hot.price,
+          link:           hot.url,
+          image_id:       existing.image_id || '',
+          _hot_image_url: hot.image,
+          _hot_score:     hot.score,
+          _hot_views:     hot.views,
+          _hot_carts:     hot.carts,
+          _auto_updated:  now.toISOString(),
+        };
+      });
+      if (!tpl.product_config) tpl.product_config = {};
+      tpl.product_config.cards = cards;
+      tpl.product_config.last_auto_refresh = now.toISOString();
+      tpl.product_config.auto_products = hotProducts.slice(0, cardCount);
+      console.log(`[AutoProducts] Updated "${tpl.name}" with ${cards.length} hot products`);
+    } catch (e) { console.error(`[AutoProducts] Template ${tpl.id} error:`, e); }
+  }
+  db.save();
+  console.log(`[AutoProducts] Refreshed ${templates.length} template(s)`);
 }
 
 async function runAutomation() {
