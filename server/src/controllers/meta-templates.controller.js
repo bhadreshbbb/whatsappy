@@ -268,6 +268,122 @@ export async function previewPayload(req, res) {
   }
 }
 
+// ── Resolve a product field value for the send message payload ───────────────
+function getFieldValue(varNum, varMap, productCard) {
+  const field = (varMap || {})[String(varNum)];
+  if (!field) return '';
+  switch (field) {
+    case 'product_title':  return productCard?.title  || '';
+    case 'product_price':  return productCard?.price  || '';
+    case 'product_link': {
+      const link = productCard?.link || '';
+      // URL buttons expect just the variable segment (slug), not the full URL
+      try { const seg = new URL(link).pathname.split('/').filter(Boolean).pop(); return seg || link; }
+      catch { return link; }
+    }
+    case 'customer_name':  return 'Customer';
+    case 'cart_total':     return productCard?.cart_total || '';
+    case 'cart_link':      return productCard?.link || '';
+    case 'custom':         return String((varMap || {})[`${varNum}_custom`] || '');
+    default:               return '';
+  }
+}
+
+/**
+ * Build the WhatsApp /messages send payload for an approved carousel template.
+ * This is what campaigns POST to the WhatsApp Cloud API.
+ * productConfig = tpl.product_config  |  recipientPhone = '+91...'
+ */
+export function buildSendMessagePayload(tpl, productConfig, recipientPhone = '{{RECIPIENT_PHONE}}') {
+  const langMap = { en: 'en_US', hi: 'hi', gu: 'gu', ta: 'ta', te: 'te', mr: 'mr', bn: 'bn', ar: 'ar', ur: 'ur' };
+  const langCode = langMap[tpl.language] || tpl.language || 'en_US';
+  const stdVarMap = Array.isArray(tpl.variable_labels) ? {} : (tpl.variable_labels || {});
+  const components = [];
+
+  // Optional carousel-level body parameters
+  if (tpl.body?.trim()) {
+    const vars = [...tpl.body.matchAll(/\{\{(\d+)\}\}/g)].map(m => m[1]);
+    if (vars.length > 0) {
+      const firstCard = (productConfig?.cards || [])[0] || {};
+      components.push({ type: 'body', parameters: vars.map(v => ({ type: 'text', text: getFieldValue(v, stdVarMap, firstCard) })) });
+    }
+  }
+
+  // Carousel cards
+  if (tpl.is_carousel && tpl.carousel_cards?.length) {
+    const cards = tpl.carousel_cards.map((card, i) => {
+      const pc = (productConfig?.cards || [])[i] || {};
+      const vm = card.var_map || {};
+      const cardComponents = [];
+
+      // Header image — use Meta media_id (preferred) or public image URL
+      const imgId  = pc.header_media_id || card.header_media_id || '';
+      const imgUrl = pc._hot_image_url || pc.image_url || card.product_data?.image_url || '';
+      if (imgId) {
+        cardComponents.push({ type: 'header', parameters: [{ type: 'image', image: { id: imgId } }] });
+      } else if (imgUrl) {
+        cardComponents.push({ type: 'header', parameters: [{ type: 'image', image: { link: imgUrl } }] });
+      }
+
+      // Body text parameters (one per {{N}} variable)
+      if (card.body?.trim()) {
+        const vars = [...card.body.matchAll(/\{\{(\d+)\}\}/g)].map(m => m[1]);
+        if (vars.length > 0) {
+          cardComponents.push({ type: 'body', parameters: vars.map(v => ({ type: 'text', text: getFieldValue(v, vm, pc) })) });
+        }
+      }
+
+      // URL button parameters (variable slug substitution)
+      (card.buttons || []).slice(0, 2).forEach((btn, bi) => {
+        if (btn.type === 'URL' && btn.url?.includes('{{')) {
+          const urlVars = [...btn.url.matchAll(/\{\{(\d+)\}\}/g)].map(m => m[1]);
+          cardComponents.push({ type: 'button', sub_type: 'url', index: String(bi), parameters: urlVars.map(v => ({ type: 'text', text: getFieldValue(v, vm, pc) })) });
+        }
+      });
+
+      return { card_index: i, components: cardComponents };
+    });
+    components.push({ type: 'carousel', cards });
+  }
+
+  return {
+    messaging_product: 'whatsapp',
+    recipient_type: 'individual',
+    to: recipientPhone,
+    type: 'template',
+    template: { name: tpl.name, language: { code: langCode }, components },
+  };
+}
+
+// ── Get send payload for an approved template (with current product config) ───
+export async function getSendPayload(req, res) {
+  try {
+    const db = getDb();
+    const channelId = req.headers['x-channel-id'] || 'demo';
+    const { id } = req.params;
+    const tpl = (db.meta_templates || []).find(t => t.id === id && t.channel_id === channelId);
+    if (!tpl) return res.status(404).json({ error: 'Template not found' });
+
+    const payload = buildSendMessagePayload(tpl, tpl.product_config, req.query.to || '{{RECIPIENT_PHONE}}');
+    const creds = getCreds(channelId);
+
+    res.json({
+      payload,
+      api_url: creds
+        ? `https://graph.facebook.com/v25.0/${creds.phoneId}/messages`
+        : 'https://graph.facebook.com/v25.0/{PHONE_NUMBER_ID}/messages',
+      method: 'POST',
+      last_refresh:  tpl.product_config?.last_auto_refresh || null,
+      next_refresh:  tpl.product_config?.last_auto_refresh
+        ? new Date(new Date(tpl.product_config.last_auto_refresh).getTime() + 6 * 3600 * 1000).toISOString()
+        : null,
+      products: (tpl.product_config?.cards || []).map(c => ({ title: c.title, price: c.price, link: c.link, image: c._hot_image_url || '' })),
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+}
+
 // ── List all meta templates ────────────────────────────────────────────────────
 export function listTemplates(req, res) {
   const db = getDb();

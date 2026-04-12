@@ -63,10 +63,10 @@ const BLANK_CARD = {
 };
 const BLANK_TPL = {
   name: '', category: 'MARKETING', language: 'en',
-  is_carousel: false, auto_product_mode: false,
+  is_carousel: true, auto_product_mode: false,   // always carousel for product recommendation
   header_type: 'NONE', header_text: '',
   body: '', footer: '', buttons: [], variable_labels: {},
-  carousel_cards: [{ ...BLANK_CARD }, { ...BLANK_CARD }, { ...BLANK_CARD }],
+  carousel_cards: [{ ...BLANK_CARD }, { ...BLANK_CARD }],
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -385,8 +385,45 @@ function CreateView({ form, setForm, error, setError, loading, onSubmit, onBack,
   async function loadHotProducts() {
     if (hotLoading) return;
     setHotLoading(true);
-    try { const d = await fetch(`${BASE}/hot-products?limit=8`, { headers: CH() }).then(r=>r.json()); setHotProducts(d.products || []); }
-    catch (_) {} finally { setHotLoading(false); }
+    try {
+      const d = await fetch(`${BASE}/hot-products?limit=10`, { headers: CH() }).then(r=>r.json());
+      setHotProducts(d.products || []);
+      return d.products || [];
+    }
+    catch (_) { return []; }
+    finally { setHotLoading(false); }
+  }
+
+  // Build a card pre-filled from a hot product
+  function hotToCard(hot) {
+    let slug = hot.url || '';
+    try { slug = new URL(hot.url).pathname.split('/').filter(Boolean).pop() || slug; } catch(_) {}
+    return {
+      ...BLANK_CARD,
+      source: 'auto',
+      product_data: { title: hot.name||'', price: hot.price||'', link: hot.url||'', image_url: hot.image||'' },
+      selected_fetch_image: hot.image || '',
+      fetched_images: hot.image ? [{ url: hot.image, alt: hot.name||'' }] : [],
+      var_map: { '1': 'product_title', '2': 'product_price', '3': 'product_link' },
+      example_values: { '1': hot.name||'Product Name', '2': hot.price||'₹799', '3': slug||'product' },
+      _hot_preview: hot,
+    };
+  }
+
+  // When Auto-Product Mode is toggled ON: immediately fetch & fill all cards from hot products
+  async function toggleAutoMode(checked) {
+    f('auto_product_mode', checked);
+    if (!checked) return;
+    setHotLoading(true);
+    try {
+      const d = await fetch(`${BASE}/hot-products?limit=10`, { headers: CH() }).then(r=>r.json());
+      const hots = d.products || [];
+      setHotProducts(hots);
+      if (hots.length === 0) return;
+      const newCards = hots.slice(0, 10).map(hot => hotToCard(hot));
+      while (newCards.length < 2) newCards.push({ ...BLANK_CARD, source: 'auto' });
+      f('carousel_cards', newCards);
+    } catch(_) {} finally { setHotLoading(false); }
   }
 
   async function checkPayload() {
@@ -468,7 +505,16 @@ function CreateView({ form, setForm, error, setError, loading, onSubmit, onBack,
     cards[idx] = { ...card, ...updates };
     f('carousel_cards', cards);
   }
-  function addCard()  { if (form.carousel_cards.length < 10) f('carousel_cards', [...form.carousel_cards, { ...BLANK_CARD }]); }
+  function addCard() {
+    if (form.carousel_cards.length >= 10) return;
+    // In auto mode: add the next hot product as the new card
+    if (form.auto_product_mode && hotProducts.length > form.carousel_cards.length) {
+      const nextHot = hotProducts[form.carousel_cards.length];
+      f('carousel_cards', [...form.carousel_cards, hotToCard(nextHot)]);
+    } else {
+      f('carousel_cards', [...form.carousel_cards, { ...BLANK_CARD }]);
+    }
+  }
   function removeCard(idx) { if (form.carousel_cards.length > 2) f('carousel_cards', form.carousel_cards.filter((_,i)=>i!==idx)); }
   function addCardButton(idx, type) {
     const cards = [...form.carousel_cards];
@@ -555,149 +601,85 @@ function CreateView({ form, setForm, error, setError, loading, onSubmit, onBack,
             </div>
           </div>
 
-          {/* Type toggle */}
-          <div className="flex gap-2">
-            <button onClick={() => f('is_carousel', false)}
-              className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm border font-medium transition-all ${!form.is_carousel ? 'bg-green-600/20 border-green-600/40 text-green-400' : 'bg-white/5 border-white/10 text-slate-400 hover:border-white/20'}`}>
-              <FileText size={15} /> Standard
-            </button>
-            <button onClick={() => f('is_carousel', true)}
-              className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm border font-medium transition-all ${form.is_carousel ? 'bg-purple-600/20 border-purple-600/40 text-purple-400' : 'bg-white/5 border-white/10 text-slate-400 hover:border-white/20'}`}>
-              <LayoutGrid size={15} /> Carousel / Catalog
-            </button>
+          {/* ── CAROUSEL PRODUCT TEMPLATE ─────────────────────────── */}
+          {/* Auto-product mode banner */}
+          <div className={`rounded-xl px-4 py-3 border transition-all ${form.auto_product_mode ? 'bg-orange-500/10 border-orange-500/30' : 'bg-white/[0.02] border-white/10'}`}>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Flame size={14} className={form.auto_product_mode ? 'text-orange-400' : 'text-slate-500'} />
+                <div>
+                  <p className="text-white text-sm font-medium">Auto-Product Mode</p>
+                  <p className="text-slate-500 text-xs">
+                    {form.auto_product_mode
+                      ? `Auto-filled ${form.carousel_cards.length} products from tracking data · refreshes every 6h`
+                      : 'Fill cards automatically from most-viewed + abandoned-cart products'}
+                  </p>
+                </div>
+              </div>
+              <label className="toggle-switch shrink-0">
+                <input type="checkbox" checked={form.auto_product_mode} onChange={e => toggleAutoMode(e.target.checked)} />
+                <span className="toggle-slider" />
+              </label>
+            </div>
+            {hotLoading && (
+              <div className="mt-3 flex items-center gap-2 text-orange-400/70 text-xs">
+                <Loader2 size={11} className="animate-spin"/> Fetching trending products…
+              </div>
+            )}
           </div>
 
-          {/* ── CAROUSEL ─────────────────────────────────────────── */}
-          {form.is_carousel && (
-            <>
-              {/* Auto-product toggle */}
-              <div className="flex items-center justify-between bg-orange-500/5 border border-orange-500/20 rounded-xl px-4 py-3">
-                <div className="flex items-center gap-2">
-                  <Flame size={14} className="text-orange-400 shrink-0" />
-                  <div>
-                    <p className="text-white text-sm font-medium">Auto-Product Mode</p>
-                    <p className="text-slate-500 text-xs">Daily cron auto-fills cards with trending + abandoned products</p>
-                  </div>
-                </div>
-                <label className="toggle-switch shrink-0">
-                  <input type="checkbox" checked={form.auto_product_mode} onChange={e => f('auto_product_mode', e.target.checked)} />
-                  <span className="toggle-slider" />
-                </label>
-              </div>
+          {/* Intro */}
+          <div className="flex flex-col gap-2">
+            <div className="flex items-center justify-between">
+              <label className="text-slate-400 text-xs font-medium">Intro Message <span className="text-slate-600">(optional — appears above carousel)</span></label>
+              <button onClick={() => addVar('body')} className="var-btn">+ Var</button>
+            </div>
+            <input value={form.body} onChange={e => f('body', e.target.value)}
+              placeholder="Check out these products picked for you! 🛍️" className="input text-sm" />
+          </div>
 
-              {/* Intro */}
-              <div className="flex flex-col gap-2">
-                <div className="flex items-center justify-between">
-                  <label className="text-slate-400 text-xs font-medium">Intro Message <span className="text-slate-600">(optional)</span></label>
-                  <button onClick={() => addVar('body')} className="var-btn">+ Var</button>
-                </div>
-                <input value={form.body} onChange={e => f('body', e.target.value)}
-                  placeholder="Check out our latest collection! 🛍️" className="input text-sm" />
-              </div>
+          {/* Cards header */}
+          <div className="flex items-center justify-between">
+            <label className="text-white font-medium text-sm">
+              Product Cards
+              <span className="text-slate-500 font-normal text-xs ml-1">
+                ({form.carousel_cards.length}/10 — min 2
+                {form.auto_product_mode ? ' · auto-mode' : ''})
+              </span>
+            </label>
+            {form.carousel_cards.length < 10 && (
+              <button onClick={addCard} className={`var-btn flex items-center gap-1 ${form.auto_product_mode ? 'text-orange-300 border-orange-500/30' : ''}`}>
+                <Plus size={11} />
+                {form.auto_product_mode ? 'Add Next Hot Product' : 'Add Card'}
+              </button>
+            )}
+          </div>
 
-              {/* Cards header */}
-              <div className="flex items-center justify-between">
-                <label className="text-white font-medium text-sm">
-                  Cards <span className="text-slate-500 font-normal text-xs">({form.carousel_cards.length}/10 — min 2)</span>
-                </label>
-                {form.carousel_cards.length < 10 && (
-                  <button onClick={addCard} className="var-btn"><Plus size={11} className="inline mr-1" />Add Card</button>
-                )}
-              </div>
-
-              <div className="flex flex-col gap-4">
-                {form.carousel_cards.map((card, idx) => (
-                  <CarouselCardEditor key={idx} card={card} idx={idx} totalCards={form.carousel_cards.length}
-                    hotProducts={hotProducts} hotLoading={hotLoading}
-                    galleries={galleries} galleryImages={galleryImages}
-                    pickerCard={pickerCard} selFolder={selFolder}
-                    onSetSelFolder={setSelFolder}
-                    loadFolderImages={loadFolderImages}
-                    onSetPickerCard={setPickerCard}
-                    loadHotProducts={loadHotProducts}
-                    onUpdateCard={(k,v) => updateCard(idx, k, v)}
-                    onSetSource={(s) => setCardSource(idx, s)}
-                    onSetVarMap={(vn, val) => setCardVarMap(idx, vn, val)}
-                    onSetExampleValue={(vn, val) => setExampleValue(idx, vn, val)}
-                    onUpdateProductData={(patch) => updateProductData(idx, patch)}
-                    onAddVar={() => addCardVar(idx)}
-                    onRemoveCard={() => removeCard(idx)}
-                    onAddButton={(t) => addCardButton(idx, t)}
-                    onRemoveButton={(bi) => removeCardButton(idx, bi)}
-                    onUpdateButton={(bi, k, v) => { const cs=[...form.carousel_cards]; cs[idx].buttons[bi]={...cs[idx].buttons[bi],[k]:v}; f('carousel_cards',cs); }}
-                    onSelectImage={(img) => selectCardImage(idx, img)}
-                    onAssignHotProduct={(hot) => assignHotProduct(idx, hot)}
-                  />
-                ))}
-              </div>
-            </>
-          )}
-
-          {/* ── STANDARD ─────────────────────────────────────────── */}
-          {!form.is_carousel && (
-            <>
-              <div className="flex flex-col gap-2">
-                <label className="text-slate-400 text-xs font-medium">Header</label>
-                <div className="flex gap-2">
-                  {['NONE','IMAGE','TEXT'].map(t => (
-                    <button key={t} onClick={() => f('header_type',t)}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-medium border ${form.header_type===t ? 'bg-green-600/20 border-green-600/40 text-green-400' : 'bg-white/5 border-white/10 text-slate-400 hover:border-white/20'}`}>
-                      {t==='IMAGE' && <Image size={11} className="inline mr-1" />}
-                      {t==='TEXT'  && <Type  size={11} className="inline mr-1" />}
-                      {t}
-                    </button>
-                  ))}
-                </div>
-                {form.header_type === 'TEXT' && (
-                  <div className="flex gap-2">
-                    <input value={form.header_text} onChange={e => f('header_text',e.target.value)} placeholder="Bold header text" className="input text-sm flex-1" />
-                    <button onClick={() => { const v=extractVars(form.header_text); f('header_text', form.header_text+` {{${v.length?Math.max(...v.map(Number))+1:1}}}`); }} className="var-btn">+ Var</button>
-                  </div>
-                )}
-              </div>
-
-              <div className="flex flex-col gap-2">
-                <div className="flex items-center justify-between">
-                  <label className="text-slate-400 text-xs font-medium">Body * <span className="text-slate-600">use {`{{1}}`} {`{{2}}`}</span></label>
-                  <button onClick={() => addVar('body')} className="var-btn">+ Add Variable</button>
-                </div>
-                <textarea value={form.body} onChange={e => f('body',e.target.value)}
-                  placeholder={"Hi {{1}}! 👋 Check out {{2}} for ₹{{3}}."} rows={4} className="input text-sm resize-none" />
-                <p className="text-xs text-slate-600">{form.body.length}/1024</p>
-              </div>
-
-              {/* Variable mapping for standard */}
-              {extractVars(form.body).length > 0 && (
-                <VarMappingPanel vars={extractVars(form.body)} varMap={form.variable_labels || {}}
-                  onChange={(v, val) => f('variable_labels', { ...(form.variable_labels||{}), [v]: val })} />
-              )}
-
-              <div className="flex flex-col gap-1.5">
-                <label className="text-slate-400 text-xs font-medium">Footer <span className="text-slate-600">(optional)</span></label>
-                <input value={form.footer} onChange={e => f('footer',e.target.value)} placeholder="Reply STOP to unsubscribe" className="input text-sm" />
-              </div>
-
-              <div className="flex flex-col gap-2">
-                <div className="flex items-center justify-between">
-                  <label className="text-slate-400 text-xs font-medium">Buttons <span className="text-slate-600">(max 3)</span></label>
-                  {form.buttons.length < 3 && (
-                    <div className="flex gap-1.5">
-                      <button onClick={() => f('buttons',[...form.buttons,{type:'URL',text:'Shop Now',url:'https://yourstore.com/'}])} className="var-btn"><Link size={11} className="inline mr-1"/>URL</button>
-                      <button onClick={() => f('buttons',[...form.buttons,{type:'QUICK_REPLY',text:'View'}])} className="var-btn"><Zap size={11} className="inline mr-1"/>Reply</button>
-                    </div>
-                  )}
-                </div>
-                {form.buttons.map((btn,i) => (
-                  <div key={i} className="flex gap-2 items-center bg-white/5 rounded-xl p-2.5">
-                    <span className="text-xs text-slate-500 w-20 shrink-0">{btn.type}</span>
-                    <input value={btn.text} onChange={e => { const b=[...form.buttons]; b[i]={...b[i],text:e.target.value}; f('buttons',b); }} placeholder="Label" className="input text-xs flex-1" />
-                    {btn.type==='URL' && <input value={btn.url} onChange={e => { const b=[...form.buttons]; b[i]={...b[i],url:e.target.value}; f('buttons',b); }} placeholder="https://..." className="input text-xs flex-1 font-mono" />}
-                    <button onClick={() => f('buttons',form.buttons.filter((_,j)=>j!==i))} className="text-red-400 hover:text-red-300"><X size={13} /></button>
-                  </div>
-                ))}
-              </div>
-            </>
-          )}
+          <div className="flex flex-col gap-4">
+            {form.carousel_cards.map((card, idx) => (
+              <CarouselCardEditor key={idx} card={card} idx={idx} totalCards={form.carousel_cards.length}
+                hotProducts={hotProducts} hotLoading={hotLoading}
+                galleries={galleries} galleryImages={galleryImages}
+                pickerCard={pickerCard} selFolder={selFolder}
+                onSetSelFolder={setSelFolder}
+                loadFolderImages={loadFolderImages}
+                onSetPickerCard={setPickerCard}
+                loadHotProducts={loadHotProducts}
+                onUpdateCard={(k,v) => updateCard(idx, k, v)}
+                onSetSource={(s) => setCardSource(idx, s)}
+                onSetVarMap={(vn, val) => setCardVarMap(idx, vn, val)}
+                onSetExampleValue={(vn, val) => setExampleValue(idx, vn, val)}
+                onUpdateProductData={(patch) => updateProductData(idx, patch)}
+                onAddVar={() => addCardVar(idx)}
+                onRemoveCard={() => removeCard(idx)}
+                onAddButton={(t) => addCardButton(idx, t)}
+                onRemoveButton={(bi) => removeCardButton(idx, bi)}
+                onUpdateButton={(bi, k, v) => { const cs=[...form.carousel_cards]; cs[idx].buttons[bi]={...cs[idx].buttons[bi],[k]:v}; f('carousel_cards',cs); }}
+                onSelectImage={(img) => selectCardImage(idx, img)}
+                onAssignHotProduct={(hot) => assignHotProduct(idx, hot)}
+              />
+            ))}
+          </div>
 
           <div className="flex gap-3 pt-2 border-t border-white/10 flex-wrap">
             <button onClick={onBack} className="px-5 py-2 rounded-xl bg-white/5 hover:bg-white/10 text-slate-300 text-sm transition-all">Cancel</button>

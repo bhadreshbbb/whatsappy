@@ -4,10 +4,12 @@ import { aiService } from '../services/ai.service.js';
 import { translateComponents } from '../services/translate.service.js';
 import { saveChatMessage } from '../controllers/chat.controller.js';
 import { upgradeStatus } from '../utils/statusMachine.js';
-import { computeHotProducts } from '../controllers/meta-templates.controller.js';
+import { computeHotProducts, buildSendMessagePayload } from '../controllers/meta-templates.controller.js';
+import { v4 as uuidv4 } from 'uuid';
 
 let cronInterval;
-let lastAutoProductRefresh = null; // track last daily refresh
+const SIX_HOURS_MS = 6 * 60 * 60 * 1000;
+let lastAutoProductRefresh = 0; // timestamp (ms) — 0 means never run
 
 /**
  * Universal Automation Engine v3
@@ -47,59 +49,123 @@ export function startAutomation() {
   console.log('Automation engine active - monitoring tracker events');
 }
 
-// ── Daily refresh: update product_config.cards for auto-mode carousel templates ─
+// ── Every-6-hour refresh: update product_config.cards for auto-mode templates ──
 async function refreshAutoProductTemplates() {
-  const db = getDb();
-  const now = new Date();
+  const now = Date.now();
+  if ((now - lastAutoProductRefresh) < SIX_HOURS_MS) return;
+  lastAutoProductRefresh = now;
+
+  const db    = getDb();
+  const nowDt = new Date();
   const channelId = process.env.CHANNEL_ID || 'demo';
 
-  // Run once per day at the configured hour (default 9 AM), or if never run today
-  const refreshHour = parseInt(process.env.AUTO_PRODUCT_REFRESH_HOUR || '9');
-  const todayKey = `${now.getFullYear()}-${now.getMonth()}-${now.getDate()}-${refreshHour}`;
-  if (lastAutoProductRefresh === todayKey) return;
-  if (now.getHours() !== refreshHour) return;
-
-  lastAutoProductRefresh = todayKey;
-  console.log('[AutoProducts] Daily refresh starting...');
-
+  // Only refresh APPROVED auto-product carousel templates
   const templates = (db.meta_templates || []).filter(t =>
-    t.channel_id === channelId && t.is_carousel && t.auto_product_mode
+    t.channel_id === channelId &&
+    t.is_carousel &&
+    t.auto_product_mode &&
+    (t.meta_status === 'APPROVED' || t.meta_status === 'PENDING')
   );
 
   if (templates.length === 0) return;
 
   const hotProducts = computeHotProducts(db, channelId, 10);
-  if (hotProducts.length === 0) { console.log('[AutoProducts] No hot products found yet'); return; }
+  if (hotProducts.length === 0) {
+    console.log('[AutoProducts] No hot products found yet — skipping refresh');
+    return;
+  }
+
+  console.log(`[AutoProducts] 6-hour refresh — ${hotProducts.length} hot products, ${templates.length} template(s)`);
+
+  // ── Ensure "Template Assets" gallery folder exists ────────────────────────
+  let folder = (db.gallery_folders || []).find(f => f.channel_id === channelId && f.name === 'Template Assets');
+  if (!folder) {
+    folder = { id: uuidv4(), channel_id: channelId, name: 'Template Assets', created_at: nowDt.toISOString() };
+    if (!db.gallery_folders) db.gallery_folders = [];
+    db.gallery_folders.push(folder);
+  }
 
   for (const tpl of templates) {
     try {
-      const cardCount = tpl.carousel_cards?.length || 3;
+      const cardCount     = tpl.carousel_cards?.length || 3;
       const existingCards = tpl.product_config?.cards || tpl.carousel_cards.map(() => ({}));
-      const cards = tpl.carousel_cards.map((card, i) => {
-        const hot = hotProducts[i % hotProducts.length];
-        const existing = existingCards[i] || {};
-        return {
-          ...existing,
-          title:          hot.name,
-          price:          hot.price,
-          link:           hot.url,
-          image_id:       existing.image_id || '',
-          _hot_image_url: hot.image,
-          _hot_score:     hot.score,
-          _hot_views:     hot.views,
-          _hot_carts:     hot.carts,
-          _auto_updated:  now.toISOString(),
-        };
-      });
+
+      // Build updated cards with latest hot products
+      const cards = await Promise.all(
+        tpl.carousel_cards.map(async (card, i) => {
+          const hot      = hotProducts[i % hotProducts.length];
+          const existing = existingCards[i] || {};
+
+          // ── Auto-upload product image to Meta + Gallery if not already done ─
+          let header_media_id = existing.header_media_id || card.header_media_id || '';
+          let image_id        = existing.image_id || card.image_id || '';
+          const imageUrl      = hot.image || '';
+
+          if (imageUrl && !header_media_id) {
+            // Check if this image was already uploaded
+            const alreadyUploaded = (db.gallery_images || []).find(
+              img => img.source_url === imageUrl && img.channel_id === channelId
+            );
+            if (alreadyUploaded) {
+              header_media_id = alreadyUploaded.media_id || '';
+              image_id        = alreadyUploaded.id;
+            } else {
+              try {
+                const { buffer, mimeType } = await whatsappService.downloadImage(imageUrl);
+                const filename = `auto_${nowDt.getTime()}_card${i}.jpg`;
+                const mediaId  = await whatsappService.uploadMedia(buffer, filename, mimeType);
+
+                const imgRecord = {
+                  id: uuidv4(), folder_id: folder.id, channel_id: channelId,
+                  filename, mime_type: mimeType, size: buffer.length,
+                  media_id: mediaId, source_url: imageUrl,
+                  created_at: nowDt.toISOString(),
+                };
+                if (!db.gallery_images) db.gallery_images = [];
+                db.gallery_images.push(imgRecord);
+
+                header_media_id = mediaId;
+                image_id        = imgRecord.id;
+                console.log(`[AutoProducts] Uploaded image for "${tpl.name}" card ${i + 1}: ${mediaId}`);
+              } catch (imgErr) {
+                console.error(`[AutoProducts] Image upload failed for card ${i + 1}:`, imgErr.message);
+              }
+            }
+          }
+
+          return {
+            ...existing,
+            title:           hot.name   || existing.title  || '',
+            price:           hot.price  || existing.price  || '',
+            link:            hot.url    || existing.link   || '',
+            image_id,
+            header_media_id,
+            _hot_image_url:  hot.image  || '',
+            _hot_score:      hot.score,
+            _hot_views:      hot.views,
+            _hot_carts:      hot.carts,
+            _auto_updated:   nowDt.toISOString(),
+          };
+        })
+      );
+
       if (!tpl.product_config) tpl.product_config = {};
-      tpl.product_config.cards = cards;
-      tpl.product_config.last_auto_refresh = now.toISOString();
-      tpl.product_config.auto_products = hotProducts.slice(0, cardCount);
-      console.log(`[AutoProducts] Updated "${tpl.name}" with ${cards.length} hot products`);
-    } catch (e) { console.error(`[AutoProducts] Template ${tpl.id} error:`, e); }
+      tpl.product_config.cards              = cards;
+      tpl.product_config.last_auto_refresh  = nowDt.toISOString();
+      tpl.product_config.next_auto_refresh  = new Date(now + SIX_HOURS_MS).toISOString();
+      tpl.product_config.auto_products      = hotProducts.slice(0, cardCount);
+
+      // Cache the send-message payload for the campaign to use directly
+      tpl.product_config.send_payload = buildSendMessagePayload(tpl, tpl.product_config, '{{RECIPIENT_PHONE}}');
+
+      console.log(`[AutoProducts] "${tpl.name}" — ${cards.length} cards, ${cards.filter(c=>c.header_media_id).length} images uploaded`);
+    } catch (e) {
+      console.error(`[AutoProducts] Template ${tpl.id} error:`, e.message);
+    }
   }
+
   db.save();
-  console.log(`[AutoProducts] Refreshed ${templates.length} template(s)`);
+  console.log(`[AutoProducts] 6h refresh complete — next at ${new Date(now + SIX_HOURS_MS).toLocaleTimeString()}`);
 }
 
 async function runAutomation() {
