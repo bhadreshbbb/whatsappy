@@ -94,13 +94,13 @@ function buildMetaComponents(tpl) {
   // ── CAROUSEL ────────────────────────────────────────────────────────────────
   if (tpl.is_carousel && tpl.carousel_cards?.length >= 2) {
 
-    // Optional carousel-level body (intro text shown above the cards)
-    if (tpl.body?.trim()) {
-      const comp = { type: 'body', text: tpl.body };
-      const ex = buildBodyExample(tpl.body, stdVarMap);
-      if (ex) comp.example = ex;
-      components.push(comp);
-    }
+    // REQUIRED carousel-level body (Meta mandates a top-level BODY for carousel templates)
+    // If the user left it blank, use a sensible default so Meta doesn't reject.
+    const bodyText = tpl.body?.trim() || 'Check out our latest products for you!';
+    const bodyComp = { type: 'body', text: bodyText };
+    const bodyEx = buildBodyExample(bodyText, stdVarMap);
+    if (bodyEx) bodyComp.example = bodyEx;
+    components.push(bodyComp);
 
     const cards = tpl.carousel_cards.map((card, cardIdx) => {
       const cardComponents = [];
@@ -377,7 +377,7 @@ export function buildSendMessagePayload(tpl, productConfig, recipientPhone = '{{
 
       // URL button parameters (variable slug substitution)
       (card.buttons || []).slice(0, 2).forEach((btn, bi) => {
-        if (btn.type === 'URL' && btn.url?.includes('{{')) {
+        if (String(btn.type || '').toLowerCase() === 'url' && btn.url?.includes('{{')) {
           const urlVars = [...btn.url.matchAll(/\{\{(\d+)\}\}/g)].map(m => m[1]);
           cardComponents.push({ type: 'button', sub_type: 'url', index: String(bi), parameters: urlVars.map(v => ({ type: 'text', text: getFieldValue(v, vm, pc) })) });
         }

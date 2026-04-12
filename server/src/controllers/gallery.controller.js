@@ -2,7 +2,19 @@ import { getDb } from '../services/database.js';
 import { v4 as uuidv4 } from 'uuid';
 import { whatsappService } from '../services/whatsapp.service.js';
 
-// Moved upload logic to whatsapp.service.js
+// ── Get credentials (token, phoneId) from env or channel settings ──────────
+function getCredentials(channelId) {
+  const token  = process.env.WHATSAPP_TOKEN;
+  const phoneId = process.env.WHATSAPP_PHONE_ID;
+  if (token && phoneId) return { token, phoneId };
+  try {
+    const db = getDb();
+    const row = db.channel_settings.find(s => s.channel_id === (channelId || 'demo')) || db.channel_settings[0];
+    const s = JSON.parse(row?.settings || '{}');
+    if (s?.whatsapp_token && s?.whatsapp_phone_id) return { token: s.whatsapp_token, phoneId: s.whatsapp_phone_id };
+  } catch (_) {}
+  return null;
+}
 
 // ── Image Preview — fetches from Meta using media_id ──────────────────────
 
@@ -15,7 +27,7 @@ export async function previewImage(req, res) {
     const img = (db.gallery_images || []).find(i => i.id === id && i.channel_id === channelId);
     if (!img) return res.status(404).json({ error: 'Image not found' });
 
-    const creds = getCredentials();
+    const creds = getCredentials(channelId);
     if (!creds) return res.status(400).json({ error: 'WhatsApp credentials not configured' });
 
     // Step 1: Get the download URL from Meta
@@ -160,4 +172,98 @@ export function deleteImage(req, res) {
   db.gallery_images.splice(idx, 1);
   db.save();
   res.json({ success: true });
+}
+
+// ── Proxy external image — serve through our server to avoid CORS/hotlink ──
+export async function proxyImage(req, res) {
+  try {
+    const { url } = req.query;
+    if (!url) return res.status(400).json({ error: 'url param required' });
+
+    let imageUrl = url;
+    // Handle protocol-relative URLs
+    if (imageUrl.startsWith('//')) imageUrl = 'https:' + imageUrl;
+    if (!imageUrl.startsWith('http')) return res.status(400).json({ error: 'Invalid URL' });
+
+    const imgRes = await fetch(imageUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (compatible; TRK-Bot/1.0)',
+        'Accept': 'image/*,*/*',
+      },
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!imgRes.ok) return res.status(502).json({ error: `Remote returned ${imgRes.status}` });
+
+    const contentType = imgRes.headers.get('content-type') || 'image/jpeg';
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    const buffer = Buffer.from(await imgRes.arrayBuffer());
+    res.send(buffer);
+  } catch (err) {
+    console.error('[Gallery] Proxy error:', err.message);
+    res.status(502).json({ error: err.message });
+  }
+}
+
+// ── Import image from external URL — downloads + uploads to Meta + gallery ──
+export async function importImageFromUrl(req, res) {
+  try {
+    const db = getDb();
+    const channelId = req.headers['x-channel-id'] || 'demo';
+    const { image_url, folder_id } = req.body;
+
+    if (!image_url) return res.status(400).json({ error: 'image_url is required' });
+
+    let imageUrl = image_url;
+    if (imageUrl.startsWith('//')) imageUrl = 'https:' + imageUrl;
+    if (!imageUrl.startsWith('http')) return res.status(400).json({ error: 'Invalid image URL' });
+
+    // Ensure "Auto-Captured" folder exists
+    let folderId = folder_id;
+    if (!folderId) {
+      if (!db.gallery_folders) db.gallery_folders = [];
+      let autoFolder = db.gallery_folders.find(f => f.channel_id === channelId && f.name === 'Auto-Captured');
+      if (!autoFolder) {
+        autoFolder = { id: uuidv4(), channel_id: channelId, name: 'Auto-Captured', created_at: new Date().toISOString() };
+        db.gallery_folders.push(autoFolder);
+      }
+      folderId = autoFolder.id;
+    }
+
+    // Download image server-side (bypasses browser CORS/hotlink restrictions)
+    const { buffer, mimeType } = await whatsappService.downloadImage(imageUrl);
+
+    // Derive a filename from the URL
+    let filename = 'product.jpg';
+    try {
+      const p = new URL(imageUrl).pathname.split('/').filter(Boolean).pop() || 'product.jpg';
+      filename = p.split('?')[0] || 'product.jpg';
+    } catch (_) {}
+
+    // Upload to Meta media endpoint to obtain a media_id for template header_handle
+    const mediaId = await whatsappService.uploadMedia(buffer, filename, mimeType);
+
+    if (!db.gallery_images) db.gallery_images = [];
+    const image = {
+      id: uuidv4(),
+      folder_id: folderId,
+      channel_id: channelId,
+      filename,
+      mime_type: mimeType,
+      size: buffer.length,
+      media_id: mediaId,
+      source_url: image_url,
+      created_at: new Date().toISOString(),
+    };
+
+    db.gallery_images.push(image);
+    db.save();
+
+    console.log(`[Gallery] Imported image from ${imageUrl} → media_id: ${mediaId}`);
+    res.json({ image });
+  } catch (err) {
+    console.error('[Gallery] Import URL error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
 }

@@ -137,6 +137,7 @@ export default function Templates() {
     if (!form.name.trim()) return setError('Template name is required');
     if (form.is_carousel) {
       if (form.carousel_cards.length < 2) return setError('Carousel needs at least 2 cards');
+      if (!form.body?.trim()) return setError('Intro Message is required for carousel templates (Meta requires a top-level body)');
       if (form.carousel_cards.some(c => !c.body.trim())) return setError('All carousel cards need body text');
     } else if (!form.body.trim()) return setError('Body text is required');
     setLoading(true);
@@ -438,6 +439,38 @@ function CreateView({ form, setForm, error, setError, loading, onSubmit, onBack,
   const [showPreview, setShowPreview]     = useState(true);
   const [payloadModal, setPayloadModal]   = useState(null);   // null | { payload, curl }
   const [payloadLoading, setPayloadLoading] = useState(false);
+  const [bulkCapturing, setBulkCapturing] = useState(false);
+  const [bulkCaptureStatus, setBulkCaptureStatus] = useState(''); // status message
+
+  // Bulk upload all auto-fetched images to gallery (gives each card a header_media_id)
+  async function captureAllImages() {
+    const cardsNeedingUpload = form.carousel_cards
+      .map((c, i) => ({ c, i, url: c.selected_fetch_image || c.product_data?.image_url || '' }))
+      .filter(({ c, url }) => !c.image_id && url);
+    if (cardsNeedingUpload.length === 0) return;
+    setBulkCapturing(true);
+    setBulkCaptureStatus(`Uploading 0/${cardsNeedingUpload.length}…`);
+    let done = 0;
+    const updatedCards = [...form.carousel_cards];
+    for (const { c: _c, i, url } of cardsNeedingUpload) {
+      try {
+        const d = await fetch(`${GALLERY_API}/import-url`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...CH() },
+          body: JSON.stringify({ image_url: url }),
+        }).then(r => r.json());
+        if (!d.error && d.image) {
+          updatedCards[i] = { ...updatedCards[i], image_id: d.image.id, header_media_id: d.image.media_id || '' };
+        }
+      } catch (_) {}
+      done++;
+      setBulkCaptureStatus(`Uploading ${done}/${cardsNeedingUpload.length}…`);
+    }
+    f('carousel_cards', updatedCards);
+    setBulkCapturing(false);
+    setBulkCaptureStatus(`Done — ${done} image${done !== 1 ? 's' : ''} captured`);
+    setTimeout(() => setBulkCaptureStatus(''), 3000);
+  }
 
   async function loadHotProducts() {
     if (hotLoading) return;
@@ -699,12 +732,27 @@ function CreateView({ form, setForm, error, setError, loading, onSubmit, onBack,
                 <Loader2 size={11} className="animate-spin"/> Fetching trending products…
               </div>
             )}
+            {/* Bulk capture button — appears when auto-mode cards have images not yet in gallery */}
+            {form.auto_product_mode && !hotLoading && form.carousel_cards.some(c => !c.image_id && (c.selected_fetch_image || c.product_data?.image_url)) && (
+              <div className="mt-3 flex items-center gap-3 flex-wrap">
+                <button
+                  onClick={captureAllImages}
+                  disabled={bulkCapturing}
+                  className="flex items-center gap-1.5 text-xs bg-orange-600/20 hover:bg-orange-600/30 border border-orange-500/40 text-orange-300 px-3 py-1.5 rounded-lg disabled:opacity-50 transition-all">
+                  {bulkCapturing ? <Loader2 size={11} className="animate-spin"/> : <ImagePlus size={11}/>}
+                  {bulkCapturing ? bulkCaptureStatus : 'Capture All Images → Upload to Gallery'}
+                </button>
+                {bulkCaptureStatus && !bulkCapturing && (
+                  <span className="text-green-400 text-xs flex items-center gap-1"><Check size={10}/>{bulkCaptureStatus}</span>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Intro */}
           <div className="flex flex-col gap-2">
             <div className="flex items-center justify-between">
-              <label className="text-slate-400 text-xs font-medium">Intro Message <span className="text-slate-600">(optional — appears above carousel)</span></label>
+              <label className="text-slate-400 text-xs font-medium">Intro Message <span className="text-orange-400/70">* required</span> <span className="text-slate-600">(appears above carousel)</span></label>
               <button onClick={() => addVar('body')} className="var-btn">+ Var</button>
             </div>
             <input value={form.body} onChange={e => f('body', e.target.value)}
@@ -789,6 +837,13 @@ function CreateView({ form, setForm, error, setError, loading, onSubmit, onBack,
   );
 }
 
+// ── Proxy external image URL through our server (avoids CORS/hotlink issues) ──
+function proxyUrl(url) {
+  if (!url) return '';
+  if (url.startsWith('/api/')) return url;  // already our URL
+  return `${GALLERY_API}/proxy?url=${encodeURIComponent(url)}`;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // CAROUSEL CARD EDITOR — Enhanced: multi-image fetch, editable product data, dynamic vars + Meta examples
 function CarouselCardEditor({ card, idx, totalCards, hotProducts, hotLoading, galleries, galleryImages, pickerCard, selFolder, onSetSelFolder, loadFolderImages, onSetPickerCard, loadHotProducts, onUpdateCard, onSetSource, onSetVarMap, onSetExampleValue, onUpdateProductData, onAddVar, onRemoveCard, onAddButton, onRemoveButton, onUpdateButton, onSelectImage, onAssignHotProduct }) {
@@ -798,11 +853,37 @@ function CarouselCardEditor({ card, idx, totalCards, hotProducts, hotLoading, ga
   const fetchedImgs = card.fetched_images || [];
   const selFetchImg = card.selected_fetch_image || '';
   const exVals      = card.example_values || {};
+  const [capturing, setCapturing] = useState(false);
+  const [captureErr, setCaptureErr] = useState('');
 
-  // Best available preview image: gallery > selected fetched > product image_url
+  // External raw URL (not yet in gallery)
+  const rawExternalUrl = !card.image_id ? (selFetchImg || productData.image_url || '') : '';
+
+  // Best available preview image: gallery (proxied via /images/:id/preview) > proxy of external URL
   const previewSrc = card.image_id
     ? `/api/gallery/images/${card.image_id}/preview`
-    : selFetchImg || productData.image_url || '';
+    : rawExternalUrl ? proxyUrl(rawExternalUrl) : '';
+
+  async function captureAndUpload() {
+    if (!rawExternalUrl) return;
+    setCapturing(true);
+    setCaptureErr('');
+    try {
+      const d = await fetch(`${GALLERY_API}/import-url`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...CH() },
+        body: JSON.stringify({ image_url: rawExternalUrl }),
+      }).then(r => r.json());
+      if (d.error) throw new Error(d.error);
+      // Set gallery image_id and header_media_id on the card
+      onUpdateCard('image_id', d.image.id);
+      onUpdateCard('header_media_id', d.image.media_id || '');
+    } catch (e) {
+      setCaptureErr(e.message);
+    } finally {
+      setCapturing(false);
+    }
+  }
 
   const allExamplesFilled = bodyVars.length > 0 && bodyVars.every(v => exVals[v]?.trim());
 
@@ -859,7 +940,7 @@ function CarouselCardEditor({ card, idx, totalCards, hotProducts, hotLoading, ga
                     className={`relative w-14 h-14 rounded-lg overflow-hidden border-2 transition-all shrink-0 ${
                       selFetchImg === img.url ? 'border-blue-500 scale-105' : 'border-transparent hover:border-white/30'
                     }`}>
-                    <img src={img.url} alt={img.alt||''} className="w-full h-full object-cover"
+                    <img src={proxyUrl(img.url)} alt={img.alt||''} className="w-full h-full object-cover"
                       onError={e=>{e.target.parentElement.style.display='none';}} />
                     {selFetchImg === img.url && (
                       <div className="absolute inset-0 bg-blue-500/30 flex items-center justify-center">
@@ -872,19 +953,46 @@ function CarouselCardEditor({ card, idx, totalCards, hotProducts, hotLoading, ga
             </div>
           )}
 
-          {/* Gallery picker toggle + clear */}
+          {/* Gallery picker toggle + clear + capture */}
           <div className="flex gap-2 flex-wrap">
             <button
               onClick={() => { onSetPickerCard(pickerCard===idx?null:idx); if(pickerCard!==idx&&galleries.length>0){onSetSelFolder(galleries[0].id);loadFolderImages(galleries[0].id);} }}
               className="var-btn flex items-center gap-1">
               <Image size={11} /> {card.image_id ? 'Change Gallery Image' : 'Pick from Gallery'}
             </button>
+            {/* Capture auto-fetched image → upload to Meta + gallery to get header_media_id */}
+            {rawExternalUrl && !card.image_id && (
+              <button
+                onClick={captureAndUpload}
+                disabled={capturing}
+                className="var-btn flex items-center gap-1 text-orange-300 border-orange-500/40 hover:border-orange-400/60 disabled:opacity-50">
+                {capturing ? <Loader2 size={11} className="animate-spin"/> : <ImagePlus size={11}/>}
+                {capturing ? 'Uploading…' : 'Capture & Upload to Gallery'}
+              </button>
+            )}
             {previewSrc && (
               <button
                 onClick={() => { onUpdateCard('image_id',''); onUpdateCard('header_media_id',''); onUpdateCard('selected_fetch_image',''); }}
                 className="var-btn" style={{color:'rgba(248,113,113,0.8)'}}>Clear Image</button>
             )}
           </div>
+          {/* Capture error */}
+          {captureErr && (
+            <p className="text-red-400 text-xs flex items-center gap-1">
+              <AlertCircle size={10}/> {captureErr}
+            </p>
+          )}
+          {/* Success indicator — image is now in gallery with media_id */}
+          {card.image_id && card.header_media_id && (
+            <p className="text-green-400 text-xs flex items-center gap-1">
+              <Check size={10}/> Uploaded to gallery · meta_id ready for template
+            </p>
+          )}
+          {card.image_id && !card.header_media_id && (
+            <p className="text-yellow-400/70 text-xs flex items-center gap-1">
+              <AlertCircle size={10}/> No meta media_id — upload image via Gallery first
+            </p>
+          )}
 
           {/* Inline gallery picker */}
           {pickerCard === idx && (
@@ -956,7 +1064,7 @@ function CarouselCardEditor({ card, idx, totalCards, hotProducts, hotLoading, ga
                         isSel ? 'border-orange-500/50 bg-orange-500/10' : 'border-white/5 bg-white/5 hover:border-orange-500/25 hover:bg-orange-500/5'
                       }`}>
                       {hp.image
-                        ? <img src={hp.image} alt="" className="w-10 h-10 object-cover rounded-lg shrink-0" onError={e=>e.target.style.display='none'} />
+                        ? <img src={proxyUrl(hp.image)} alt="" className="w-10 h-10 object-cover rounded-lg shrink-0" onError={e=>e.target.style.display='none'} />
                         : <div className="w-10 h-10 bg-white/5 rounded-lg shrink-0 flex items-center justify-center"><Image size={14} className="text-slate-600"/></div>
                       }
                       <div className="flex-1 min-w-0">
@@ -1321,7 +1429,7 @@ function ConfigView({ tpl, config, setConfig, galleries, galleryImages, loadFold
                 {/* Auto-detected image hint */}
                 {!card.image_id && card._hot_image_url && (
                   <div className="flex items-center gap-3 bg-orange-500/5 border border-orange-500/20 rounded-xl p-2.5">
-                    <img src={card._hot_image_url} alt="" className="w-12 h-12 object-cover rounded-lg shrink-0" onError={e=>e.target.parentElement.style.display='none'}/>
+                    <img src={proxyUrl(card._hot_image_url)} alt="" className="w-12 h-12 object-cover rounded-lg shrink-0" onError={e=>e.target.parentElement.style.display='none'}/>
                     <p className="text-slate-400 text-xs">Auto-detected image from product page. Upload it to <strong className="text-white">Gallery</strong> then select below to use as the card image.</p>
                   </div>
                 )}
@@ -1471,10 +1579,13 @@ function WaCarouselPreview({ introText, cards = [], productCards = [] }) {
     const sampleProduct = pc.title ? null : { title: ['Blue Kurti','Cotton Saree','Ethnic Wear'][i%3], price: [`₹799`,`₹1,299`,`₹599`][i%3], link: 'https://store.com/p' };
     const text = resolveText(card.body, vm, pc.title ? pc : (card.product_data || {}), sampleProduct);
     // Image priority: configured gallery > fetched auto image > product_data image > legacy fallbacks
+    const rawImg = card.selected_fetch_image || card.product_data?.image_url
+      || pc._hot_image_url || card._hot_preview?.image || null;
     const imageUrl = pc.image_id
       ? `/api/gallery/images/${pc.image_id}/preview`
-      : card.selected_fetch_image || card.product_data?.image_url
-        || pc._hot_image_url || card._hot_preview?.image || null;
+      : card.image_id
+        ? `/api/gallery/images/${card.image_id}/preview`
+        : rawImg ? proxyUrl(rawImg) : null;
     return { text, imageUrl, buttons: card.buttons || [], title: pc.title || card.product_data?.title || sampleProduct?.title, price: pc.price || card.product_data?.price || sampleProduct?.price };
   });
 
