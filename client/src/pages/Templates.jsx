@@ -1,11 +1,12 @@
-import React, { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Plus, Trash2, RefreshCw, CheckCircle2, Clock, XCircle,
   AlertCircle, Settings2, Send, Image, Type, Link,
-  Zap, Copy, Check, FileText, X, LayoutGrid, ChevronLeft, ChevronRight
+  Zap, Copy, Check, FileText, X, LayoutGrid, ChevronLeft, ChevronRight,
+  Globe, Loader2, ImagePlus
 } from "lucide-react";
 
-const BASE = `/api/meta-templates`;
+const BASE        = `/api/meta-templates`;
 const GALLERY_API = `/api/gallery`;
 const CH = () => ({ 'x-channel-id': localStorage.getItem('channelId') || 'demo' });
 
@@ -44,7 +45,13 @@ const STATUS_CONFIG = {
   NO_CREDENTIALS: { color: 'text-slate-400',  bg: 'bg-slate-500/10 border-slate-500/20',   icon: AlertCircle,  label: 'No Credentials' },
 };
 
-const BLANK_CARD = { body: '{{1}}\n₹{{2}}', buttons: [{ type: 'URL', text: 'Buy Now', url: 'https://yourstore.com/{{3}}' }] };
+const BLANK_CARD = {
+  body: '{{1}}\n₹{{2}}',
+  buttons: [{ type: 'URL', text: 'Buy Now', url: 'https://yourstore.com/{{3}}' }],
+  image_id: '',
+  header_media_id: '',
+};
+
 const BLANK_TPL = {
   name: '', category: 'MARKETING', language: 'en',
   is_carousel: false,
@@ -142,7 +149,11 @@ export default function Templates() {
     setSelected(tpl);
     if (tpl.is_carousel) {
       setProductConfig(tpl.product_config || {
-        cards: tpl.carousel_cards.map(() => ({ image_id: '', title: '', price: '', link: '' })),
+        cards: tpl.carousel_cards.map(c => ({
+          image_id: c.image_id || '',
+          header_media_id: c.header_media_id || '',
+          title: '', price: '', link: '',
+        })),
       });
     } else {
       setProductConfig(tpl.product_config || {
@@ -156,21 +167,33 @@ export default function Templates() {
     setView('config');
   }
 
+  function openCreate() {
+    setView('create');
+    setError('');
+    setForm(BLANK_TPL);
+    loadGallery();
+  }
+
   function copyName(name) {
     navigator.clipboard.writeText(name);
     setCopied(name); setTimeout(() => setCopied(null), 1500);
   }
 
   if (view === 'create') return (
-    <CreateView form={form} setForm={setForm} error={error} setError={setError}
-      loading={loading} onSubmit={submitTemplate} onBack={() => { setView('list'); setError(''); }} />
+    <CreateView
+      form={form} setForm={setForm} error={error} setError={setError}
+      loading={loading} onSubmit={submitTemplate} onBack={() => { setView('list'); setError(''); }}
+      galleries={galleries} galleryImages={galleryImages} loadFolderImages={loadFolderImages}
+    />
   );
 
   if (view === 'config') return (
-    <ConfigView tpl={selected} config={productConfig} setConfig={setProductConfig}
+    <ConfigView
+      tpl={selected} config={productConfig} setConfig={setProductConfig}
       galleries={galleries} galleryImages={galleryImages} loadFolderImages={loadFolderImages}
       error={error} loading={loading} onSave={saveConfig}
-      onBack={() => { setView('list'); setError(''); }} />
+      onBack={() => { setView('list'); setError(''); }}
+    />
   );
 
   // ── LIST ──────────────────────────────────────────────────────────────────
@@ -181,14 +204,13 @@ export default function Templates() {
           <h1 className="text-white text-xl font-bold">Meta Templates</h1>
           <p className="text-slate-400 text-sm mt-0.5">Create, submit for approval, configure product data</p>
         </div>
-        <button onClick={() => { setView('create'); setError(''); setForm(BLANK_TPL); }}
+        <button onClick={openCreate}
           className="flex items-center gap-2 bg-green-600 hover:bg-green-500 text-white px-4 py-2 rounded-xl text-sm font-medium">
           <Plus size={16} /> New Template
         </button>
       </div>
 
       {error && <ErrorBar msg={error} onClose={() => setError('')} />}
-
       {loading && templates.length === 0 && <p className="text-slate-400 text-sm">Loading...</p>}
 
       {templates.length === 0 && !loading && (
@@ -223,7 +245,9 @@ export default function Templates() {
                     <span className="text-xs text-slate-500 bg-white/5 px-2 py-0.5 rounded-full">{tpl.language}</span>
                   </div>
                   <p className="text-slate-400 text-sm mt-2 line-clamp-2">
-                    {tpl.is_carousel ? `Carousel: ${tpl.carousel_cards?.length || 0} cards — ${tpl.body || tpl.carousel_cards?.[0]?.body || ''}` : tpl.body}
+                    {tpl.is_carousel
+                      ? `Carousel: ${tpl.carousel_cards?.length || 0} cards — ${tpl.body || tpl.carousel_cards?.[0]?.body || ''}`
+                      : tpl.body}
                   </p>
                   <div className="flex items-center gap-3 mt-1.5 flex-wrap">
                     {tpl.buttons?.length > 0 && <span className="text-xs text-slate-500">{tpl.buttons.length} button{tpl.buttons.length > 1 ? 's' : ''}</span>}
@@ -257,8 +281,10 @@ export default function Templates() {
 }
 
 // ── CREATE VIEW ───────────────────────────────────────────────────────────────
-function CreateView({ form, setForm, error, setError, loading, onSubmit, onBack }) {
+function CreateView({ form, setForm, error, setError, loading, onSubmit, onBack, galleries, galleryImages, loadFolderImages }) {
   const f = (k, v) => setForm(p => ({ ...p, [k]: v }));
+  const [selFolder, setSelFolder] = useState('');
+  const [pickerCard, setPickerCard] = useState(null); // index of card whose picker is open
 
   function addVar(field) {
     const vars = extractVars(form[field]);
@@ -305,6 +331,12 @@ function CreateView({ form, setForm, error, setError, loading, onSubmit, onBack 
     const cards = [...form.carousel_cards];
     cards[cardIdx] = { ...cards[cardIdx], buttons: cards[cardIdx].buttons.filter((_, i) => i !== btnIdx) };
     f('carousel_cards', cards);
+  }
+
+  function selectCardImage(cardIdx, img) {
+    updateCard(cardIdx, 'image_id', img.id);
+    updateCard(cardIdx, 'header_media_id', img.media_id || '');
+    setPickerCard(null);
   }
 
   return (
@@ -360,7 +392,9 @@ function CreateView({ form, setForm, error, setError, loading, onSubmit, onBack 
             {/* Intro body (optional) */}
             <div className="flex flex-col gap-2">
               <div className="flex items-center justify-between">
-                <label className="text-slate-400 text-xs font-medium">Intro Message <span className="text-slate-600">(optional — shown above carousel)</span></label>
+                <label className="text-slate-400 text-xs font-medium">
+                  Intro Message <span className="text-slate-600">(optional — shown above carousel)</span>
+                </label>
                 <button onClick={() => addVar('body')} className="var-btn">+ Var</button>
               </div>
               <input value={form.body} onChange={e => f('body', e.target.value)}
@@ -387,21 +421,99 @@ function CreateView({ form, setForm, error, setError, loading, onSubmit, onBack 
                   <div key={idx} className="bg-white/5 border border-white/10 rounded-2xl p-4 flex flex-col gap-3">
                     <div className="flex items-center justify-between">
                       <span className="text-purple-400 text-xs font-semibold flex items-center gap-2">
-                        <Image size={12} /> Card {idx + 1} — Image Header (set after approval)
+                        <LayoutGrid size={12} /> Card {idx + 1}
                       </span>
                       {form.carousel_cards.length > 2 && (
                         <button onClick={() => removeCard(idx)} className="text-red-400 hover:text-red-300"><X size={13} /></button>
                       )}
                     </div>
 
+                    {/* Example image for Meta submission */}
+                    <div className="flex flex-col gap-2">
+                      <div className="flex items-center justify-between">
+                        <label className="text-slate-500 text-xs flex items-center gap-1">
+                          <ImagePlus size={11} /> Example Image
+                          <span className="text-slate-600 ml-1">(sent to Meta for approval review)</span>
+                        </label>
+                        <button
+                          onClick={() => {
+                            setPickerCard(pickerCard === idx ? null : idx);
+                            if (pickerCard !== idx && galleries.length > 0) {
+                              setSelFolder(galleries[0].id);
+                              loadFolderImages(galleries[0].id);
+                            }
+                          }}
+                          className="var-btn flex items-center gap-1"
+                        >
+                          <Image size={11} /> {card.image_id ? 'Change Image' : 'Select from Gallery'}
+                        </button>
+                      </div>
+
+                      {/* Image preview */}
+                      {card.image_id && (
+                        <div className="flex items-center gap-3">
+                          <img src={`/api/gallery/images/${card.image_id}/preview`} alt=""
+                            className="w-20 h-20 object-cover rounded-xl border border-purple-500/30" />
+                          <div className="text-xs text-slate-400">
+                            <p className="text-green-400 flex items-center gap-1"><CheckCircle2 size={11} /> Image selected</p>
+                            {card.header_media_id && <p className="text-slate-600 font-mono mt-1">media_id: {card.header_media_id.substring(0, 16)}…</p>}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Inline gallery picker */}
+                      {pickerCard === idx && (
+                        <div className="bg-[#0a1929] border border-white/10 rounded-xl p-3 flex flex-col gap-3">
+                          {galleries.length === 0
+                            ? <p className="text-slate-500 text-xs">No gallery folders yet. Upload images in the Gallery section first.</p>
+                            : (
+                              <>
+                                <div className="flex gap-2 flex-wrap">
+                                  {galleries.map(gf => (
+                                    <button key={gf.id}
+                                      onClick={() => { setSelFolder(gf.id); loadFolderImages(gf.id); }}
+                                      className={`text-xs px-3 py-1.5 rounded-lg border ${selFolder === gf.id ? 'bg-purple-600/20 border-purple-600/40 text-purple-400' : 'bg-white/5 border-white/10 text-slate-400 hover:border-white/20'}`}>
+                                      {gf.name} ({gf.imageCount})
+                                    </button>
+                                  ))}
+                                </div>
+                                {galleryImages.length > 0 && (
+                                  <div className="flex gap-2 flex-wrap">
+                                    {galleryImages.map(img => (
+                                      <button key={img.id} onClick={() => selectCardImage(idx, img)}
+                                        className={`relative rounded-lg overflow-hidden border-2 transition-all ${card.image_id === img.id ? 'border-purple-500' : 'border-transparent hover:border-white/30'}`}>
+                                        <img src={`/api/gallery/images/${img.id}/preview`} alt={img.name}
+                                          className="w-16 h-16 object-cover" />
+                                        {card.image_id === img.id && (
+                                          <div className="absolute inset-0 bg-purple-500/30 flex items-center justify-center">
+                                            <Check size={16} className="text-white" />
+                                          </div>
+                                        )}
+                                      </button>
+                                    ))}
+                                  </div>
+                                )}
+                                {selFolder && galleryImages.length === 0 && (
+                                  <p className="text-slate-500 text-xs">No images in this folder.</p>
+                                )}
+                              </>
+                            )
+                          }
+                        </div>
+                      )}
+                    </div>
+
                     {/* Card body */}
                     <div className="flex flex-col gap-1.5">
                       <div className="flex items-center justify-between">
-                        <label className="text-slate-500 text-xs">Body Text * <span className="text-slate-600">use {`{{1}}`} {`{{2}}`}</span></label>
+                        <label className="text-slate-500 text-xs">
+                          Body Text * <span className="text-slate-600">use {`{{1}}`} {`{{2}}`} for variables</span>
+                        </label>
                         <button onClick={() => addCardVar(idx, 'body')} className="var-btn">+ Var</button>
                       </div>
                       <textarea value={card.body} onChange={e => updateCard(idx, 'body', e.target.value)}
                         placeholder={"{{1}}\n₹{{2}}"} rows={3} className="input text-sm resize-none" />
+                      <p className="text-slate-600 text-xs">e.g. {`{{1}}`} = product name, {`{{2}}`} = price</p>
                     </div>
 
                     {/* Card buttons */}
@@ -428,7 +540,7 @@ function CreateView({ form, setForm, error, setError, loading, onSubmit, onBack 
                               const cards = [...form.carousel_cards];
                               cards[idx].buttons[bi] = { ...btn, url: e.target.value };
                               f('carousel_cards', cards);
-                            }} placeholder="https://..." className="input text-xs flex-1 font-mono" />
+                            }} placeholder="https://... or use {{3}}" className="input text-xs flex-1 font-mono" />
                           )}
                           <button onClick={() => removeCardButton(idx, bi)} className="text-red-400 hover:text-red-300"><X size={13} /></button>
                         </div>
@@ -537,10 +649,16 @@ function ConfigView({ tpl, config, setConfig, galleries, galleryImages, loadFold
 
   const isCarousel = tpl.is_carousel;
 
-  // Carousel config
   function setCardField(idx, key, val) {
     const cards = [...(config.cards || [])];
     cards[idx] = { ...cards[idx], [key]: val };
+    set('cards', cards);
+  }
+
+  function applyScraped(idx, scraped) {
+    const cards = [...(config.cards || [])];
+    if (scraped.title) cards[idx] = { ...cards[idx], title: scraped.title };
+    if (scraped.price) cards[idx] = { ...cards[idx], price: scraped.price };
     set('cards', cards);
   }
 
@@ -563,7 +681,7 @@ function ConfigView({ tpl, config, setConfig, galleries, galleryImages, loadFold
             {/* Live carousel preview */}
             <div>
               <label className="text-white font-medium text-sm mb-3 block">Carousel Preview</label>
-              <CarouselConfigPreview cards={config.cards || []} galleryPrefix="/api/gallery/images" />
+              <CarouselConfigPreview cards={config.cards || []} />
             </div>
 
             {/* Card tabs */}
@@ -572,7 +690,7 @@ function ConfigView({ tpl, config, setConfig, galleries, galleryImages, loadFold
                 {(config.cards || []).map((_, i) => (
                   <button key={i} onClick={() => setActiveCard(i)}
                     className={`text-xs px-3 py-1.5 rounded-lg border font-medium ${activeCard === i ? 'bg-purple-600/20 border-purple-600/40 text-purple-400' : 'bg-white/5 border-white/10 text-slate-400'}`}>
-                    Card {i + 1} {(config.cards[i]?.image_id) ? '✓' : ''}
+                    Card {i + 1} {config.cards[i]?.image_id ? '✓' : ''}
                   </button>
                 ))}
               </div>
@@ -581,6 +699,15 @@ function ConfigView({ tpl, config, setConfig, galleries, galleryImages, loadFold
               {(config.cards || []).map((card, i) => i !== activeCard ? null : (
                 <div key={i} className="bg-white/5 border border-white/10 rounded-2xl p-4 flex flex-col gap-4">
                   <p className="text-purple-400 text-xs font-semibold">Card {i + 1} of {config.cards.length}</p>
+
+                  {/* Auto-fill from URL */}
+                  <ScrapeUrlInput
+                    onFill={(scraped) => {
+                      applyScraped(i, scraped);
+                      // If scraped image, show note (can't auto-upload to gallery from here)
+                    }}
+                    externalImageUrl={card._scraped_image_url}
+                  />
 
                   <div className="grid grid-cols-2 gap-3">
                     <div className="flex flex-col gap-1.5">
@@ -603,10 +730,15 @@ function ConfigView({ tpl, config, setConfig, galleries, galleryImages, loadFold
                   {/* Gallery image picker */}
                   <div className="flex flex-col gap-2">
                     <label className="text-slate-500 text-xs">Card Image <span className="text-slate-600">(from Gallery)</span></label>
-                    <GalleryPicker galleries={galleries} galleryImages={galleryImages} selectedId={card.image_id}
-                      selFolder={selFolder}
+                    <GalleryPicker
+                      galleries={galleries} galleryImages={galleryImages}
+                      selectedId={card.image_id} selFolder={selFolder}
                       onSelectFolder={id => { setSelFolder(id); loadFolderImages(id); }}
-                      onSelect={img => setCardField(i, 'image_id', img.id)} />
+                      onSelect={img => {
+                        setCardField(i, 'image_id', img.id);
+                        setCardField(i, 'header_media_id', img.media_id || '');
+                      }}
+                    />
                     {card.image_id && (
                       <img src={`/api/gallery/images/${card.image_id}/preview`} alt=""
                         className="w-28 h-28 object-cover rounded-xl border border-white/10" />
@@ -672,6 +804,12 @@ function ConfigView({ tpl, config, setConfig, galleries, galleryImages, loadFold
                     <span className="text-slate-400 text-xs">Product {i + 1}</span>
                     {(config.products || []).length > 1 && <button onClick={() => set('products', (config.products || []).filter((_, j) => j !== i))} className="text-red-400 hover:text-red-300"><X size={13} /></button>}
                   </div>
+                  <ScrapeUrlInput onFill={(s) => {
+                    const a = [...config.products];
+                    if (s.title) a[i] = { ...a[i], title: s.title };
+                    if (s.price) a[i] = { ...a[i], price: s.price };
+                    set('products', a);
+                  }} />
                   <div className="grid grid-cols-2 gap-3">
                     <input value={prod.title} onChange={e => { const a = [...config.products]; a[i] = { ...a[i], title: e.target.value }; set('products', a); }} placeholder="Title" className="input text-sm" />
                     <input value={prod.price} onChange={e => { const a = [...config.products]; a[i] = { ...a[i], price: e.target.value }; set('products', a); }} placeholder="₹799" className="input text-sm" />
@@ -701,9 +839,74 @@ function ConfigView({ tpl, config, setConfig, galleries, galleryImages, loadFold
   );
 }
 
+// ── Auto-scrape URL input ─────────────────────────────────────────────────────
+function ScrapeUrlInput({ onFill }) {
+  const [url, setUrl]         = useState('');
+  const [loading, setLoading] = useState(false);
+  const [result, setResult]   = useState(null);
+  const [err, setErr]         = useState('');
+
+  async function handleFetch() {
+    if (!url.trim()) return;
+    setLoading(true); setErr(''); setResult(null);
+    try {
+      const res = await fetch(`${BASE}/scrape-product`, {
+        method: 'POST',
+        headers: { ...CH(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: url.trim() }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to fetch');
+      setResult(data);
+      onFill(data);
+    } catch (e) { setErr(e.message); }
+    finally { setLoading(false); }
+  }
+
+  return (
+    <div className="bg-blue-500/5 border border-blue-500/20 rounded-xl p-3 flex flex-col gap-2">
+      <label className="text-blue-400 text-xs font-semibold flex items-center gap-1">
+        <Globe size={11} /> Auto-fill from Product URL
+        <span className="text-slate-500 font-normal ml-1">(Shopify, WooCommerce, or any website)</span>
+      </label>
+      <div className="flex gap-2">
+        <input
+          value={url}
+          onChange={e => setUrl(e.target.value)}
+          onKeyDown={e => e.key === 'Enter' && handleFetch()}
+          placeholder="https://yourstore.myshopify.com/products/product-name"
+          className="input text-xs font-mono flex-1"
+        />
+        <button onClick={handleFetch} disabled={loading || !url.trim()}
+          className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-blue-600/30 hover:bg-blue-600/50 border border-blue-500/30 text-blue-400 text-xs font-medium disabled:opacity-50 shrink-0">
+          {loading ? <Loader2 size={12} className="animate-spin" /> : <Globe size={12} />}
+          {loading ? 'Fetching…' : 'Fetch'}
+        </button>
+      </div>
+      {err && <p className="text-red-400 text-xs">{err}</p>}
+      {result && (
+        <div className="flex items-start gap-3 mt-1 bg-blue-500/10 rounded-lg p-2">
+          {result.image_url && (
+            <img src={result.image_url} alt="" className="w-14 h-14 object-cover rounded-lg shrink-0"
+              onError={e => e.target.style.display = 'none'} />
+          )}
+          <div className="flex-1 min-w-0">
+            {result.title && <p className="text-white text-xs font-medium truncate">{result.title}</p>}
+            {result.price && <p className="text-green-400 text-xs">{result.price}</p>}
+            {result.description && <p className="text-slate-500 text-xs mt-0.5 line-clamp-2">{result.description}</p>}
+            <p className="text-blue-400 text-xs mt-1 flex items-center gap-1">
+              <CheckCircle2 size={10} /> Title &amp; price filled in above fields
+            </p>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Carousel Preview (while building) ────────────────────────────────────────
 function CarouselPreview({ cards }) {
-  const samples = ['Priya', 'Blue Kurti', '799', 'product-link'];
+  const samples = ['Blue Kurti', '₹799', 'product-link'];
   return (
     <div className="bg-[#0a1929] rounded-2xl p-4">
       <p className="text-slate-500 text-xs mb-3">Preview (scroll →)</p>
@@ -712,9 +915,16 @@ function CarouselPreview({ cards }) {
           const preview = (card.body || '').replace(/\{\{1\}\}/g, 'Blue Kurti').replace(/\{\{2\}\}/g, '₹799').replace(/\{\{(\d+)\}\}/g, (_, n) => samples[n - 1] || `[${n}]`);
           return (
             <div key={i} className="shrink-0 w-44 bg-[#1a2a1a] rounded-2xl overflow-hidden border border-white/10">
-              <div className="w-full h-28 bg-purple-900/30 flex items-center justify-center gap-1">
-                <Image size={18} className="text-purple-400" />
-                <span className="text-purple-400 text-xs">Card {i + 1}</span>
+              <div className="w-full h-28 overflow-hidden bg-purple-900/30">
+                {card.image_id
+                  ? <img src={`/api/gallery/images/${card.image_id}/preview`} alt="" className="w-full h-full object-cover" />
+                  : (
+                    <div className="w-full h-full flex flex-col items-center justify-center gap-1">
+                      <Image size={18} className="text-purple-400" />
+                      <span className="text-purple-400 text-xs">Card {i + 1}</span>
+                    </div>
+                  )
+                }
               </div>
               <div className="p-2.5">
                 <p className="text-white text-xs whitespace-pre-wrap">{preview || 'Card body...'}</p>
@@ -789,25 +999,28 @@ function GalleryPicker({ galleries, galleryImages, selectedId, onSelectFolder, s
   return (
     <div className="flex flex-col gap-2">
       <div className="flex gap-2 flex-wrap">
+        {galleries.length === 0 && (
+          <p className="text-slate-600 text-xs">No gallery folders. Upload images in Gallery section first.</p>
+        )}
         {galleries.map(f => (
           <button key={f.id} onClick={() => onSelectFolder(f.id)}
             className={`text-xs px-3 py-1.5 rounded-lg border ${selFolder === f.id ? 'bg-green-600/20 border-green-600/40 text-green-400' : 'bg-white/5 border-white/10 text-slate-400 hover:border-white/20'}`}>
             {f.name} ({f.imageCount})
           </button>
         ))}
-        {galleries.length === 0 && <p className="text-slate-500 text-xs">Upload images in My Gallery first.</p>}
       </div>
       {galleryImages.length > 0 && (
         <div className="flex gap-2 flex-wrap">
           {galleryImages.map(img => (
-            <div key={img.id} onClick={() => onSelect(img)}
-              className={`relative cursor-pointer rounded-xl overflow-hidden border-2 transition-all ${selectedId === img.id ? 'border-green-500' : 'border-transparent hover:border-white/30'}`}
-              style={{ width: 60, height: 60 }}>
-              <img src={`/api/gallery/images/${img.id}/preview`} alt={img.filename} className="w-full h-full object-cover" />
+            <button key={img.id} onClick={() => onSelect(img)}
+              className={`relative rounded-xl overflow-hidden border-2 transition-all ${selectedId === img.id ? 'border-green-500' : 'border-transparent hover:border-white/30'}`}>
+              <img src={`/api/gallery/images/${img.id}/preview`} alt={img.name} className="w-16 h-16 object-cover" />
               {selectedId === img.id && (
-                <div className="absolute inset-0 bg-green-500/30 flex items-center justify-center"><Check size={16} className="text-white" /></div>
+                <div className="absolute inset-0 bg-green-500/30 flex items-center justify-center">
+                  <Check size={16} className="text-white" />
+                </div>
               )}
-            </div>
+            </button>
           ))}
         </div>
       )}
@@ -815,11 +1028,13 @@ function GalleryPicker({ galleries, galleryImages, selectedId, onSelectFolder, s
   );
 }
 
+// ── Error Bar ─────────────────────────────────────────────────────────────────
 function ErrorBar({ msg, onClose }) {
   return (
-    <div className="flex items-center gap-2 bg-red-500/10 border border-red-500/20 text-red-400 text-xs px-4 py-3 rounded-xl">
-      <AlertCircle size={14} /> {msg}
-      {onClose && <button onClick={onClose} className="ml-auto"><X size={12} /></button>}
+    <div className="flex items-center gap-3 bg-red-500/10 border border-red-500/20 text-red-400 rounded-xl px-4 py-3 text-sm">
+      <AlertCircle size={15} className="shrink-0" />
+      <span className="flex-1">{msg}</span>
+      {onClose && <button onClick={onClose} className="text-red-400 hover:text-red-300"><X size={14} /></button>}
     </div>
   );
 }

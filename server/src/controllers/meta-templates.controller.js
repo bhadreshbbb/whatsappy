@@ -1,5 +1,7 @@
 import { getDb } from '../services/database.js';
 import { v4 as uuidv4 } from 'uuid';
+import https from 'https';
+import http from 'http';
 
 // ── Get credentials from settings ─────────────────────────────────────────────
 function getCreds(channelId) {
@@ -37,8 +39,12 @@ function buildMetaComponents(tpl) {
     const cards = tpl.carousel_cards.map(card => {
       const cardComponents = [];
 
-      // Each card must have IMAGE header
-      cardComponents.push({ type: 'HEADER', format: 'IMAGE' });
+      // Each card must have IMAGE header (with example handle if provided)
+      const headerComp = { type: 'HEADER', format: 'IMAGE' };
+      if (card.header_media_id) {
+        headerComp.example = { header_handle: [card.header_media_id] };
+      }
+      cardComponents.push(headerComp);
 
       // Card body
       if (card.body) {
@@ -242,6 +248,89 @@ export function saveProductConfig(req, res) {
   tpl.product_config = req.body;
   db.save();
   res.json({ template: tpl });
+}
+
+// ── Scrape product from URL (Shopify JSON API + OpenGraph fallback) ───────────
+export async function scrapeProduct(req, res) {
+  try {
+    const { url } = req.body;
+    if (!url || !url.startsWith('http')) return res.status(400).json({ error: 'Valid URL required' });
+
+    const cleanUrl = url.split('?')[0].replace(/\/$/, '');
+
+    // ── 1. Try Shopify JSON API ──────────────────────────────────────────────
+    try {
+      const shopifyJson = cleanUrl + '.json';
+      const r = await fetch(shopifyJson, {
+        headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json' },
+        signal: AbortSignal.timeout(8000),
+      });
+      if (r.ok) {
+        const data = await r.json();
+        const p = data.product;
+        if (p?.title) {
+          const variant = p.variants?.[0];
+          const price = variant?.price;
+          const currency = variant?.presentment_prices?.[0]?.price?.currency_code || 'INR';
+          const symbol = currency === 'INR' ? '₹' : (currency === 'USD' ? '$' : currency + ' ');
+          return res.json({
+            title: p.title,
+            price: price ? `${symbol}${price}` : '',
+            image_url: p.images?.[0]?.src || '',
+            description: (p.body_html || '').replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim().substring(0, 200),
+            source: 'shopify',
+          });
+        }
+      }
+    } catch (_) {}
+
+    // ── 2. OpenGraph / meta tag scraping ────────────────────────────────────
+    const html = await fetchHtml(url);
+    function getMeta(props) {
+      for (const prop of [].concat(props)) {
+        const m = html.match(new RegExp(`<meta[^>]+(?:property|name)=["']${prop}["'][^>]*content=["']([^"']+)["']`, 'i'))
+               || html.match(new RegExp(`<meta[^>]+content=["']([^"']+)["'][^>]*(?:property|name)=["']${prop}["']`, 'i'));
+        if (m?.[1]) return m[1].trim();
+      }
+      return '';
+    }
+    const title       = getMeta(['og:title', 'twitter:title']) || (html.match(/<title[^>]*>([^<]+)<\/title>/i)?.[1] || '').trim();
+    const image_url   = getMeta(['og:image', 'twitter:image:src', 'twitter:image']);
+    const description = getMeta(['og:description', 'twitter:description', 'description']);
+    const priceRaw    = getMeta(['product:price:amount', 'og:price:amount']);
+    const currency    = getMeta(['product:price:currency', 'og:price:currency']) || 'INR';
+    const symbol      = currency === 'INR' ? '₹' : (currency === 'USD' ? '$' : currency + ' ');
+
+    res.json({
+      title: title.substring(0, 100),
+      price: priceRaw ? `${symbol}${priceRaw}` : '',
+      image_url,
+      description: description.substring(0, 200),
+      source: 'opengraph',
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+}
+
+function fetchHtml(url) {
+  return new Promise((resolve, reject) => {
+    const mod = url.startsWith('https') ? https : http;
+    const req = mod.get(url, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; WhatsWayBot/1.0)', 'Accept': 'text/html' },
+      timeout: 8000,
+    }, (resp) => {
+      // Follow one redirect
+      if ((resp.statusCode === 301 || resp.statusCode === 302) && resp.headers.location) {
+        return fetchHtml(resp.headers.location).then(resolve).catch(reject);
+      }
+      let body = '';
+      resp.on('data', chunk => { if (body.length < 200000) body += chunk; });
+      resp.on('end', () => resolve(body));
+    });
+    req.on('error', reject);
+    req.on('timeout', () => { req.destroy(); reject(new Error('Request timed out')); });
+  });
 }
 
 // ── Delete template ───────────────────────────────────────────────────────────
