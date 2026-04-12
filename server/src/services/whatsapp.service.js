@@ -28,7 +28,7 @@ function getCredentials() {
 }
 
 async function callMetaApi(phoneId, token, body) {
-  const url = `https://graph.facebook.com/v19.0/${phoneId}/messages`;
+  const url = `https://graph.facebook.com/v25.0/${phoneId}/messages`;
   const res = await fetch(url, {
     method: 'POST',
     headers: {
@@ -122,6 +122,42 @@ export const whatsappService = {
   async sendTemplate(phone, templateName, language, components) {
     console.log(`[WhatsApp] Template "${templateName}" → ${phone}`);
     return { messageId: `tpl_${Date.now()}` };
+  },
+
+  async uploadMedia(buffer, filename, mimeType) {
+    const creds = getCredentials();
+    if (!creds) throw new Error('WhatsApp credentials not configured.');
+
+    const form = new FormData();
+    form.append('messaging_product', 'whatsapp');
+    form.append('type', mimeType);
+    form.append('file', new Blob([buffer], { type: mimeType }), filename);
+
+    const res = await fetch(
+      `https://graph.facebook.com/v25.0/${creds.phoneId}/media`,
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${creds.token}` },
+        body: form,
+      }
+    );
+    const data = await res.json();
+    if (!res.ok) throw new Error(`Meta Media API error: ${JSON.stringify(data?.error || data)}`);
+    return data.id;
+  },
+
+  async downloadImage(url) {
+    console.log(`[WhatsApp] Downloading image: ${url}`);
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`Failed to download image from ${url}`);
+    const buffer = Buffer.from(await res.arrayBuffer());
+    
+    // Guess mime type from header or extension
+    let mimeType = res.headers.get('content-type') || 'image/jpeg';
+    if (url.toLowerCase().endsWith('.png')) mimeType = 'image/png';
+    else if (url.toLowerCase().endsWith('.webp')) mimeType = 'image/webp';
+    
+    return { buffer, mimeType };
   },
 
   formatMessage(template, variables) {

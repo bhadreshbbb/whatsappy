@@ -1,43 +1,8 @@
 import { getDb } from '../services/database.js';
 import { v4 as uuidv4 } from 'uuid';
+import { whatsappService } from '../services/whatsapp.service.js';
 
-function getCredentials() {
-  const token   = process.env.WHATSAPP_TOKEN;
-  const phoneId = process.env.WHATSAPP_PHONE_ID;
-  if (token && phoneId) return { token, phoneId };
-  try {
-    const db = getDb();
-    const row = db.channel_settings[0];
-    const s = JSON.parse(row?.settings || '{}');
-    if (s?.whatsapp_token && s?.whatsapp_phone_id) {
-      return { token: s.whatsapp_token, phoneId: s.whatsapp_phone_id };
-    }
-  } catch (_) {}
-  return null;
-}
-
-async function uploadToMeta(buffer, filename, mimeType) {
-  const creds = getCredentials();
-  if (!creds) throw new Error('WhatsApp credentials not configured. Add token and Phone ID in Settings.');
-
-  // Use native FormData + Blob (Node.js 18+ built-in, works with native fetch)
-  const form = new FormData();
-  form.append('messaging_product', 'whatsapp');
-  form.append('type', mimeType);
-  form.append('file', new Blob([buffer], { type: mimeType }), filename);
-
-  const res = await fetch(
-    `https://graph.facebook.com/v25.0/${creds.phoneId}/media`,
-    {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${creds.token}` },
-      body: form,
-    }
-  );
-  const data = await res.json();
-  if (!res.ok) throw new Error(`Meta API error: ${JSON.stringify(data?.error || data)}`);
-  return data.id;
-}
+// Moved upload logic to whatsapp.service.js
 
 // ── Image Preview — fetches from Meta using media_id ──────────────────────
 
@@ -161,8 +126,8 @@ export async function uploadImage(req, res) {
 
     const { originalname, mimetype, buffer, size } = req.file;
 
-    // Upload to Meta and get media ID
-    const mediaId = await uploadToMeta(buffer, originalname, mimetype);
+    // Upload to Meta and get media ID using shared service
+    const mediaId = await whatsappService.uploadMedia(buffer, originalname, mimetype);
 
     const image = {
       id: uuidv4(),

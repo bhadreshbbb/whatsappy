@@ -1,23 +1,24 @@
 import { getDb } from '../services/database.js';
 import { v4 as uuidv4 } from 'uuid';
+import { whatsappService } from '../services/whatsapp.service.js';
 import https from 'https';
 import http from 'http';
 
 // ── Get credentials from settings ─────────────────────────────────────────────
 function getCreds(channelId) {
-  const token   = process.env.WHATSAPP_TOKEN;
+  const token = process.env.WHATSAPP_TOKEN;
   const phoneId = process.env.WHATSAPP_PHONE_ID;
-  const wabaId  = process.env.WHATSAPP_BUSINESS_ID;
+  const wabaId = process.env.WHATSAPP_BUSINESS_ID;
   if (token && phoneId && wabaId) return { token, phoneId, wabaId };
   try {
-    const db  = getDb();
+    const db = getDb();
     const row = db.channel_settings.find(s => s.channel_id === channelId)
-              || db.channel_settings[0];
-    const s   = JSON.parse(row?.settings || '{}');
+      || db.channel_settings[0];
+    const s = JSON.parse(row?.settings || '{}');
     if (s?.whatsapp_token && s?.whatsapp_phone_id && s?.whatsapp_business_id) {
       return { token: s.whatsapp_token, phoneId: s.whatsapp_phone_id, wabaId: s.whatsapp_business_id };
     }
-  } catch (_) {}
+  } catch (_) { }
   return null;
 }
 
@@ -40,8 +41,8 @@ function buildMetaComponents(tpl) {
       const cardComponents = [];
       // Resolve example values: prefer card.example_values > product_data fields > generic fallback
       const ev = card.example_values || {};
-      const pd = card.product_data   || {};
-      const vm = card.var_map        || {};
+      const pd = card.product_data || {};
+      const vm = card.var_map || {};
       const fieldMap = { product_title: pd.title, product_price: pd.price, product_link: pd.link, customer_name: 'Customer', cart_total: '', cart_link: pd.link };
       function resolveEx(varNum) {
         return ev[varNum] || fieldMap[vm[varNum]] || `Value${varNum}`;
@@ -78,8 +79,11 @@ function buildMetaComponents(tpl) {
             }
             return btn;
           }
-          return { type: 'QUICK_REPLY', text: b.text };
-        });
+          if (b.type === 'QUICK_REPLY') {
+            return { type: 'QUICK_REPLY', text: b.text };
+          }
+          return null;
+        }).filter(Boolean);
         cardComponents.push({ type: 'BUTTONS', buttons });
       }
 
@@ -130,15 +134,65 @@ function buildMetaComponents(tpl) {
   return components;
 }
 
+/**
+ * Automatically downloads and uploads images from external URLs to Meta
+ * and creates Gallery records for them.
+ */
+async function autoUploadTemplateImages(channelId, carouselCards) {
+  const db = getDb();
+  let folder = (db.gallery_folders || []).find(f => f.channel_id === channelId && f.name === 'Template Assets');
+  
+  if (!folder) {
+    folder = { id: uuidv4(), channel_id: channelId, name: 'Template Assets', created_at: new Date().toISOString() };
+    if (!db.gallery_folders) db.gallery_folders = [];
+    db.gallery_folders.push(folder);
+  }
+
+  const updatedCards = [...carouselCards];
+  for (let i = 0; i < updatedCards.length; i++) {
+    const card = updatedCards[i];
+    // If we have an external URL but no Meta media_id yet
+    if (card.selected_fetch_image && !card.header_media_id) {
+      try {
+        const { buffer, mimeType } = await whatsappService.downloadImage(card.selected_fetch_image);
+        const filename = `auto_${Date.now()}_${i}.jpg`;
+        
+        // Upload to Meta
+        const mediaId = await whatsappService.uploadMedia(buffer, filename, mimeType);
+        
+        // Save to Gallery
+        const image = {
+          id: uuidv4(), folder_id: folder.id, channel_id: channelId,
+          filename, mime_type: mimeType, size: buffer.length,
+          media_id: mediaId, created_at: new Date().toISOString()
+        };
+        if (!db.gallery_images) db.gallery_images = [];
+        db.gallery_images.push(image);
+        
+        // Update card
+        updatedCards[i] = { ...card, header_media_id: mediaId };
+        console.log(`[AutoUpload] Success for card ${i+1}: ${mediaId}`);
+      } catch (err) {
+        console.error(`[AutoUpload] Failed for card ${i+1}:`, err.message);
+        throw new Error(`Failed to upload image for card ${i+1}: ${err.message}`);
+      }
+    }
+  }
+  db.save();
+  return updatedCards;
+}
+
 // ── Preview / dry-run payload (no submission to Meta) ─────────────────────────
 // POST /api/meta-templates/preview-payload  ← same body as createTemplate
-export function previewPayload(req, res) {
+export async function previewPayload(req, res) {
   try {
+    const db = getDb();
+    const channelId = req.headers['x-channel-id'] || 'demo';
     const { name, category, language, body, footer, buttons, header_type, header_text,
-            is_carousel, carousel_cards, variable_labels } = req.body;
+      is_carousel, carousel_cards, variable_labels } = req.body;
 
     const cleanName = (name || 'preview').toLowerCase().replace(/[^a-z0-9_]/g, '_');
-    const langMap   = { en:'en_US', hi:'hi', gu:'gu', ta:'ta', te:'te', mr:'mr', bn:'bn', ar:'ar', ur:'ur' };
+    const langMap = { en: 'en_US', hi: 'hi', gu: 'gu', ta: 'ta', te: 'te', mr: 'mr', bn: 'bn', ar: 'ar', ur: 'ur' };
 
     const tpl = {
       name: cleanName, category: category || 'MARKETING',
@@ -149,11 +203,16 @@ export function previewPayload(req, res) {
       is_carousel: !!is_carousel, carousel_cards: carousel_cards || [],
     };
 
+    // ── Resolve images if dry-running carousel ──
+    if (is_carousel) {
+      tpl.carousel_cards = await autoUploadTemplateImages(channelId, carousel_cards);
+    }
+
     const components = buildMetaComponents(tpl);
     const payload = {
-      name:       cleanName,
-      category:   tpl.category,
-      language:   langMap[tpl.language] || tpl.language,
+      name: cleanName,
+      category: tpl.category,
+      language: langMap[tpl.language] || tpl.language,
       components,
     };
 
@@ -162,12 +221,12 @@ export function previewPayload(req, res) {
 
     res.json({
       payload,
-      meta_api_url: `https://graph.facebook.com/v21.0/{WABA_ID}/message_templates`,
+      meta_api_url: `https://graph.facebook.com/v25.0/{WABA_ID}/message_templates`,
       method: 'POST',
       notes: {
-        name_rule:     'lowercase letters, numbers, underscores only',
+        name_rule: 'lowercase letters, numbers, underscores only',
         language_sent: langMap[tpl.language] || tpl.language,
-        cards_count:   is_carousel ? carousel_cards?.length : 'N/A (standard template)',
+        cards_count: is_carousel ? carousel_cards?.length : 'N/A (standard template)',
       },
     });
   } catch (err) {
@@ -224,7 +283,11 @@ export async function createTemplate(req, res) {
 
     const creds = getCreds(channelId);
     if (creds) {
-      // Submit to Meta
+      // ── Step 1: Resolve images (auto-upload if URL provided) ──
+      const resolvedCards = is_carousel ? await autoUploadTemplateImages(channelId, carousel_cards) : [];
+      tpl.carousel_cards = resolvedCards;
+
+      // ── Step 2: Build Payload ──
       const components = buildMetaComponents(tpl);
       const langMap = { en: 'en_US', hi: 'hi', gu: 'gu', ta: 'ta', te: 'te', mr: 'mr', bn: 'bn', ar: 'ar', ur: 'ur' };
       const payload = {
@@ -234,7 +297,7 @@ export async function createTemplate(req, res) {
         components,
       };
 
-      // ── Log the FULL payload for debugging / cross-checking Meta compliance ──
+      // ── Step 3: Log the FULL payload for debugging / cross-checking Meta compliance ──
       console.log('\n════════════════════════════════════════════════════════');
       console.log('[MetaTemplates] SUBMITTING TO META — FULL PAYLOAD:');
       console.log('════════════════════════════════════════════════════════');
@@ -242,7 +305,7 @@ export async function createTemplate(req, res) {
       console.log('════════════════════════════════════════════════════════\n');
 
       const metaRes = await fetch(
-        `https://graph.facebook.com/v21.0/${creds.wabaId}/message_templates`,
+        `https://graph.facebook.com/v25.0/${creds.wabaId}/message_templates`,
         {
           method: 'POST',
           headers: { Authorization: `Bearer ${creds.token}`, 'Content-Type': 'application/json' },
@@ -328,7 +391,7 @@ export function getHotProducts(req, res) {
     const db = getDb();
     const channelId = req.headers['x-channel-id'] || 'demo';
     const limit = Math.min(parseInt(req.query.limit) || 10, 20);
-    const days  = parseInt(req.query.days) || 30;
+    const days = parseInt(req.query.days) || 30;
     const since = new Date(Date.now() - days * 24 * 3600 * 1000).toISOString();
 
     const scores = {};
@@ -340,7 +403,7 @@ export function getHotProducts(req, res) {
       if (!key) continue;
       if (!scores[key]) scores[key] = { name: v.product_name, url: v.product_url, image: v.product_image, price: v.product_price, views: 0, carts: 0 };
       scores[key].views++;
-      if (!scores[key].name  && v.product_name)  scores[key].name  = v.product_name;
+      if (!scores[key].name && v.product_name) scores[key].name = v.product_name;
       if (!scores[key].image && v.product_image) scores[key].image = v.product_image;
       if (!scores[key].price && v.product_price) scores[key].price = v.product_price;
     }
@@ -349,16 +412,16 @@ export function getHotProducts(req, res) {
     for (const c of (db.cart_events || [])) {
       if (c.channel_id !== channelId || c.recovered || c.created_at < since) continue;
       let productName = c.product_name;
-      let productUrl  = c.product_url;
+      let productUrl = c.product_url;
       // Try to extract from products JSON array if direct fields empty
       if (!productName && c.products) {
-        try { const arr = JSON.parse(c.products); productName = arr[0]?.name; productUrl = productUrl || arr[0]?.url; } catch (_) {}
+        try { const arr = JSON.parse(c.products); productName = arr[0]?.name; productUrl = productUrl || arr[0]?.url; } catch (_) { }
       }
       const key = productUrl || productName;
       if (!key) continue;
       if (!scores[key]) scores[key] = { name: productName, url: productUrl, image: c.product_image, price: c.product_price, views: 0, carts: 0 };
       scores[key].carts++;
-      if (!scores[key].name  && productName)   scores[key].name  = productName;
+      if (!scores[key].name && productName) scores[key].name = productName;
       if (!scores[key].image && c.product_image) scores[key].image = c.product_image;
       if (!scores[key].price && c.product_price) scores[key].price = c.product_price;
     }
@@ -369,7 +432,7 @@ export function getHotProducts(req, res) {
       const key = p.url || p.name;
       if (!key) continue;
       if (!scores[key]) scores[key] = { name: p.name, url: p.url, image: p.image, price: p.price, views: 0, carts: 0 };
-      if (!scores[key].name  && p.name)  scores[key].name  = p.name;
+      if (!scores[key].name && p.name) scores[key].name = p.name;
       if (!scores[key].image && p.image) scores[key].image = p.image;
       if (!scores[key].price && p.price) scores[key].price = p.price;
     }
@@ -379,14 +442,14 @@ export function getHotProducts(req, res) {
         const score = (p.views * 1) + (p.carts * 3);
         return {
           key,
-          name:         p.name  || key,
-          url:          p.url   || '',
-          image:        p.image || '',
-          price:        p.price || '',
-          views:        p.views,
-          carts:        p.carts,
-          score:        Math.round(score * 10) / 10,
-          is_trending:  p.views >= 3,
+          name: p.name || key,
+          url: p.url || '',
+          image: p.image || '',
+          price: p.price || '',
+          views: p.views,
+          carts: p.carts,
+          score: Math.round(score * 10) / 10,
+          is_trending: p.views >= 3,
           is_abandoned: p.carts > 0,
         };
       })
@@ -421,15 +484,15 @@ export async function refreshAutoProducts(req, res) {
       if (!hot) return existing;
       return {
         ...existing,
-        title:           hot.name,
-        price:           hot.price,
-        link:            hot.url,
+        title: hot.name,
+        price: hot.price,
+        link: hot.url,
         // Only update image_id if card is in auto mode and no manual image set
-        image_id:        (card.source === 'auto' || !existing.image_id) ? (existing.image_id || '') : existing.image_id,
-        _hot_image_url:  hot.image,
-        _hot_score:      hot.score,
-        _hot_views:      hot.views,
-        _hot_carts:      hot.carts,
+        image_id: (card.source === 'auto' || !existing.image_id) ? (existing.image_id || '') : existing.image_id,
+        _hot_image_url: hot.image,
+        _hot_score: hot.score,
+        _hot_views: hot.views,
+        _hot_carts: hot.carts,
       };
     });
 
@@ -461,7 +524,7 @@ export function computeHotProducts(db, channelId, limit = 10) {
   for (const c of (db.cart_events || [])) {
     if (c.channel_id !== channelId || c.recovered || c.created_at < since) continue;
     let pName = c.product_name, pUrl = c.product_url;
-    if (!pName && c.products) { try { const a = JSON.parse(c.products); pName = a[0]?.name; pUrl = pUrl || a[0]?.url; } catch (_) {} }
+    if (!pName && c.products) { try { const a = JSON.parse(c.products); pName = a[0]?.name; pUrl = pUrl || a[0]?.url; } catch (_) { } }
     const key = pUrl || pName; if (!key) continue;
     if (!scores[key]) scores[key] = { name: pName, url: pUrl, image: c.product_image, price: c.product_price, views: 0, carts: 0 };
     scores[key].carts++;
@@ -472,7 +535,7 @@ export function computeHotProducts(db, channelId, limit = 10) {
     if (p.channel_id !== channelId) continue;
     const key = p.url || p.name; if (!key) continue;
     if (!scores[key]) scores[key] = { name: p.name, url: p.url, image: p.image, price: p.price, views: 0, carts: 0 };
-    if (!scores[key].name  && p.name)  scores[key].name  = p.name;
+    if (!scores[key].name && p.name) scores[key].name = p.name;
     if (!scores[key].image && p.image) scores[key].image = p.image;
     if (!scores[key].price && p.price) scores[key].price = p.price;
   }
@@ -519,24 +582,24 @@ export async function scrapeProduct(req, res) {
           });
         }
       }
-    } catch (_) {}
+    } catch (_) { }
 
     // ── 2. OpenGraph / meta tag scraping ────────────────────────────────────
     const html = await fetchHtml(url);
     function getMeta(props) {
       for (const prop of [].concat(props)) {
         const m = html.match(new RegExp(`<meta[^>]+(?:property|name)=["']${prop}["'][^>]*content=["']([^"']+)["']`, 'i'))
-               || html.match(new RegExp(`<meta[^>]+content=["']([^"']+)["'][^>]*(?:property|name)=["']${prop}["']`, 'i'));
+          || html.match(new RegExp(`<meta[^>]+content=["']([^"']+)["'][^>]*(?:property|name)=["']${prop}["']`, 'i'));
         if (m?.[1]) return m[1].trim();
       }
       return '';
     }
-    const title       = getMeta(['og:title', 'twitter:title']) || (html.match(/<title[^>]*>([^<]+)<\/title>/i)?.[1] || '').trim();
-    const image_url   = getMeta(['og:image', 'twitter:image:src', 'twitter:image']);
+    const title = getMeta(['og:title', 'twitter:title']) || (html.match(/<title[^>]*>([^<]+)<\/title>/i)?.[1] || '').trim();
+    const image_url = getMeta(['og:image', 'twitter:image:src', 'twitter:image']);
     const description = getMeta(['og:description', 'twitter:description', 'description']);
-    const priceRaw    = getMeta(['product:price:amount', 'og:price:amount']);
-    const currency    = getMeta(['product:price:currency', 'og:price:currency']) || 'INR';
-    const symbol      = currency === 'INR' ? '₹' : (currency === 'USD' ? '$' : currency + ' ');
+    const priceRaw = getMeta(['product:price:amount', 'og:price:amount']);
+    const currency = getMeta(['product:price:currency', 'og:price:currency']) || 'INR';
+    const symbol = currency === 'INR' ? '₹' : (currency === 'USD' ? '$' : currency + ' ');
 
     res.json({
       title: title.substring(0, 100),
@@ -589,7 +652,7 @@ export async function deleteTemplate(req, res) {
       await fetch(
         `https://graph.facebook.com/v21.0/${creds.wabaId}/message_templates?hsm_id=${tpl.meta_template_id}&name=${tpl.name}`,
         { method: 'DELETE', headers: { Authorization: `Bearer ${creds.token}` } }
-      ).catch(() => {});
+      ).catch(() => { });
     }
 
     db.meta_templates.splice(idx, 1);
