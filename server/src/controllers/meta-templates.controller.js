@@ -23,6 +23,52 @@ function getCreds(channelId) {
 function buildMetaComponents(tpl) {
   const components = [];
 
+  // ── CAROUSEL template ──────────────────────────────────────────────────────
+  if (tpl.is_carousel && tpl.carousel_cards?.length >= 2) {
+    // Optional intro body
+    if (tpl.body) {
+      const vars = [...tpl.body.matchAll(/\{\{(\d+)\}\}/g)].map(m => m[1]);
+      const comp = { type: 'BODY', text: tpl.body };
+      if (vars.length) comp.example = { body_text: [vars.map(v => `Value${v}`)] };
+      components.push(comp);
+    }
+
+    // Carousel cards
+    const cards = tpl.carousel_cards.map(card => {
+      const cardComponents = [];
+
+      // Each card must have IMAGE header
+      cardComponents.push({ type: 'HEADER', format: 'IMAGE' });
+
+      // Card body
+      if (card.body) {
+        const vars = [...card.body.matchAll(/\{\{(\d+)\}\}/g)].map(m => m[1]);
+        const comp = { type: 'BODY', text: card.body };
+        if (vars.length) comp.example = { body_text: [vars.map(v => `Value${v}`)] };
+        cardComponents.push(comp);
+      }
+
+      // Card buttons (max 2)
+      if (card.buttons?.length) {
+        const buttons = card.buttons.slice(0, 2).map(b => {
+          if (b.type === 'URL') {
+            const btn = { type: 'URL', text: b.text, url: b.url };
+            if (b.url.includes('{{')) btn.example = [b.url.replace(/\{\{\d+\}\}/g, 'example.com')];
+            return btn;
+          }
+          return { type: 'QUICK_REPLY', text: b.text };
+        });
+        cardComponents.push({ type: 'BUTTONS', buttons });
+      }
+
+      return { components: cardComponents };
+    });
+
+    components.push({ type: 'CAROUSEL', cards });
+    return components;
+  }
+
+  // ── Regular template ───────────────────────────────────────────────────────
   // HEADER
   if (tpl.header_type === 'IMAGE') {
     components.push({ type: 'HEADER', format: 'IMAGE' });
@@ -77,7 +123,7 @@ export async function createTemplate(req, res) {
   try {
     const db = getDb();
     const channelId = req.headers['x-channel-id'] || 'demo';
-    const { name, category, language, header_type, header_text, body, footer, buttons, variable_labels } = req.body;
+    const { name, category, language, header_type, header_text, body, footer, buttons, variable_labels, is_carousel, carousel_cards } = req.body;
 
     if (!name || !body) return res.status(400).json({ error: 'name and body are required' });
 
@@ -96,6 +142,8 @@ export async function createTemplate(req, res) {
       footer: footer || '',
       buttons: buttons || [],
       variable_labels: variable_labels || [],
+      is_carousel: !!is_carousel,
+      carousel_cards: carousel_cards || [],
       meta_status: 'DRAFT',
       meta_template_id: null,
       // Product config (filled after approval)

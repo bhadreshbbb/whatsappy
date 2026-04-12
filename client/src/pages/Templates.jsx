@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import {
   Plus, Trash2, RefreshCw, CheckCircle2, Clock, XCircle,
   AlertCircle, Settings2, Send, Image, Type, Link,
-  MessageSquare, Zap, Copy, Check, FileText, X
+  Zap, Copy, Check, FileText, X, LayoutGrid, ChevronLeft, ChevronRight
 } from "lucide-react";
 
 const BASE = `/api/meta-templates`;
@@ -20,9 +20,8 @@ async function api(path, opts = {}) {
 }
 
 const CATEGORIES = [
-  { value: 'MARKETING',      label: 'Marketing' },
-  { value: 'UTILITY',        label: 'Utility' },
-  { value: 'AUTHENTICATION', label: 'Authentication' },
+  { value: 'MARKETING', label: 'Marketing' },
+  { value: 'UTILITY',   label: 'Utility' },
 ];
 
 const LANGUAGES = [
@@ -45,11 +44,18 @@ const STATUS_CONFIG = {
   NO_CREDENTIALS: { color: 'text-slate-400',  bg: 'bg-slate-500/10 border-slate-500/20',   icon: AlertCircle,  label: 'No Credentials' },
 };
 
+const BLANK_CARD = { body: '{{1}}\n₹{{2}}', buttons: [{ type: 'URL', text: 'Buy Now', url: 'https://yourstore.com/{{3}}' }] };
 const BLANK_TPL = {
   name: '', category: 'MARKETING', language: 'en',
+  is_carousel: false,
   header_type: 'NONE', header_text: '',
   body: '', footer: '', buttons: [], variable_labels: [],
+  carousel_cards: [{ ...BLANK_CARD }, { ...BLANK_CARD }, { ...BLANK_CARD }],
 };
+
+function extractVars(text) {
+  return [...new Set([...(text || '').matchAll(/\{\{(\d+)\}\}/g)].map(m => m[1]))];
+}
 
 export default function Templates() {
   const [templates, setTemplates]         = useState([]);
@@ -90,7 +96,12 @@ export default function Templates() {
   async function submitTemplate() {
     setError('');
     if (!form.name.trim()) return setError('Template name is required');
-    if (!form.body.trim()) return setError('Body text is required');
+    if (form.is_carousel) {
+      if (form.carousel_cards.length < 2) return setError('Carousel needs at least 2 cards');
+      if (form.carousel_cards.some(c => !c.body.trim())) return setError('All carousel cards need body text');
+    } else {
+      if (!form.body.trim()) return setError('Body text is required');
+    }
     setLoading(true);
     try {
       const d = await api('/', { method: 'POST', body: JSON.stringify(form) });
@@ -100,7 +111,7 @@ export default function Templates() {
     finally { setLoading(false); }
   }
 
-  async function handleRefreshStatus(tpl) {
+  async function handleRefresh(tpl) {
     setRefreshing(r => ({ ...r, [tpl.id]: true }));
     try {
       const d = await api(`/${tpl.id}/refresh`);
@@ -117,7 +128,7 @@ export default function Templates() {
     } catch (e) { setError(e.message); }
   }
 
-  async function saveProductConfig() {
+  async function saveConfig() {
     setLoading(true);
     try {
       const d = await api(`/${selected.id}/product-config`, { method: 'PUT', body: JSON.stringify(productConfig) });
@@ -129,36 +140,20 @@ export default function Templates() {
 
   function openConfig(tpl) {
     setSelected(tpl);
-    const vars = extractVars(tpl.body);
-    setProductConfig(tpl.product_config || {
-      header_image_id: '',
-      products: [{ title: '', price: '', link: '', image_id: '' }],
-      var_map: vars.reduce((a, v) => ({ ...a, [v]: '' }), {}),
-      custom_values: {},
-    });
+    if (tpl.is_carousel) {
+      setProductConfig(tpl.product_config || {
+        cards: tpl.carousel_cards.map(() => ({ image_id: '', title: '', price: '', link: '' })),
+      });
+    } else {
+      setProductConfig(tpl.product_config || {
+        header_image_id: '',
+        products: [{ title: '', price: '', link: '', image_id: '' }],
+        var_map: extractVars(tpl.body).reduce((a, v) => ({ ...a, [v]: '' }), {}),
+        custom_values: {},
+      });
+    }
     loadGallery();
     setView('config');
-  }
-
-  function extractVars(text) {
-    return [...new Set([...(text || '').matchAll(/\{\{(\d+)\}\}/g)].map(m => m[1]))];
-  }
-
-  function addVar(field) {
-    const vars = extractVars(form[field]);
-    const next = vars.length ? Math.max(...vars.map(Number)) + 1 : 1;
-    setForm(f => ({ ...f, [field]: f[field] + ` {{${next}}}` }));
-  }
-
-  function addButton(type) {
-    setForm(f => ({
-      ...f,
-      buttons: [...f.buttons,
-        type === 'URL'          ? { type: 'URL', text: 'Shop Now', url: 'https://yourstore.com/{{1}}' }
-        : type === 'QUICK_REPLY' ? { type: 'QUICK_REPLY', text: 'View Product' }
-        :                          { type: 'PHONE_NUMBER', text: 'Call Us', phone_number: '+91XXXXXXXXXX' }
-      ],
-    }));
   }
 
   function copyName(name) {
@@ -166,23 +161,27 @@ export default function Templates() {
     setCopied(name); setTimeout(() => setCopied(null), 1500);
   }
 
-  if (view === 'create') return <CreateView form={form} setForm={setForm} error={error} setError={setError}
-    loading={loading} onSubmit={submitTemplate} onBack={() => { setView('list'); setError(''); }}
-    extractVars={extractVars} addVar={addVar} addButton={addButton} />;
+  if (view === 'create') return (
+    <CreateView form={form} setForm={setForm} error={error} setError={setError}
+      loading={loading} onSubmit={submitTemplate} onBack={() => { setView('list'); setError(''); }} />
+  );
 
-  if (view === 'config') return <ConfigView tpl={selected} config={productConfig} setConfig={setProductConfig}
-    galleries={galleries} galleryImages={galleryImages} loadFolderImages={loadFolderImages}
-    error={error} loading={loading} onSave={saveProductConfig}
-    onBack={() => { setView('list'); setError(''); }} extractVars={extractVars} />;
+  if (view === 'config') return (
+    <ConfigView tpl={selected} config={productConfig} setConfig={setProductConfig}
+      galleries={galleries} galleryImages={galleryImages} loadFolderImages={loadFolderImages}
+      error={error} loading={loading} onSave={saveConfig}
+      onBack={() => { setView('list'); setError(''); }} />
+  );
 
+  // ── LIST ──────────────────────────────────────────────────────────────────
   return (
     <div className="flex flex-col gap-6">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-white text-xl font-bold">Meta Templates</h1>
-          <p className="text-slate-400 text-sm mt-0.5">Create, submit for approval, then configure product data</p>
+          <p className="text-slate-400 text-sm mt-0.5">Create, submit for approval, configure product data</p>
         </div>
-        <button onClick={() => { setView('create'); setError(''); }}
+        <button onClick={() => { setView('create'); setError(''); setForm(BLANK_TPL); }}
           className="flex items-center gap-2 bg-green-600 hover:bg-green-500 text-white px-4 py-2 rounded-xl text-sm font-medium">
           <Plus size={16} /> New Template
         </button>
@@ -196,7 +195,6 @@ export default function Templates() {
         <div className="flex flex-col items-center justify-center py-20 text-slate-500 gap-3">
           <FileText size={48} className="opacity-20" />
           <p>No templates yet. Create your first Meta template.</p>
-          <p className="text-xs text-center max-w-sm">Templates need Meta approval before you can send campaigns. Usually takes a few minutes to a few hours.</p>
         </div>
       )}
 
@@ -208,40 +206,41 @@ export default function Templates() {
             <div key={tpl.id} className="bg-white/[0.03] border border-white/10 rounded-2xl p-5 hover:border-white/20 transition-all">
               <div className="flex items-start justify-between gap-4">
                 <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-3 flex-wrap">
+                  <div className="flex items-center gap-2 flex-wrap">
                     <span className="text-white font-semibold font-mono">{tpl.name}</span>
-                    <button onClick={() => copyName(tpl.name)} className="text-slate-500 hover:text-slate-300" title="Copy name">
-                      {copied === tpl.name ? <Check size={13} className="text-green-400" /> : <Copy size={13} />}
+                    <button onClick={() => copyName(tpl.name)} className="text-slate-500 hover:text-slate-300">
+                      {copied === tpl.name ? <Check size={12} className="text-green-400" /> : <Copy size={12} />}
                     </button>
                     <span className={`flex items-center gap-1 text-xs px-2.5 py-1 rounded-full border font-medium ${sc.bg} ${sc.color}`}>
                       <Icon size={11} /> {sc.label}
                     </span>
+                    {tpl.is_carousel && (
+                      <span className="flex items-center gap-1 text-xs px-2.5 py-1 rounded-full border bg-purple-500/10 border-purple-500/20 text-purple-400">
+                        <LayoutGrid size={11} /> Carousel ({tpl.carousel_cards?.length} cards)
+                      </span>
+                    )}
                     <span className="text-xs text-slate-500 bg-white/5 px-2 py-0.5 rounded-full">{tpl.category}</span>
                     <span className="text-xs text-slate-500 bg-white/5 px-2 py-0.5 rounded-full">{tpl.language}</span>
                   </div>
-                  <p className="text-slate-400 text-sm mt-2 line-clamp-2">{tpl.body}</p>
-                  <div className="flex items-center gap-3 mt-2 flex-wrap">
-                    {tpl.header_type !== 'NONE' && (
-                      <span className="text-xs text-slate-500 flex items-center gap-1">
-                        {tpl.header_type === 'IMAGE' ? <Image size={11} /> : <Type size={11} />} {tpl.header_type} Header
-                      </span>
-                    )}
-                    {tpl.footer && <span className="text-xs text-slate-500">Footer</span>}
-                    {tpl.buttons?.length > 0 && <span className="text-xs text-slate-500">{tpl.buttons.length} Button{tpl.buttons.length > 1 ? 's' : ''}</span>}
+                  <p className="text-slate-400 text-sm mt-2 line-clamp-2">
+                    {tpl.is_carousel ? `Carousel: ${tpl.carousel_cards?.length || 0} cards — ${tpl.body || tpl.carousel_cards?.[0]?.body || ''}` : tpl.body}
+                  </p>
+                  <div className="flex items-center gap-3 mt-1.5 flex-wrap">
+                    {tpl.buttons?.length > 0 && <span className="text-xs text-slate-500">{tpl.buttons.length} button{tpl.buttons.length > 1 ? 's' : ''}</span>}
                     {tpl.product_config && <span className="text-xs text-green-400 flex items-center gap-1"><CheckCircle2 size={11} /> Product config set</span>}
+                    {tpl.rejected_reason && <span className="text-xs text-red-400">Rejected: {tpl.rejected_reason}</span>}
                   </div>
-                  {tpl.rejected_reason && <p className="text-xs text-red-400 mt-2">Rejection: {tpl.rejected_reason}</p>}
-                  {tpl.meta_error && <p className="text-xs text-red-400 mt-2 font-mono text-ellipsis overflow-hidden">{tpl.meta_error}</p>}
+                  {tpl.meta_error && <p className="text-xs text-red-400 mt-1 font-mono truncate">{tpl.meta_error}</p>}
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
-                  <button onClick={() => handleRefreshStatus(tpl)} disabled={refreshing[tpl.id]}
-                    className="p-2 rounded-lg bg-white/5 hover:bg-white/10 text-slate-400 hover:text-white disabled:opacity-50" title="Refresh status from Meta">
+                  <button onClick={() => handleRefresh(tpl)} disabled={refreshing[tpl.id]}
+                    className="p-2 rounded-lg bg-white/5 hover:bg-white/10 text-slate-400 hover:text-white disabled:opacity-50" title="Refresh from Meta">
                     <RefreshCw size={14} className={refreshing[tpl.id] ? 'animate-spin' : ''} />
                   </button>
                   {tpl.meta_status === 'APPROVED' && (
                     <button onClick={() => openConfig(tpl)}
                       className="flex items-center gap-1.5 text-xs bg-green-600/20 hover:bg-green-600/40 border border-green-600/30 text-green-400 px-3 py-1.5 rounded-lg">
-                      <Settings2 size={13} /> Configure Products
+                      <Settings2 size={13} /> Configure
                     </button>
                   )}
                   <button onClick={() => deleteTpl(tpl)} className="p-2 rounded-lg bg-white/5 hover:bg-red-500/20 text-slate-400 hover:text-red-400">
@@ -257,13 +256,59 @@ export default function Templates() {
   );
 }
 
-function CreateView({ form, setForm, error, setError, loading, onSubmit, onBack, extractVars, addVar, addButton }) {
+// ── CREATE VIEW ───────────────────────────────────────────────────────────────
+function CreateView({ form, setForm, error, setError, loading, onSubmit, onBack }) {
   const f = (k, v) => setForm(p => ({ ...p, [k]: v }));
-  const bodyVars   = extractVars(form.body);
-  const headerVars = extractVars(form.header_text);
+
+  function addVar(field) {
+    const vars = extractVars(form[field]);
+    const next = vars.length ? Math.max(...vars.map(Number)) + 1 : 1;
+    f(field, form[field] + ` {{${next}}}`);
+  }
+
+  function addCardVar(idx, field) {
+    const cards = [...form.carousel_cards];
+    const vars = extractVars(cards[idx][field]);
+    const next = vars.length ? Math.max(...vars.map(Number)) + 1 : 1;
+    cards[idx] = { ...cards[idx], [field]: cards[idx][field] + ` {{${next}}}` };
+    f('carousel_cards', cards);
+  }
+
+  function updateCard(idx, key, val) {
+    const cards = [...form.carousel_cards];
+    cards[idx] = { ...cards[idx], [key]: val };
+    f('carousel_cards', cards);
+  }
+
+  function addCard() {
+    if (form.carousel_cards.length >= 10) return;
+    f('carousel_cards', [...form.carousel_cards, { ...BLANK_CARD }]);
+  }
+
+  function removeCard(idx) {
+    if (form.carousel_cards.length <= 2) return;
+    f('carousel_cards', form.carousel_cards.filter((_, i) => i !== idx));
+  }
+
+  function addCardButton(idx, type) {
+    const cards = [...form.carousel_cards];
+    const card = { ...cards[idx] };
+    if ((card.buttons || []).length >= 2) return;
+    card.buttons = [...(card.buttons || []),
+      type === 'URL' ? { type: 'URL', text: 'Buy Now', url: 'https://yourstore.com/{{3}}' }
+                     : { type: 'QUICK_REPLY', text: 'View More' }];
+    cards[idx] = card;
+    f('carousel_cards', cards);
+  }
+
+  function removeCardButton(cardIdx, btnIdx) {
+    const cards = [...form.carousel_cards];
+    cards[cardIdx] = { ...cards[cardIdx], buttons: cards[cardIdx].buttons.filter((_, i) => i !== btnIdx) };
+    f('carousel_cards', cards);
+  }
 
   return (
-    <div className="flex flex-col gap-6 max-w-3xl">
+    <div className="flex flex-col gap-6 max-w-4xl">
       <div className="flex items-center gap-3">
         <button onClick={onBack} className="text-slate-400 hover:text-white"><X size={20} /></button>
         <h1 className="text-white text-xl font-bold">Create Meta Template</h1>
@@ -271,12 +316,14 @@ function CreateView({ form, setForm, error, setError, loading, onSubmit, onBack,
       {error && <ErrorBar msg={error} onClose={() => setError('')} />}
 
       <div className="bg-white/[0.03] border border-white/10 rounded-2xl p-6 flex flex-col gap-5">
+
+        {/* Name / Category / Language */}
         <div className="grid grid-cols-3 gap-4">
           <div className="flex flex-col gap-1.5">
             <label className="text-slate-400 text-xs font-medium">Template Name *</label>
             <input value={form.name} onChange={e => f('name', e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, '_'))}
-              placeholder="product_promo_v1" className="input text-sm font-mono" />
-            <p className="text-slate-600 text-xs">lowercase + underscores only</p>
+              placeholder="product_catalog_v1" className="input text-sm font-mono" />
+            <p className="text-slate-600 text-xs">lowercase + underscores</p>
           </div>
           <div className="flex flex-col gap-1.5">
             <label className="text-slate-400 text-xs font-medium">Category</label>
@@ -292,83 +339,183 @@ function CreateView({ form, setForm, error, setError, loading, onSubmit, onBack,
           </div>
         </div>
 
+        {/* Template Type Toggle */}
         <div className="flex flex-col gap-2">
-          <label className="text-slate-400 text-xs font-medium">Header Type</label>
+          <label className="text-slate-400 text-xs font-medium">Template Type</label>
           <div className="flex gap-2">
-            {['NONE', 'IMAGE', 'TEXT'].map(t => (
-              <button key={t} onClick={() => f('header_type', t)}
-                className={`px-3 py-1.5 rounded-lg text-xs font-medium border ${form.header_type === t ? 'bg-green-600/20 border-green-600/40 text-green-400' : 'bg-white/5 border-white/10 text-slate-400 hover:border-white/20'}`}>
-                {t === 'IMAGE' && <Image size={11} className="inline mr-1" />}
-                {t === 'TEXT' && <Type size={11} className="inline mr-1" />}
-                {t}
-              </button>
-            ))}
+            <button onClick={() => f('is_carousel', false)}
+              className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm border font-medium transition-all ${!form.is_carousel ? 'bg-green-600/20 border-green-600/40 text-green-400' : 'bg-white/5 border-white/10 text-slate-400 hover:border-white/20'}`}>
+              <FileText size={15} /> Standard Message
+            </button>
+            <button onClick={() => f('is_carousel', true)}
+              className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm border font-medium transition-all ${form.is_carousel ? 'bg-purple-600/20 border-purple-600/40 text-purple-400' : 'bg-white/5 border-white/10 text-slate-400 hover:border-white/20'}`}>
+              <LayoutGrid size={15} /> Carousel / Catalog
+            </button>
           </div>
-          {form.header_type === 'TEXT' && (
-            <div className="flex gap-2 items-end">
-              <textarea value={form.header_text} onChange={e => f('header_text', e.target.value)}
-                placeholder="Header text with {{1}} variables" rows={2} className="input text-sm flex-1 resize-none" />
-              <button onClick={() => addVar('header_text')} className="var-btn">+ Var</button>
-            </div>
-          )}
-          {form.header_type === 'IMAGE' && (
-            <p className="text-xs text-slate-500 bg-white/5 px-3 py-2 rounded-lg">
-              Image header — select from Gallery after approval in the Configure Products step.
-            </p>
-          )}
-          {headerVars.length > 0 && <VarLabels vars={headerVars} labels={form.variable_labels} onChange={v => f('variable_labels', v)} prefix="Header" />}
         </div>
 
-        <div className="flex flex-col gap-2">
-          <div className="flex items-center justify-between">
-            <label className="text-slate-400 text-xs font-medium">
-              Body Text * <span className="text-slate-600">— use {`{{1}}`} {`{{2}}`} {`{{3}}`} for variables</span>
-            </label>
-            <button onClick={() => addVar('body')} className="var-btn">+ Add Variable</button>
-          </div>
-          <textarea value={form.body} onChange={e => f('body', e.target.value)}
-            placeholder={"Hi {{1}}! 👋 Check out {{2}} for just ₹{{3}}.\n\nLimited time offer — tap below to shop!"} rows={5}
-            className="input text-sm resize-none" />
-          <p className="text-xs text-slate-600">{form.body.length}/1024</p>
-          {bodyVars.length > 0 && <VarLabels vars={bodyVars} labels={form.variable_labels} onChange={v => f('variable_labels', v)} prefix="Body" />}
-        </div>
-
-        <div className="flex flex-col gap-1.5">
-          <label className="text-slate-400 text-xs font-medium">Footer <span className="text-slate-600">(optional)</span></label>
-          <input value={form.footer} onChange={e => f('footer', e.target.value)}
-            placeholder="Reply STOP to unsubscribe" className="input text-sm" />
-        </div>
-
-        <div className="flex flex-col gap-3">
-          <div className="flex items-center justify-between">
-            <label className="text-slate-400 text-xs font-medium">Buttons <span className="text-slate-600">(max 3)</span></label>
-            {form.buttons.length < 3 && (
-              <div className="flex gap-1.5">
-                <button onClick={() => addButton('URL')} className="var-btn"><Link size={11} className="inline mr-1" />URL</button>
-                <button onClick={() => addButton('QUICK_REPLY')} className="var-btn"><Zap size={11} className="inline mr-1" />Quick Reply</button>
-                <button onClick={() => addButton('PHONE_NUMBER')} className="var-btn"><MessageSquare size={11} className="inline mr-1" />Phone</button>
+        {/* ── CAROUSEL BUILDER ─────────────────────────────────────────────── */}
+        {form.is_carousel && (
+          <>
+            {/* Intro body (optional) */}
+            <div className="flex flex-col gap-2">
+              <div className="flex items-center justify-between">
+                <label className="text-slate-400 text-xs font-medium">Intro Message <span className="text-slate-600">(optional — shown above carousel)</span></label>
+                <button onClick={() => addVar('body')} className="var-btn">+ Var</button>
               </div>
-            )}
-          </div>
-          {form.buttons.map((btn, i) => (
-            <div key={i} className="flex gap-2 items-center bg-white/5 rounded-xl p-3">
-              <span className="text-xs text-slate-500 w-24 shrink-0">{btn.type}</span>
-              <input value={btn.text} onChange={e => { const b = [...form.buttons]; b[i] = { ...b[i], text: e.target.value }; f('buttons', b); }}
-                placeholder="Button label" className="input text-xs flex-1" />
-              {btn.type === 'URL' && (
-                <input value={btn.url} onChange={e => { const b = [...form.buttons]; b[i] = { ...b[i], url: e.target.value }; f('buttons', b); }}
-                  placeholder="https://..." className="input text-xs flex-1 font-mono" />
-              )}
-              {btn.type === 'PHONE_NUMBER' && (
-                <input value={btn.phone_number || ''} onChange={e => { const b = [...form.buttons]; b[i] = { ...b[i], phone_number: e.target.value }; f('buttons', b); }}
-                  placeholder="+91XXXXXXXXXX" className="input text-xs flex-1 font-mono" />
-              )}
-              <button onClick={() => f('buttons', form.buttons.filter((_, j) => j !== i))} className="text-red-400 hover:text-red-300"><X size={14} /></button>
+              <input value={form.body} onChange={e => f('body', e.target.value)}
+                placeholder="Check out our latest collection! 🛍️" className="input text-sm" />
             </div>
-          ))}
-        </div>
 
-        <WhatsAppPreview form={form} />
+            {/* Cards */}
+            <div className="flex flex-col gap-3">
+              <div className="flex items-center justify-between">
+                <label className="text-white font-medium text-sm">
+                  Carousel Cards <span className="text-slate-500 font-normal text-xs">({form.carousel_cards.length}/10 cards — min 2)</span>
+                </label>
+                {form.carousel_cards.length < 10 && (
+                  <button onClick={addCard} className="var-btn"><Plus size={12} className="inline mr-1" />Add Card</button>
+                )}
+              </div>
+
+              {/* Horizontal scroll preview */}
+              <CarouselPreview cards={form.carousel_cards} />
+
+              {/* Card editors */}
+              <div className="flex flex-col gap-4">
+                {form.carousel_cards.map((card, idx) => (
+                  <div key={idx} className="bg-white/5 border border-white/10 rounded-2xl p-4 flex flex-col gap-3">
+                    <div className="flex items-center justify-between">
+                      <span className="text-purple-400 text-xs font-semibold flex items-center gap-2">
+                        <Image size={12} /> Card {idx + 1} — Image Header (set after approval)
+                      </span>
+                      {form.carousel_cards.length > 2 && (
+                        <button onClick={() => removeCard(idx)} className="text-red-400 hover:text-red-300"><X size={13} /></button>
+                      )}
+                    </div>
+
+                    {/* Card body */}
+                    <div className="flex flex-col gap-1.5">
+                      <div className="flex items-center justify-between">
+                        <label className="text-slate-500 text-xs">Body Text * <span className="text-slate-600">use {`{{1}}`} {`{{2}}`}</span></label>
+                        <button onClick={() => addCardVar(idx, 'body')} className="var-btn">+ Var</button>
+                      </div>
+                      <textarea value={card.body} onChange={e => updateCard(idx, 'body', e.target.value)}
+                        placeholder={"{{1}}\n₹{{2}}"} rows={3} className="input text-sm resize-none" />
+                    </div>
+
+                    {/* Card buttons */}
+                    <div className="flex flex-col gap-2">
+                      <div className="flex items-center justify-between">
+                        <label className="text-slate-500 text-xs">Buttons <span className="text-slate-600">(max 2)</span></label>
+                        {(card.buttons || []).length < 2 && (
+                          <div className="flex gap-1">
+                            <button onClick={() => addCardButton(idx, 'URL')} className="var-btn"><Link size={10} className="inline mr-1" />URL</button>
+                            <button onClick={() => addCardButton(idx, 'QUICK_REPLY')} className="var-btn"><Zap size={10} className="inline mr-1" />Reply</button>
+                          </div>
+                        )}
+                      </div>
+                      {(card.buttons || []).map((btn, bi) => (
+                        <div key={bi} className="flex gap-2 items-center">
+                          <span className="text-xs text-slate-500 w-16 shrink-0">{btn.type === 'URL' ? 'URL' : 'Reply'}</span>
+                          <input value={btn.text} onChange={e => {
+                            const cards = [...form.carousel_cards];
+                            cards[idx].buttons[bi] = { ...btn, text: e.target.value };
+                            f('carousel_cards', cards);
+                          }} placeholder="Button label" className="input text-xs flex-1" />
+                          {btn.type === 'URL' && (
+                            <input value={btn.url} onChange={e => {
+                              const cards = [...form.carousel_cards];
+                              cards[idx].buttons[bi] = { ...btn, url: e.target.value };
+                              f('carousel_cards', cards);
+                            }} placeholder="https://..." className="input text-xs flex-1 font-mono" />
+                          )}
+                          <button onClick={() => removeCardButton(idx, bi)} className="text-red-400 hover:text-red-300"><X size={13} /></button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </>
+        )}
+
+        {/* ── STANDARD BUILDER ─────────────────────────────────────────────── */}
+        {!form.is_carousel && (
+          <>
+            {/* Header */}
+            <div className="flex flex-col gap-2">
+              <label className="text-slate-400 text-xs font-medium">Header</label>
+              <div className="flex gap-2">
+                {['NONE', 'IMAGE', 'TEXT'].map(t => (
+                  <button key={t} onClick={() => f('header_type', t)}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-medium border ${form.header_type === t ? 'bg-green-600/20 border-green-600/40 text-green-400' : 'bg-white/5 border-white/10 text-slate-400 hover:border-white/20'}`}>
+                    {t === 'IMAGE' && <Image size={11} className="inline mr-1" />}
+                    {t === 'TEXT' && <Type size={11} className="inline mr-1" />}
+                    {t}
+                  </button>
+                ))}
+              </div>
+              {form.header_type === 'TEXT' && (
+                <div className="flex gap-2 items-end">
+                  <input value={form.header_text} onChange={e => f('header_text', e.target.value)}
+                    placeholder="Header with {{1}}" className="input text-sm flex-1" />
+                  <button onClick={() => { const v = extractVars(form.header_text); f('header_text', form.header_text + ` {{${v.length ? Math.max(...v.map(Number)) + 1 : 1}}}`); }} className="var-btn">+ Var</button>
+                </div>
+              )}
+              {form.header_type === 'IMAGE' && (
+                <p className="text-xs text-slate-500 bg-white/5 px-3 py-2 rounded-lg">Select image from Gallery after approval.</p>
+              )}
+            </div>
+
+            {/* Body */}
+            <div className="flex flex-col gap-2">
+              <div className="flex items-center justify-between">
+                <label className="text-slate-400 text-xs font-medium">Body * <span className="text-slate-600">use {`{{1}}`} {`{{2}}`} for variables</span></label>
+                <button onClick={() => addVar('body')} className="var-btn">+ Add Variable</button>
+              </div>
+              <textarea value={form.body} onChange={e => f('body', e.target.value)}
+                placeholder={"Hi {{1}}! 👋 Check out {{2}} for ₹{{3}}."} rows={4} className="input text-sm resize-none" />
+              <p className="text-xs text-slate-600">{form.body.length}/1024</p>
+            </div>
+
+            {/* Footer */}
+            <div className="flex flex-col gap-1.5">
+              <label className="text-slate-400 text-xs font-medium">Footer <span className="text-slate-600">(optional)</span></label>
+              <input value={form.footer} onChange={e => f('footer', e.target.value)}
+                placeholder="Reply STOP to unsubscribe" className="input text-sm" />
+            </div>
+
+            {/* Buttons */}
+            <div className="flex flex-col gap-2">
+              <div className="flex items-center justify-between">
+                <label className="text-slate-400 text-xs font-medium">Buttons <span className="text-slate-600">(max 3)</span></label>
+                {form.buttons.length < 3 && (
+                  <div className="flex gap-1.5">
+                    <button onClick={() => f('buttons', [...form.buttons, { type: 'URL', text: 'Shop Now', url: 'https://yourstore.com/' }])} className="var-btn"><Link size={11} className="inline mr-1" />URL</button>
+                    <button onClick={() => f('buttons', [...form.buttons, { type: 'QUICK_REPLY', text: 'View' }])} className="var-btn"><Zap size={11} className="inline mr-1" />Quick Reply</button>
+                  </div>
+                )}
+              </div>
+              {form.buttons.map((btn, i) => (
+                <div key={i} className="flex gap-2 items-center bg-white/5 rounded-xl p-2.5">
+                  <span className="text-xs text-slate-500 w-20 shrink-0">{btn.type}</span>
+                  <input value={btn.text} onChange={e => { const b = [...form.buttons]; b[i] = { ...b[i], text: e.target.value }; f('buttons', b); }}
+                    placeholder="Label" className="input text-xs flex-1" />
+                  {btn.type === 'URL' && (
+                    <input value={btn.url} onChange={e => { const b = [...form.buttons]; b[i] = { ...b[i], url: e.target.value }; f('buttons', b); }}
+                      placeholder="https://..." className="input text-xs flex-1 font-mono" />
+                  )}
+                  <button onClick={() => f('buttons', form.buttons.filter((_, j) => j !== i))} className="text-red-400 hover:text-red-300"><X size={13} /></button>
+                </div>
+              ))}
+            </div>
+
+            {/* Preview */}
+            <StandardPreview form={form} />
+          </>
+        )}
 
         <div className="flex gap-3 pt-2 border-t border-white/10">
           <button onClick={onBack} className="px-5 py-2 rounded-xl bg-white/5 hover:bg-white/10 text-slate-300 text-sm">Cancel</button>
@@ -382,112 +529,171 @@ function CreateView({ form, setForm, error, setError, loading, onSubmit, onBack,
   );
 }
 
-function ConfigView({ tpl, config, setConfig, galleries, galleryImages, loadFolderImages, error, loading, onSave, onBack, extractVars }) {
-  const vars = extractVars(tpl.body);
-  const set  = (k, v) => setConfig(p => ({ ...p, [k]: v }));
-  const setProduct = (i, k, v) => setConfig(p => {
-    const arr = [...(p.products || [])]; arr[i] = { ...arr[i], [k]: v };
-    return { ...p, products: arr };
-  });
+// ── CONFIG VIEW ───────────────────────────────────────────────────────────────
+function ConfigView({ tpl, config, setConfig, galleries, galleryImages, loadFolderImages, error, loading, onSave, onBack }) {
+  const set = (k, v) => setConfig(p => ({ ...p, [k]: v }));
   const [selFolder, setSelFolder] = useState('');
+  const [activeCard, setActiveCard] = useState(0);
+
+  const isCarousel = tpl.is_carousel;
+
+  // Carousel config
+  function setCardField(idx, key, val) {
+    const cards = [...(config.cards || [])];
+    cards[idx] = { ...cards[idx], [key]: val };
+    set('cards', cards);
+  }
 
   return (
-    <div className="flex flex-col gap-6 max-w-3xl">
+    <div className="flex flex-col gap-6 max-w-4xl">
       <div className="flex items-center gap-3">
         <button onClick={onBack} className="text-slate-400 hover:text-white"><X size={20} /></button>
         <div>
           <h1 className="text-white text-xl font-bold">Configure Products</h1>
-          <p className="text-slate-400 text-sm font-mono">{tpl.name}</p>
+          <p className="text-slate-400 text-sm font-mono">{tpl.name} {isCarousel && <span className="text-purple-400">· Carousel</span>}</p>
         </div>
       </div>
       {error && <ErrorBar msg={error} />}
 
       <div className="bg-white/[0.03] border border-white/10 rounded-2xl p-6 flex flex-col gap-6">
 
-        {tpl.header_type === 'IMAGE' && (
-          <div className="flex flex-col gap-3">
-            <label className="text-white font-medium text-sm">Header Image <span className="text-slate-400 font-normal">(select from Gallery)</span></label>
-            <GalleryPicker galleries={galleries} galleryImages={galleryImages} selectedId={config.header_image_id}
-              selFolder={selFolder} onSelectFolder={id => { setSelFolder(id); loadFolderImages(id); }}
-              onSelect={img => set('header_image_id', img.id)} />
-            {config.header_image_id && (
-              <img src={`/api/gallery/images/${config.header_image_id}/preview`} alt=""
-                className="w-32 h-32 object-cover rounded-xl border border-white/10" />
-            )}
-          </div>
-        )}
-
-        {vars.length > 0 && (
-          <div className="flex flex-col gap-3">
-            <label className="text-white font-medium text-sm">Variable Mapping</label>
-            <p className="text-slate-500 text-xs">Map each {`{{N}}`} to the data that should replace it when sending</p>
-            {vars.map(v => (
-              <div key={v} className="flex items-center gap-3 bg-white/5 rounded-xl p-3">
-                <span className="text-green-400 font-mono text-sm w-12 shrink-0">{`{{${v}}}`}</span>
-                <select value={(config.var_map || {})[v] || ''} className="input text-sm flex-1"
-                  onChange={e => set('var_map', { ...(config.var_map || {}), [v]: e.target.value })}>
-                  <option value="">— Select field —</option>
-                  <optgroup label="Customer"><option value="customer_name">Customer Name</option><option value="phone">Phone</option></optgroup>
-                  <optgroup label="Product"><option value="product_title">Product Title</option><option value="product_price">Product Price</option><option value="product_link">Product Link</option></optgroup>
-                  <optgroup label="Cart"><option value="cart_total">Cart Total</option><option value="cart_link">Cart Link</option></optgroup>
-                  <optgroup label="Fixed"><option value="custom">Custom Text</option></optgroup>
-                </select>
-                {(config.var_map || {})[v] === 'custom' && (
-                  <input placeholder="Fixed value..." className="input text-sm flex-1"
-                    value={(config.custom_values || {})[v] || ''}
-                    onChange={e => set('custom_values', { ...(config.custom_values || {}), [v]: e.target.value })} />
-                )}
-              </div>
-            ))}
-          </div>
-        )}
-
-        <div className="flex flex-col gap-3">
-          <div className="flex items-center justify-between">
-            <label className="text-white font-medium text-sm">Product List</label>
-            <button onClick={() => set('products', [...(config.products || []), { title: '', price: '', link: '', image_id: '' }])}
-              className="var-btn"><Plus size={12} className="inline mr-1" />Add Product</button>
-          </div>
-          {(config.products || []).map((prod, i) => (
-            <div key={i} className="bg-white/5 border border-white/10 rounded-2xl p-4 flex flex-col gap-3">
-              <div className="flex items-center justify-between">
-                <span className="text-slate-400 text-xs font-medium">Product {i + 1}</span>
-                {(config.products || []).length > 1 && (
-                  <button onClick={() => set('products', (config.products || []).filter((_, j) => j !== i))} className="text-red-400 hover:text-red-300"><X size={13} /></button>
-                )}
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div className="flex flex-col gap-1.5">
-                  <label className="text-slate-500 text-xs">Title</label>
-                  <input value={prod.title} onChange={e => setProduct(i, 'title', e.target.value)} placeholder="Blue Cotton Kurti" className="input text-sm" />
-                </div>
-                <div className="flex flex-col gap-1.5">
-                  <label className="text-slate-500 text-xs">Price</label>
-                  <input value={prod.price} onChange={e => setProduct(i, 'price', e.target.value)} placeholder="₹799" className="input text-sm" />
-                </div>
-                <div className="col-span-2 flex flex-col gap-1.5">
-                  <label className="text-slate-500 text-xs">Product Link</label>
-                  <input value={prod.link} onChange={e => setProduct(i, 'link', e.target.value)} placeholder="https://yourstore.com/product/..." className="input text-sm font-mono" />
-                </div>
-                <div className="col-span-2 flex flex-col gap-2">
-                  <label className="text-slate-500 text-xs">Product Image (from Gallery)</label>
-                  <GalleryPicker galleries={galleries} galleryImages={galleryImages} selectedId={prod.image_id}
-                    selFolder={selFolder} onSelectFolder={id => { setSelFolder(id); loadFolderImages(id); }}
-                    onSelect={img => setProduct(i, 'image_id', img.id)} />
-                  {prod.image_id && (
-                    <img src={`/api/gallery/images/${prod.image_id}/preview`} alt="" className="w-20 h-20 object-cover rounded-xl border border-white/10" />
-                  )}
-                </div>
-              </div>
+        {/* ── CAROUSEL CONFIG ──────────────────────────────────────────────── */}
+        {isCarousel && (
+          <>
+            {/* Live carousel preview */}
+            <div>
+              <label className="text-white font-medium text-sm mb-3 block">Carousel Preview</label>
+              <CarouselConfigPreview cards={config.cards || []} galleryPrefix="/api/gallery/images" />
             </div>
-          ))}
-        </div>
+
+            {/* Card tabs */}
+            <div>
+              <div className="flex gap-2 flex-wrap mb-4">
+                {(config.cards || []).map((_, i) => (
+                  <button key={i} onClick={() => setActiveCard(i)}
+                    className={`text-xs px-3 py-1.5 rounded-lg border font-medium ${activeCard === i ? 'bg-purple-600/20 border-purple-600/40 text-purple-400' : 'bg-white/5 border-white/10 text-slate-400'}`}>
+                    Card {i + 1} {(config.cards[i]?.image_id) ? '✓' : ''}
+                  </button>
+                ))}
+              </div>
+
+              {/* Active card editor */}
+              {(config.cards || []).map((card, i) => i !== activeCard ? null : (
+                <div key={i} className="bg-white/5 border border-white/10 rounded-2xl p-4 flex flex-col gap-4">
+                  <p className="text-purple-400 text-xs font-semibold">Card {i + 1} of {config.cards.length}</p>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="flex flex-col gap-1.5">
+                      <label className="text-slate-500 text-xs">Product Title</label>
+                      <input value={card.title || ''} onChange={e => setCardField(i, 'title', e.target.value)}
+                        placeholder="Blue Cotton Kurti" className="input text-sm" />
+                    </div>
+                    <div className="flex flex-col gap-1.5">
+                      <label className="text-slate-500 text-xs">Price</label>
+                      <input value={card.price || ''} onChange={e => setCardField(i, 'price', e.target.value)}
+                        placeholder="₹799" className="input text-sm" />
+                    </div>
+                    <div className="col-span-2 flex flex-col gap-1.5">
+                      <label className="text-slate-500 text-xs">Product Link</label>
+                      <input value={card.link || ''} onChange={e => setCardField(i, 'link', e.target.value)}
+                        placeholder="https://yourstore.com/product/..." className="input text-sm font-mono" />
+                    </div>
+                  </div>
+
+                  {/* Gallery image picker */}
+                  <div className="flex flex-col gap-2">
+                    <label className="text-slate-500 text-xs">Card Image <span className="text-slate-600">(from Gallery)</span></label>
+                    <GalleryPicker galleries={galleries} galleryImages={galleryImages} selectedId={card.image_id}
+                      selFolder={selFolder}
+                      onSelectFolder={id => { setSelFolder(id); loadFolderImages(id); }}
+                      onSelect={img => setCardField(i, 'image_id', img.id)} />
+                    {card.image_id && (
+                      <img src={`/api/gallery/images/${card.image_id}/preview`} alt=""
+                        className="w-28 h-28 object-cover rounded-xl border border-white/10" />
+                    )}
+                  </div>
+
+                  {/* Navigation */}
+                  <div className="flex gap-2 pt-2">
+                    {i > 0 && <button onClick={() => setActiveCard(i - 1)} className="var-btn flex items-center gap-1"><ChevronLeft size={12} />Prev</button>}
+                    {i < (config.cards.length - 1) && <button onClick={() => setActiveCard(i + 1)} className="var-btn flex items-center gap-1">Next<ChevronRight size={12} /></button>}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+
+        {/* ── STANDARD CONFIG ──────────────────────────────────────────────── */}
+        {!isCarousel && (
+          <>
+            {tpl.header_type === 'IMAGE' && (
+              <div className="flex flex-col gap-3">
+                <label className="text-white font-medium text-sm">Header Image</label>
+                <GalleryPicker galleries={galleries} galleryImages={galleryImages} selectedId={config.header_image_id}
+                  selFolder={selFolder} onSelectFolder={id => { setSelFolder(id); loadFolderImages(id); }}
+                  onSelect={img => set('header_image_id', img.id)} />
+                {config.header_image_id && <img src={`/api/gallery/images/${config.header_image_id}/preview`} alt="" className="w-32 h-32 object-cover rounded-xl border border-white/10" />}
+              </div>
+            )}
+
+            {extractVars(tpl.body).length > 0 && (
+              <div className="flex flex-col gap-3">
+                <label className="text-white font-medium text-sm">Variable Mapping</label>
+                {extractVars(tpl.body).map(v => (
+                  <div key={v} className="flex items-center gap-3 bg-white/5 rounded-xl p-3">
+                    <span className="text-green-400 font-mono text-sm w-12 shrink-0">{`{{${v}}}`}</span>
+                    <select value={(config.var_map || {})[v] || ''} className="input text-sm flex-1"
+                      onChange={e => set('var_map', { ...(config.var_map || {}), [v]: e.target.value })}>
+                      <option value="">— Select —</option>
+                      <optgroup label="Customer"><option value="customer_name">Customer Name</option></optgroup>
+                      <optgroup label="Product"><option value="product_title">Product Title</option><option value="product_price">Product Price</option><option value="product_link">Product Link</option></optgroup>
+                      <optgroup label="Cart"><option value="cart_total">Cart Total</option><option value="cart_link">Cart Link</option></optgroup>
+                      <optgroup label="Fixed"><option value="custom">Custom Text</option></optgroup>
+                    </select>
+                    {(config.var_map || {})[v] === 'custom' && (
+                      <input placeholder="Fixed value" className="input text-sm flex-1"
+                        value={(config.custom_values || {})[v] || ''}
+                        onChange={e => set('custom_values', { ...(config.custom_values || {}), [v]: e.target.value })} />
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div className="flex flex-col gap-3">
+              <div className="flex items-center justify-between">
+                <label className="text-white font-medium text-sm">Products</label>
+                <button onClick={() => set('products', [...(config.products || []), { title: '', price: '', link: '', image_id: '' }])} className="var-btn"><Plus size={12} className="inline mr-1" />Add</button>
+              </div>
+              {(config.products || []).map((prod, i) => (
+                <div key={i} className="bg-white/5 border border-white/10 rounded-2xl p-4 flex flex-col gap-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-400 text-xs">Product {i + 1}</span>
+                    {(config.products || []).length > 1 && <button onClick={() => set('products', (config.products || []).filter((_, j) => j !== i))} className="text-red-400 hover:text-red-300"><X size={13} /></button>}
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <input value={prod.title} onChange={e => { const a = [...config.products]; a[i] = { ...a[i], title: e.target.value }; set('products', a); }} placeholder="Title" className="input text-sm" />
+                    <input value={prod.price} onChange={e => { const a = [...config.products]; a[i] = { ...a[i], price: e.target.value }; set('products', a); }} placeholder="₹799" className="input text-sm" />
+                    <div className="col-span-2"><input value={prod.link} onChange={e => { const a = [...config.products]; a[i] = { ...a[i], link: e.target.value }; set('products', a); }} placeholder="https://..." className="input text-sm font-mono" /></div>
+                    <div className="col-span-2 flex flex-col gap-2">
+                      <GalleryPicker galleries={galleries} galleryImages={galleryImages} selectedId={prod.image_id}
+                        selFolder={selFolder} onSelectFolder={id => { setSelFolder(id); loadFolderImages(id); }}
+                        onSelect={img => { const a = [...config.products]; a[i] = { ...a[i], image_id: img.id }; set('products', a); }} />
+                      {prod.image_id && <img src={`/api/gallery/images/${prod.image_id}/preview`} alt="" className="w-20 h-20 object-cover rounded-xl border border-white/10" />}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
 
         <div className="flex gap-3 pt-2 border-t border-white/10">
           <button onClick={onBack} className="px-5 py-2 rounded-xl bg-white/5 hover:bg-white/10 text-slate-300 text-sm">Cancel</button>
           <button onClick={onSave} disabled={loading}
             className="flex items-center gap-2 px-6 py-2 rounded-xl bg-green-600 hover:bg-green-500 disabled:opacity-50 text-white text-sm font-medium">
-            <CheckCircle2 size={14} /> {loading ? 'Saving...' : 'Save Product Config'}
+            <CheckCircle2 size={14} /> {loading ? 'Saving...' : 'Save Config'}
           </button>
         </div>
       </div>
@@ -495,6 +701,90 @@ function ConfigView({ tpl, config, setConfig, galleries, galleryImages, loadFold
   );
 }
 
+// ── Carousel Preview (while building) ────────────────────────────────────────
+function CarouselPreview({ cards }) {
+  const samples = ['Priya', 'Blue Kurti', '799', 'product-link'];
+  return (
+    <div className="bg-[#0a1929] rounded-2xl p-4">
+      <p className="text-slate-500 text-xs mb-3">Preview (scroll →)</p>
+      <div className="flex gap-3 overflow-x-auto pb-2">
+        {cards.map((card, i) => {
+          const preview = (card.body || '').replace(/\{\{1\}\}/g, 'Blue Kurti').replace(/\{\{2\}\}/g, '₹799').replace(/\{\{(\d+)\}\}/g, (_, n) => samples[n - 1] || `[${n}]`);
+          return (
+            <div key={i} className="shrink-0 w-44 bg-[#1a2a1a] rounded-2xl overflow-hidden border border-white/10">
+              <div className="w-full h-28 bg-purple-900/30 flex items-center justify-center gap-1">
+                <Image size={18} className="text-purple-400" />
+                <span className="text-purple-400 text-xs">Card {i + 1}</span>
+              </div>
+              <div className="p-2.5">
+                <p className="text-white text-xs whitespace-pre-wrap">{preview || 'Card body...'}</p>
+                {(card.buttons || []).map((btn, bi) => (
+                  <div key={bi} className="mt-1.5 border-t border-white/10 pt-1.5 text-center text-green-400 text-xs">{btn.text}</div>
+                ))}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ── Carousel Config Preview (with real images) ────────────────────────────────
+function CarouselConfigPreview({ cards }) {
+  return (
+    <div className="bg-[#0a1929] rounded-2xl p-4">
+      <div className="flex gap-3 overflow-x-auto pb-2">
+        {cards.map((card, i) => (
+          <div key={i} className="shrink-0 w-44 bg-[#1a2a1a] rounded-2xl overflow-hidden border border-white/10">
+            <div className="w-full h-28 bg-purple-900/20 overflow-hidden">
+              {card.image_id
+                ? <img src={`/api/gallery/images/${card.image_id}/preview`} alt="" className="w-full h-full object-cover" />
+                : <div className="w-full h-full flex items-center justify-center"><Image size={20} className="text-slate-600" /></div>
+              }
+            </div>
+            <div className="p-2.5">
+              <p className="text-white text-xs font-medium truncate">{card.title || `Product ${i + 1}`}</p>
+              {card.price && <p className="text-green-400 text-xs">{card.price}</p>}
+              {card.link && <p className="text-slate-500 text-xs truncate">{card.link}</p>}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ── Standard Message Preview ──────────────────────────────────────────────────
+function StandardPreview({ form }) {
+  const preview = (form.body || '').replace(/\{\{1\}\}/g, 'Priya').replace(/\{\{2\}\}/g, 'Blue Kurti').replace(/\{\{3\}\}/g, '₹799').replace(/\{\{(\d+)\}\}/g, (_, n) => `[Var${n}]`);
+  return (
+    <div className="flex flex-col gap-2">
+      <label className="text-slate-400 text-xs font-medium">Live Preview</label>
+      <div className="bg-[#0a1929] rounded-2xl p-4 flex justify-center">
+        <div className="w-64 bg-[#1a2a1a] rounded-2xl overflow-hidden">
+          {form.header_type === 'IMAGE' && (
+            <div className="w-full h-32 bg-green-900/30 flex items-center justify-center gap-2">
+              <Image size={20} className="text-green-600" /><span className="text-green-600 text-xs">Image</span>
+            </div>
+          )}
+          {form.header_type === 'TEXT' && form.header_text && (
+            <div className="px-3 pt-3 font-bold text-white text-sm">{form.header_text.replace(/\{\{(\d+)\}\}/g, (_, n) => `[Var${n}]`)}</div>
+          )}
+          <div className="p-3">
+            <p className="text-white text-sm whitespace-pre-wrap">{preview || 'Your message...'}</p>
+            {form.footer && <p className="text-slate-500 text-xs mt-2">{form.footer}</p>}
+            {form.buttons?.map((btn, i) => (
+              <div key={i} className="mt-1.5 border-t border-white/10 pt-1.5 text-center text-green-400 text-xs py-1">{btn.text}</div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Gallery Picker ────────────────────────────────────────────────────────────
 function GalleryPicker({ galleries, galleryImages, selectedId, onSelectFolder, selFolder, onSelect }) {
   return (
     <div className="flex flex-col gap-2">
@@ -505,76 +795,22 @@ function GalleryPicker({ galleries, galleryImages, selectedId, onSelectFolder, s
             {f.name} ({f.imageCount})
           </button>
         ))}
-        {galleries.length === 0 && <p className="text-slate-500 text-xs">No gallery folders — upload images in My Gallery first.</p>}
+        {galleries.length === 0 && <p className="text-slate-500 text-xs">Upload images in My Gallery first.</p>}
       </div>
       {galleryImages.length > 0 && (
         <div className="flex gap-2 flex-wrap">
           {galleryImages.map(img => (
             <div key={img.id} onClick={() => onSelect(img)}
               className={`relative cursor-pointer rounded-xl overflow-hidden border-2 transition-all ${selectedId === img.id ? 'border-green-500' : 'border-transparent hover:border-white/30'}`}
-              style={{ width: 64, height: 64 }}>
+              style={{ width: 60, height: 60 }}>
               <img src={`/api/gallery/images/${img.id}/preview`} alt={img.filename} className="w-full h-full object-cover" />
               {selectedId === img.id && (
-                <div className="absolute inset-0 bg-green-500/30 flex items-center justify-center">
-                  <Check size={18} className="text-white" />
-                </div>
+                <div className="absolute inset-0 bg-green-500/30 flex items-center justify-center"><Check size={16} className="text-white" /></div>
               )}
             </div>
           ))}
         </div>
       )}
-    </div>
-  );
-}
-
-function VarLabels({ vars, labels, onChange, prefix }) {
-  return (
-    <div className="bg-white/5 rounded-xl p-3 flex flex-col gap-2">
-      <p className="text-slate-400 text-xs font-medium">{prefix} Variable Labels <span className="text-slate-600">(your reference only)</span></p>
-      {vars.map(v => (
-        <div key={v} className="flex items-center gap-2">
-          <span className="text-green-400 font-mono text-xs w-10">{`{{${v}}}`}</span>
-          <input placeholder={`e.g. customer_name`}
-            value={(labels || []).find(l => l.var === v)?.label || ''}
-            onChange={e => {
-              const next = [...(labels || []).filter(l => l.var !== v)];
-              if (e.target.value) next.push({ var: v, label: e.target.value });
-              onChange(next);
-            }} className="input text-xs flex-1" />
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function WhatsAppPreview({ form }) {
-  const preview = (form.body || '')
-    .replace(/\{\{1\}\}/g, 'Priya').replace(/\{\{2\}\}/g, 'Blue Kurti')
-    .replace(/\{\{3\}\}/g, '₹799').replace(/\{\{4\}\}/g, 'link')
-    .replace(/\{\{(\d+)\}\}/g, (_, n) => `[Var${n}]`);
-  return (
-    <div className="flex flex-col gap-2">
-      <label className="text-slate-400 text-xs font-medium">Live Preview</label>
-      <div className="bg-[#0a1929] rounded-2xl p-4 flex justify-center">
-        <div className="w-64 bg-[#1a2a1a] rounded-2xl overflow-hidden shadow-xl">
-          {form.header_type === 'IMAGE' && (
-            <div className="w-full h-32 bg-green-900/30 flex items-center justify-center gap-2">
-              <Image size={22} className="text-green-600" />
-              <span className="text-green-600 text-xs">Image Header</span>
-            </div>
-          )}
-          {form.header_type === 'TEXT' && form.header_text && (
-            <div className="px-3 pt-3 font-bold text-white text-sm">{form.header_text.replace(/\{\{(\d+)\}\}/g, (_, n) => `[Var${n}]`)}</div>
-          )}
-          <div className="p-3">
-            <p className="text-white text-sm whitespace-pre-wrap">{preview || 'Your message will appear here...'}</p>
-            {form.footer && <p className="text-slate-500 text-xs mt-2">{form.footer}</p>}
-            {form.buttons?.map((btn, i) => (
-              <div key={i} className="mt-1.5 border-t border-white/10 pt-1.5 text-center text-green-400 text-xs py-1">{btn.text}</div>
-            ))}
-          </div>
-        </div>
-      </div>
     </div>
   );
 }
