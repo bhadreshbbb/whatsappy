@@ -22,67 +22,99 @@ function getCreds(channelId) {
   return null;
 }
 
-// ── Build Meta API components from our template ────────────────────────────────
+// ── Variable example values — Meta reviewers see these; use realistic strings ──
+// Mapped from the var_map field options so Meta understands what each {{N}} is.
+const FIELD_EXAMPLES = {
+  product_title:  'Blue Cotton Kurti',
+  product_price:  '₹799',
+  product_link:   'blue-cotton-kurti',
+  customer_name:  'Priya Sharma',
+  cart_total:     '₹1,499',
+  cart_link:      'cart-abc123',
+};
+
+/**
+ * Return a human-meaningful example value for {{varNum}}.
+ * varMap e.g. { '1': 'product_title', '2': 'product_price', '3': 'custom', '3_custom': 'SAVE20' }
+ */
+function getVarExample(varNum, varMap) {
+  const field = (varMap || {})[String(varNum)];
+  if (!field) return `Sample${varNum}`;
+  if (field === 'custom') return String((varMap || {})[`${varNum}_custom`] || `Value${varNum}`);
+  return FIELD_EXAMPLES[field] || `Value${varNum}`;
+}
+
+/**
+ * Build body_text example for Meta — { body_text: [["val1","val2","val3"]] }
+ * One inner array per message variant; Meta standard is exactly one variant.
+ */
+function buildBodyExample(text, varMap) {
+  const vars = [...(text || '').matchAll(/\{\{(\d+)\}\}/g)].map(m => m[1]);
+  if (!vars.length) return null;
+  return { body_text: [vars.map(v => getVarExample(v, varMap))] };
+}
+
+/**
+ * Build URL button example for Meta.
+ * Meta format: example = ["slug-val"]  — one entry per {{N}} in the URL (NOT the full URL).
+ * e.g.  url: "https://store.com/{{1}}"  →  example: ["blue-cotton-kurti"]
+ */
+function buildUrlExample(url, varMap) {
+  const vars = [...(url || '').matchAll(/\{\{(\d+)\}\}/g)].map(m => m[1]);
+  if (!vars.length) return null;
+  return vars.map(v => getVarExample(v, varMap));
+}
+
+// ── Build Meta API components — v25.0 compliant ──────────────────────────────
 function buildMetaComponents(tpl) {
   const components = [];
 
-  // ── CAROUSEL template ──────────────────────────────────────────────────────
+  // variable_labels can arrive as object { '1': 'product_title' } or legacy []
+  const stdVarMap = Array.isArray(tpl.variable_labels) ? {} : (tpl.variable_labels || {});
+
+  // ── CAROUSEL ────────────────────────────────────────────────────────────────
   if (tpl.is_carousel && tpl.carousel_cards?.length >= 2) {
-    // Optional intro body
-    if (tpl.body) {
-      const vars = [...tpl.body.matchAll(/\{\{(\d+)\}\}/g)].map(m => m[1]);
+
+    // Optional carousel-level BODY (intro text shown above the cards)
+    if (tpl.body?.trim()) {
       const comp = { type: 'BODY', text: tpl.body };
-      if (vars.length) comp.example = { body_text: [vars.map(v => `Value${v}`)] };
+      const ex = buildBodyExample(tpl.body, stdVarMap);
+      if (ex) comp.example = ex;
       components.push(comp);
     }
 
-    // Carousel cards
-    const cards = tpl.carousel_cards.map(card => {
+    const cards = tpl.carousel_cards.map((card, cardIdx) => {
       const cardComponents = [];
-      // Resolve example values: prefer card.example_values > product_data fields > generic fallback
-      const ev = card.example_values || {};
-      const pd = card.product_data || {};
-      const vm = card.var_map || {};
-      const fieldMap = { product_title: pd.title, product_price: pd.price, product_link: pd.link, customer_name: 'Customer', cart_total: '', cart_link: pd.link };
-      function resolveEx(varNum) {
-        return ev[varNum] || fieldMap[vm[varNum]] || `Value${varNum}`;
-      }
+      const vm = card.var_map || {};   // per-card {{N}} → field mapping
 
-      // Each card must have IMAGE header (with example handle if provided)
+      // 1. HEADER — IMAGE is mandatory for carousel cards
       const headerComp = { type: 'HEADER', format: 'IMAGE' };
       if (card.header_media_id) {
+        // header_handle must be the media_id returned by Meta's /media upload endpoint
         headerComp.example = { header_handle: [card.header_media_id] };
+      } else {
+        console.warn(`[MetaTemplates] ⚠  Card ${cardIdx + 1}: no header_media_id — image not uploaded to Meta. Template may be REJECTED. Upload image to Gallery first.`);
       }
       cardComponents.push(headerComp);
 
-      // Card body — use real example values from product data
-      if (card.body) {
-        const vars = [...card.body.matchAll(/\{\{(\d+)\}\}/g)].map(m => m[1]);
+      // 2. BODY with real example values
+      if (card.body?.trim()) {
         const comp = { type: 'BODY', text: card.body };
-        if (vars.length) comp.example = { body_text: [vars.map(v => resolveEx(v))] };
+        const ex = buildBodyExample(card.body, vm);
+        if (ex) comp.example = ex;
         cardComponents.push(comp);
       }
 
-      // Card buttons (max 2) — substitute URL variables with example values
+      // 3. BUTTONS — max 2 per card (Meta spec)
       if (card.buttons?.length) {
         const buttons = card.buttons.slice(0, 2).map(b => {
           if (b.type === 'URL') {
             const btn = { type: 'URL', text: b.text, url: b.url };
-            if (b.url.includes('{{')) {
-              let exUrl = b.url;
-              const urlVars = [...b.url.matchAll(/\{\{(\d+)\}\}/g)].map(m => m[1]);
-              for (const vn of urlVars) {
-                const val = resolveEx(vn);
-                exUrl = exUrl.replace(`{{${vn}}}`, val || 'example');
-              }
-              btn.example = [exUrl];
-            }
+            const ex = buildUrlExample(b.url, vm);
+            if (ex) btn.example = ex;
             return btn;
           }
-          if (b.type === 'QUICK_REPLY') {
-            return { type: 'QUICK_REPLY', text: b.text };
-          }
-          return null;
+          return { type: 'QUICK_REPLY', text: b.text };
         }).filter(Boolean);
         cardComponents.push({ type: 'BUTTONS', buttons });
       }
@@ -94,37 +126,39 @@ function buildMetaComponents(tpl) {
     return components;
   }
 
-  // ── Regular template ───────────────────────────────────────────────────────
+  // ── STANDARD template ────────────────────────────────────────────────────────
+
   // HEADER
   if (tpl.header_type === 'IMAGE') {
     components.push({ type: 'HEADER', format: 'IMAGE' });
-  } else if (tpl.header_type === 'TEXT' && tpl.header_text) {
-    const headerVars = [...tpl.header_text.matchAll(/\{\{(\d+)\}\}/g)].map(m => m[1]);
+  } else if (tpl.header_type === 'TEXT' && tpl.header_text?.trim()) {
+    const hVars = [...tpl.header_text.matchAll(/\{\{(\d+)\}\}/g)].map(m => m[1]);
     const comp = { type: 'HEADER', format: 'TEXT', text: tpl.header_text };
-    if (headerVars.length) comp.example = { header_text: headerVars.map(() => 'Sample') };
+    if (hVars.length) comp.example = { header_text: hVars.map(v => getVarExample(v, stdVarMap)) };
     components.push(comp);
   }
 
-  // BODY
-  if (tpl.body) {
-    const bodyVars = [...tpl.body.matchAll(/\{\{(\d+)\}\}/g)].map(m => m[1]);
+  // BODY — with real example values from variable_labels
+  if (tpl.body?.trim()) {
     const comp = { type: 'BODY', text: tpl.body };
-    if (bodyVars.length) comp.example = { body_text: [bodyVars.map(v => `Value${v}`)] };
+    const ex = buildBodyExample(tpl.body, stdVarMap);
+    if (ex) comp.example = ex;
     components.push(comp);
   }
 
   // FOOTER
-  if (tpl.footer) components.push({ type: 'FOOTER', text: tpl.footer });
+  if (tpl.footer?.trim()) components.push({ type: 'FOOTER', text: tpl.footer });
 
   // BUTTONS
   if (tpl.buttons?.length) {
     const buttons = tpl.buttons.map(b => {
       if (b.type === 'URL') {
         const btn = { type: 'URL', text: b.text, url: b.url };
-        if (b.url.includes('{{')) btn.example = [b.url.replace(/\{\{\d+\}\}/g, 'example.com')];
+        const ex = buildUrlExample(b.url, stdVarMap);
+        if (ex) btn.example = ex;
         return btn;
       }
-      if (b.type === 'QUICK_REPLY') return { type: 'QUICK_REPLY', text: b.text };
+      if (b.type === 'QUICK_REPLY')  return { type: 'QUICK_REPLY',  text: b.text };
       if (b.type === 'PHONE_NUMBER') return { type: 'PHONE_NUMBER', text: b.text, phone_number: b.phone_number };
       return b;
     });
@@ -352,7 +386,7 @@ export async function refreshStatus(req, res) {
     if (!creds) return res.status(400).json({ error: 'WhatsApp credentials not configured' });
 
     const metaRes = await fetch(
-      `https://graph.facebook.com/v21.0/${creds.wabaId}/message_templates?name=${tpl.name}&fields=name,status,id,quality_score,rejected_reason`,
+      `https://graph.facebook.com/v25.0/${creds.wabaId}/message_templates?name=${tpl.name}&fields=name,status,id,quality_score,rejected_reason`,
       { headers: { Authorization: `Bearer ${creds.token}` } }
     );
     const metaData = await metaRes.json();
@@ -650,7 +684,7 @@ export async function deleteTemplate(req, res) {
     // Try to delete from Meta too
     if (creds && tpl.meta_template_id) {
       await fetch(
-        `https://graph.facebook.com/v21.0/${creds.wabaId}/message_templates?hsm_id=${tpl.meta_template_id}&name=${tpl.name}`,
+        `https://graph.facebook.com/v25.0/${creds.wabaId}/message_templates?hsm_id=${tpl.meta_template_id}&name=${tpl.name}`,
         { method: 'DELETE', headers: { Authorization: `Bearer ${creds.token}` } }
       ).catch(() => { });
     }

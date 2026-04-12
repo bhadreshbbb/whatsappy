@@ -65,7 +65,7 @@ const BLANK_TPL = {
   name: '', category: 'MARKETING', language: 'en',
   is_carousel: false, auto_product_mode: false,
   header_type: 'NONE', header_text: '',
-  body: '', footer: '', buttons: [], variable_labels: [],
+  body: '', footer: '', buttons: [], variable_labels: {},
   carousel_cards: [{ ...BLANK_CARD }, { ...BLANK_CARD }, { ...BLANK_CARD }],
 };
 
@@ -374,17 +374,28 @@ function SuccessView({ tpl, onPreview, onDone, onConfigure }) {
 // CREATE VIEW
 function CreateView({ form, setForm, error, setError, loading, onSubmit, onBack, galleries, galleryImages, loadFolderImages }) {
   const f = (k, v) => setForm(p => ({ ...p, [k]: v }));
-  const [selFolder, setSelFolder]     = useState('');
-  const [pickerCard, setPickerCard]   = useState(null);
-  const [hotProducts, setHotProducts] = useState([]);
-  const [hotLoading, setHotLoading]   = useState(false);
-  const [showPreview, setShowPreview] = useState(true);
+  const [selFolder, setSelFolder]         = useState('');
+  const [pickerCard, setPickerCard]       = useState(null);
+  const [hotProducts, setHotProducts]     = useState([]);
+  const [hotLoading, setHotLoading]       = useState(false);
+  const [showPreview, setShowPreview]     = useState(true);
+  const [payloadModal, setPayloadModal]   = useState(null);   // null | { payload, curl }
+  const [payloadLoading, setPayloadLoading] = useState(false);
 
   async function loadHotProducts() {
     if (hotLoading) return;
     setHotLoading(true);
     try { const d = await fetch(`${BASE}/hot-products?limit=8`, { headers: CH() }).then(r=>r.json()); setHotProducts(d.products || []); }
     catch (_) {} finally { setHotLoading(false); }
+  }
+
+  async function checkPayload() {
+    setPayloadLoading(true);
+    try {
+      const d = await api('/preview-payload', { method: 'POST', body: JSON.stringify(form) });
+      setPayloadModal(d);
+    } catch (e) { setError(e.message); }
+    finally { setPayloadLoading(false); }
   }
 
   function addVar(field) {
@@ -688,10 +699,15 @@ function CreateView({ form, setForm, error, setError, loading, onSubmit, onBack,
             </>
           )}
 
-          <div className="flex gap-3 pt-2 border-t border-white/10">
+          <div className="flex gap-3 pt-2 border-t border-white/10 flex-wrap">
             <button onClick={onBack} className="px-5 py-2 rounded-xl bg-white/5 hover:bg-white/10 text-slate-300 text-sm transition-all">Cancel</button>
+            <button onClick={checkPayload} disabled={payloadLoading}
+              className="flex items-center gap-2 px-4 py-2 rounded-xl bg-slate-700/60 hover:bg-slate-700 border border-white/10 text-slate-300 text-sm transition-all disabled:opacity-50">
+              {payloadLoading ? <Loader2 size={13} className="animate-spin"/> : <FileText size={13}/>}
+              {payloadLoading ? 'Building…' : 'Check Payload'}
+            </button>
             <button onClick={onSubmit} disabled={loading}
-              className="flex items-center gap-2 px-6 py-2 rounded-xl bg-green-600 hover:bg-green-500 disabled:opacity-50 text-white text-sm font-medium transition-all">
+              className="flex items-center gap-2 px-6 py-2 rounded-xl bg-green-600 hover:bg-green-500 disabled:opacity-50 text-white text-sm font-medium transition-all ml-auto">
               {loading ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
               {loading ? 'Submitting…' : 'Submit to Meta'}
             </button>
@@ -711,6 +727,9 @@ function CreateView({ form, setForm, error, setError, loading, onSubmit, onBack,
           </div>
         )}
       </div>
+
+      {/* Payload inspector modal */}
+      {payloadModal && <PayloadModal data={payloadModal} onClose={() => setPayloadModal(null)} />}
     </div>
   );
 }
@@ -1613,6 +1632,82 @@ function GalleryPicker({ galleries, galleryImages, selectedId, onSelectFolder, s
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PAYLOAD MODAL — shows the exact JSON that will be sent to Meta Graph API
+function PayloadModal({ data, onClose }) {
+  const [copied, setCopied] = useState(false);
+  const jsonStr = JSON.stringify(data.payload, null, 2);
+
+  function copyJson() {
+    navigator.clipboard.writeText(jsonStr);
+    setCopied(true); setTimeout(() => setCopied(false), 1500);
+  }
+
+  // Check for potential issues
+  const cards = data.payload?.components?.find(c => c.type === 'CAROUSEL')?.cards || [];
+  const missingImages = cards.filter(c => !c.components?.find(h => h.type === 'HEADER')?.example?.header_handle?.[0]);
+  const missingBody   = cards.filter(c => !c.components?.find(b => b.type === 'BODY')?.text);
+
+  return (
+    <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-[#111827] border border-white/10 rounded-2xl w-full max-w-3xl max-h-[90vh] flex flex-col" onClick={e => e.stopPropagation()}>
+        {/* Header */}
+        <div className="flex items-center justify-between px-5 py-3.5 border-b border-white/10">
+          <div className="flex items-center gap-2.5">
+            <FileText size={15} className="text-blue-400"/>
+            <span className="text-white font-semibold text-sm">Meta API Payload Inspector</span>
+            <span className="text-xs px-2 py-0.5 rounded-full bg-blue-500/15 text-blue-400 border border-blue-500/20">
+              {data.meta_api_url?.includes('v') ? data.meta_api_url.match(/v[\d.]+/)?.[0] : 'v25.0'}
+            </span>
+          </div>
+          <button onClick={onClose} className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-white/10 transition-all"><X size={15}/></button>
+        </div>
+
+        {/* Warnings */}
+        {(missingImages.length > 0 || missingBody.length > 0) && (
+          <div className="px-5 py-3 border-b border-white/5 bg-yellow-500/5 flex flex-col gap-1.5">
+            <p className="text-yellow-400 text-xs font-semibold flex items-center gap-1"><AlertCircle size={11}/> Potential Issues</p>
+            {missingImages.length > 0 && (
+              <p className="text-yellow-400/80 text-xs">
+                {missingImages.length} card{missingImages.length > 1 ? 's' : ''} missing <code className="bg-black/30 px-1 rounded">header_handle</code> — upload images to Gallery first, or template may be rejected.
+              </p>
+            )}
+            {missingBody.length > 0 && (
+              <p className="text-red-400/80 text-xs">{missingBody.length} card{missingBody.length > 1 ? 's' : ''} missing body text.</p>
+            )}
+          </div>
+        )}
+
+        {/* Info bar */}
+        <div className="px-5 py-2.5 border-b border-white/5 bg-white/[0.02] flex items-center gap-3 flex-wrap text-xs text-slate-400">
+          <span className="font-mono text-blue-300">{data.method} {data.meta_api_url}</span>
+          {data.notes?.cards_count !== 'N/A (standard template)' && (
+            <span className="text-purple-400">{data.notes?.cards_count} carousel cards</span>
+          )}
+          <span className="text-slate-500">lang: {data.notes?.language_sent}</span>
+        </div>
+
+        {/* JSON */}
+        <div className="flex-1 overflow-y-auto p-5">
+          <pre className="text-xs font-mono text-slate-300 leading-relaxed whitespace-pre-wrap break-all">
+            {jsonStr}
+          </pre>
+        </div>
+
+        {/* Footer */}
+        <div className="px-5 py-3 border-t border-white/10 flex items-center justify-between gap-3">
+          <p className="text-slate-500 text-xs">This exact JSON will be POSTed to Meta when you click "Submit to Meta"</p>
+          <button onClick={copyJson}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-600/20 hover:bg-blue-600/40 border border-blue-500/30 text-blue-400 text-xs font-medium transition-all">
+            {copied ? <Check size={12}/> : <Copy size={12}/>}
+            {copied ? 'Copied!' : 'Copy JSON'}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
