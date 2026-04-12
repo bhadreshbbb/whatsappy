@@ -485,7 +485,18 @@ async function sendMultiple(db, cam, events, type) {
           evt.followup_count   = currentStage;
           evt.whatsapp_sent_at = new Date().toISOString();
         }
-        upgradeStatus(db, evt.phone, cam.campaign_type, channelId);
+
+        // Stage 4 → promote visitor to followup_complete (same as PATH B)
+        if (currentStage === 4) {
+          const vIdx = db.website_visitors.findIndex(v => v.phone === evt.phone);
+          if (vIdx >= 0 && upgradeStatus(db.website_visitors[vIdx], 'followup_complete')) {
+            console.log(`[Stage 4] ${evt.phone} → followup_complete`);
+          }
+        }
+
+        cam.total_sent = (cam.total_sent || 0) + 1;
+        cam.last_run_at = new Date().toISOString();
+        console.log(`[Automation] ${cam.name} meta-template stage-${currentStage} → ${evt.phone}`);
         continue;  // skip PATH B
       }
 
