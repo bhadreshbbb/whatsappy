@@ -130,6 +130,51 @@ function buildMetaComponents(tpl) {
   return components;
 }
 
+// ── Preview / dry-run payload (no submission to Meta) ─────────────────────────
+// POST /api/meta-templates/preview-payload  ← same body as createTemplate
+export function previewPayload(req, res) {
+  try {
+    const { name, category, language, body, footer, buttons, header_type, header_text,
+            is_carousel, carousel_cards, variable_labels } = req.body;
+
+    const cleanName = (name || 'preview').toLowerCase().replace(/[^a-z0-9_]/g, '_');
+    const langMap   = { en:'en_US', hi:'hi', gu:'gu', ta:'ta', te:'te', mr:'mr', bn:'bn', ar:'ar', ur:'ur' };
+
+    const tpl = {
+      name: cleanName, category: category || 'MARKETING',
+      language: language || 'en',
+      header_type: header_type || 'NONE', header_text: header_text || '',
+      body: body || '', footer: footer || '',
+      buttons: buttons || [], variable_labels: variable_labels || [],
+      is_carousel: !!is_carousel, carousel_cards: carousel_cards || [],
+    };
+
+    const components = buildMetaComponents(tpl);
+    const payload = {
+      name:       cleanName,
+      category:   tpl.category,
+      language:   langMap[tpl.language] || tpl.language,
+      components,
+    };
+
+    // Also log to server console
+    console.log('\n[MetaTemplates] DRY-RUN PAYLOAD:\n', JSON.stringify(payload, null, 2));
+
+    res.json({
+      payload,
+      meta_api_url: `https://graph.facebook.com/v21.0/{WABA_ID}/message_templates`,
+      method: 'POST',
+      notes: {
+        name_rule:     'lowercase letters, numbers, underscores only',
+        language_sent: langMap[tpl.language] || tpl.language,
+        cards_count:   is_carousel ? carousel_cards?.length : 'N/A (standard template)',
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+}
+
 // ── List all meta templates ────────────────────────────────────────────────────
 export function listTemplates(req, res) {
   const db = getDb();
@@ -147,7 +192,10 @@ export async function createTemplate(req, res) {
     const channelId = req.headers['x-channel-id'] || 'demo';
     const { name, category, language, header_type, header_text, body, footer, buttons, variable_labels, is_carousel, carousel_cards } = req.body;
 
-    if (!name || !body) return res.status(400).json({ error: 'name and body are required' });
+    // Carousel body (intro text) is optional; standard templates require body
+    if (!name) return res.status(400).json({ error: 'Template name is required' });
+    if (!is_carousel && !body) return res.status(400).json({ error: 'Body text is required for standard templates' });
+    if (is_carousel && (!carousel_cards || carousel_cards.length < 2)) return res.status(400).json({ error: 'Carousel needs at least 2 cards' });
 
     // Sanitize name: lowercase, underscores only
     const cleanName = name.toLowerCase().replace(/[^a-z0-9_]/g, '_');
@@ -186,6 +234,13 @@ export async function createTemplate(req, res) {
         components,
       };
 
+      // ── Log the FULL payload for debugging / cross-checking Meta compliance ──
+      console.log('\n════════════════════════════════════════════════════════');
+      console.log('[MetaTemplates] SUBMITTING TO META — FULL PAYLOAD:');
+      console.log('════════════════════════════════════════════════════════');
+      console.log(JSON.stringify(payload, null, 2));
+      console.log('════════════════════════════════════════════════════════\n');
+
       const metaRes = await fetch(
         `https://graph.facebook.com/v21.0/${creds.wabaId}/message_templates`,
         {
@@ -195,6 +250,7 @@ export async function createTemplate(req, res) {
         }
       );
       const metaData = await metaRes.json();
+      console.log('[MetaTemplates] META RESPONSE:', JSON.stringify(metaData, null, 2));
       if (metaRes.ok && metaData.id) {
         tpl.meta_template_id = metaData.id;
         tpl.meta_status = metaData.status || 'PENDING';
