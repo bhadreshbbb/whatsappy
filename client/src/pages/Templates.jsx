@@ -55,6 +55,11 @@ const BLANK_CARD = {
   image_id: '', header_media_id: '',
   source: 'manual', scrape_url: '',
   var_map: { '1': 'product_title', '2': 'product_price', '3': 'product_link' },
+  // Enhanced fields for dynamic product data & Meta approval
+  fetched_images: [],          // [{url, alt}] from URL scrape (multiple images)
+  selected_fetch_image: '',    // currently selected fetched image URL
+  product_data: { title: '', price: '', link: '', image_url: '' },
+  example_values: {},          // { varNum: exValue } sent to Meta as example
 };
 const BLANK_TPL = {
   name: '', category: 'MARKETING', language: 'en',
@@ -403,9 +408,53 @@ function CreateView({ form, setForm, error, setError, loading, onSubmit, onBack,
     updateCard(idx, 'source', src);
     if (src === 'auto') loadHotProducts();
   }
+  // setCardVarMap — also auto-syncs example_values from product_data
   function setCardVarMap(idx, varNum, val) {
     const cards = [...form.carousel_cards];
-    cards[idx] = { ...cards[idx], var_map: { ...(cards[idx].var_map||{}), [varNum]: val } };
+    const card  = cards[idx];
+    const pd    = card.product_data || {};
+    const fieldToValue = {
+      product_title: pd.title  || '',
+      product_price: pd.price  || '',
+      product_link:  pd.link   || '',
+      customer_name: 'Customer',
+      cart_total:    pd.cart_total || '',
+      cart_link:     pd.link   || '',
+    };
+    const autoEx = fieldToValue[val] || '';
+    cards[idx] = {
+      ...card,
+      var_map: { ...(card.var_map || {}), [varNum]: val },
+      example_values: { ...(card.example_values || {}), [varNum]: autoEx || (card.example_values || {})[varNum] || '' },
+    };
+    f('carousel_cards', cards);
+  }
+  // setExampleValue — manual edit of a single example value
+  function setExampleValue(idx, varNum, val) {
+    const cards = [...form.carousel_cards];
+    cards[idx] = { ...cards[idx], example_values: { ...(cards[idx].example_values || {}), [varNum]: val } };
+    f('carousel_cards', cards);
+  }
+  // updateProductData — patch product_data fields and keep example_values in sync
+  function updateProductData(idx, patch) {
+    const cards  = [...form.carousel_cards];
+    const card   = cards[idx];
+    const newPd  = { ...(card.product_data || {}), ...patch };
+    const varMap = card.var_map || {};
+    const exVals = { ...(card.example_values || {}) };
+    for (const [vn, field] of Object.entries(varMap)) {
+      if (field === 'product_title' && patch.title  !== undefined) exVals[vn] = patch.title;
+      if (field === 'product_price' && patch.price  !== undefined) exVals[vn] = patch.price;
+      if (field === 'product_link'  && patch.link   !== undefined) exVals[vn] = patch.link;
+    }
+    const updates = { product_data: newPd, example_values: exVals };
+    if (patch.fetched_images        !== undefined) updates.fetched_images       = patch.fetched_images;
+    if (patch.selected_fetch_image  !== undefined) updates.selected_fetch_image = patch.selected_fetch_image;
+    // auto-set first fetched image as selected if not already set
+    if (patch.fetched_images?.length && !card.selected_fetch_image && !card.image_id) {
+      updates.selected_fetch_image = patch.fetched_images[0].url;
+    }
+    cards[idx] = { ...card, ...updates };
     f('carousel_cards', cards);
   }
   function addCard()  { if (form.carousel_cards.length < 10) f('carousel_cards', [...form.carousel_cards, { ...BLANK_CARD }]); }
@@ -428,9 +477,27 @@ function CreateView({ form, setForm, error, setError, loading, onSubmit, onBack,
     f('carousel_cards', cards);
     setPickerCard(null);
   }
+  // assignHotProduct — fills ALL fields (image, title, price, link, example_values)
   function assignHotProduct(idx, hot) {
-    const cards = [...form.carousel_cards];
-    cards[idx] = { ...cards[idx], source: 'auto', _hot_preview: hot };
+    const cards  = [...form.carousel_cards];
+    const card   = cards[idx];
+    const varMap = card.var_map || {};
+    const exVals = { ...(card.example_values || {}) };
+    for (const [vn, field] of Object.entries(varMap)) {
+      if (field === 'product_title') exVals[vn] = hot.name  || '';
+      if (field === 'product_price') exVals[vn] = hot.price || '';
+      if (field === 'product_link')  exVals[vn] = hot.url   || '';
+    }
+    const images = hot.image ? [{ url: hot.image, alt: hot.name || '' }] : [];
+    cards[idx] = {
+      ...card,
+      source: 'auto',
+      _hot_preview: hot,
+      product_data: { title: hot.name||'', price: hot.price||'', link: hot.url||'', image_url: hot.image||'' },
+      fetched_images: images,
+      selected_fetch_image: card.image_id ? card.selected_fetch_image : (hot.image || card.selected_fetch_image || ''),
+      example_values: exVals,
+    };
     f('carousel_cards', cards);
   }
 
@@ -540,6 +607,8 @@ function CreateView({ form, setForm, error, setError, loading, onSubmit, onBack,
                     onUpdateCard={(k,v) => updateCard(idx, k, v)}
                     onSetSource={(s) => setCardSource(idx, s)}
                     onSetVarMap={(vn, val) => setCardVarMap(idx, vn, val)}
+                    onSetExampleValue={(vn, val) => setExampleValue(idx, vn, val)}
+                    onUpdateProductData={(patch) => updateProductData(idx, patch)}
                     onAddVar={() => addCardVar(idx)}
                     onRemoveCard={() => removeCard(idx)}
                     onAddButton={(t) => addCardButton(idx, t)}
@@ -647,141 +716,280 @@ function CreateView({ form, setForm, error, setError, loading, onSubmit, onBack,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// CAROUSEL CARD EDITOR
-function CarouselCardEditor({ card, idx, totalCards, hotProducts, hotLoading, galleries, galleryImages, pickerCard, selFolder, onSetSelFolder, loadFolderImages, onSetPickerCard, loadHotProducts, onUpdateCard, onSetSource, onSetVarMap, onAddVar, onRemoveCard, onAddButton, onRemoveButton, onUpdateButton, onSelectImage, onAssignHotProduct }) {
-  const source = card.source || 'manual';
-  const bodyVars = extractVars(card.body);
-  const hot = card._hot_preview;
+// CAROUSEL CARD EDITOR — Enhanced: multi-image fetch, editable product data, dynamic vars + Meta examples
+function CarouselCardEditor({ card, idx, totalCards, hotProducts, hotLoading, galleries, galleryImages, pickerCard, selFolder, onSetSelFolder, loadFolderImages, onSetPickerCard, loadHotProducts, onUpdateCard, onSetSource, onSetVarMap, onSetExampleValue, onUpdateProductData, onAddVar, onRemoveCard, onAddButton, onRemoveButton, onUpdateButton, onSelectImage, onAssignHotProduct }) {
+  const source      = card.source || 'manual';
+  const bodyVars    = extractVars(card.body);
+  const productData = card.product_data || {};
+  const fetchedImgs = card.fetched_images || [];
+  const selFetchImg = card.selected_fetch_image || '';
+  const exVals      = card.example_values || {};
+
+  // Best available preview image: gallery > selected fetched > product image_url
+  const previewSrc = card.image_id
+    ? `/api/gallery/images/${card.image_id}/preview`
+    : selFetchImg || productData.image_url || '';
+
+  const allExamplesFilled = bodyVars.length > 0 && bodyVars.every(v => exVals[v]?.trim());
 
   return (
     <div className="bg-white/[0.04] border border-white/10 rounded-2xl overflow-hidden">
-      {/* Card title bar */}
+      {/* ── Title bar ── */}
       <div className="flex items-center justify-between px-4 py-2.5 bg-white/[0.02] border-b border-white/5">
         <span className="text-purple-400 text-xs font-semibold flex items-center gap-1.5">
           <LayoutGrid size={11} /> Card {idx + 1}
-          {hot && <span className="text-orange-400 ml-1 flex items-center gap-0.5"><Flame size={10}/>{hot.name?.substring(0,18)}</span>}
-          {card.image_id && <span className="text-green-400 flex items-center gap-0.5"><Check size={10}/>Image</span>}
+          {card.image_id    && <span className="text-green-400 flex items-center gap-0.5"><Check size={10}/>Gallery ✓</span>}
+          {!card.image_id && previewSrc && <span className="text-blue-400 flex items-center gap-0.5"><Image size={10}/>Image ✓</span>}
+          {allExamplesFilled && <span className="text-green-400 flex items-center gap-0.5"><Sparkles size={10}/>Examples ✓</span>}
+          {bodyVars.length > 0 && !allExamplesFilled && <span className="text-yellow-400/70 flex items-center gap-0.5"><AlertCircle size={10}/>Needs Examples</span>}
         </span>
         {totalCards > 2 && (
           <button onClick={onRemoveCard} className="p-1 text-slate-600 hover:text-red-400 rounded transition-colors"><X size={13} /></button>
         )}
       </div>
 
-      <div className="p-4 flex flex-col gap-3">
-        {/* Example image */}
-        <div className="flex items-center gap-3">
-          <div className="w-16 h-16 rounded-xl overflow-hidden border border-white/10 shrink-0 bg-white/5 flex items-center justify-center">
-            {card.image_id
-              ? <img src={`/api/gallery/images/${card.image_id}/preview`} alt="" className="w-full h-full object-cover" />
-              : hot?.image
-                ? <img src={hot.image} alt="" className="w-full h-full object-cover" onError={e=>{e.target.style.display='none';}} />
-                : <ImagePlus size={18} className="text-slate-600" />
+      <div className="p-4 flex flex-col gap-4">
+
+        {/* ── IMAGE PREVIEW + SELECTION ─────────────────────────────────────── */}
+        <div className="flex flex-col gap-2">
+          {/* Large preview */}
+          <div className="w-full h-40 rounded-xl overflow-hidden border border-white/10 bg-white/5 relative flex items-center justify-center group">
+            {previewSrc
+              ? <>
+                  <img src={previewSrc} alt="" className="w-full h-full object-cover" onError={e=>{e.target.style.display='none';}} />
+                  <div className="absolute top-2 right-2">
+                    {card.image_id
+                      ? <span className="text-[10px] bg-green-600/90 text-white px-2 py-0.5 rounded-full font-medium">Gallery</span>
+                      : <span className="text-[10px] bg-blue-600/90 text-white px-2 py-0.5 rounded-full font-medium">Auto-fetched</span>
+                    }
+                  </div>
+                </>
+              : <div className="flex flex-col items-center gap-2 text-slate-600">
+                  <ImagePlus size={28} />
+                  <span className="text-xs">No image yet</span>
+                  <span className="text-[11px] text-slate-700">Fetch URL or pick from Gallery</span>
+                </div>
             }
           </div>
-          <div className="flex flex-col gap-1.5 flex-1">
-            <p className="text-slate-500 text-xs">Example Image <span className="text-slate-600">(for Meta review)</span></p>
+
+          {/* Fetched images strip — click to select */}
+          {fetchedImgs.length > 0 && (
+            <div className="flex flex-col gap-1">
+              <p className="text-slate-500 text-[11px] flex items-center gap-1">
+                <Image size={10}/> {fetchedImgs.length} image{fetchedImgs.length > 1 ? 's' : ''} fetched — click to use:
+              </p>
+              <div className="flex gap-2 flex-wrap">
+                {fetchedImgs.map((img, fi) => (
+                  <button key={fi} onClick={() => onUpdateCard('selected_fetch_image', img.url)}
+                    title={img.alt || `Image ${fi+1}`}
+                    className={`relative w-14 h-14 rounded-lg overflow-hidden border-2 transition-all shrink-0 ${
+                      selFetchImg === img.url ? 'border-blue-500 scale-105' : 'border-transparent hover:border-white/30'
+                    }`}>
+                    <img src={img.url} alt={img.alt||''} className="w-full h-full object-cover"
+                      onError={e=>{e.target.parentElement.style.display='none';}} />
+                    {selFetchImg === img.url && (
+                      <div className="absolute inset-0 bg-blue-500/30 flex items-center justify-center">
+                        <Check size={12} className="text-white"/>
+                      </div>
+                    )}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Gallery picker toggle + clear */}
+          <div className="flex gap-2 flex-wrap">
             <button
               onClick={() => { onSetPickerCard(pickerCard===idx?null:idx); if(pickerCard!==idx&&galleries.length>0){onSetSelFolder(galleries[0].id);loadFolderImages(galleries[0].id);} }}
-              className="var-btn w-fit flex items-center gap-1">
-              <Image size={11} /> {card.image_id ? 'Change' : 'Select from Gallery'}
+              className="var-btn flex items-center gap-1">
+              <Image size={11} /> {card.image_id ? 'Change Gallery Image' : 'Pick from Gallery'}
             </button>
+            {previewSrc && (
+              <button
+                onClick={() => { onUpdateCard('image_id',''); onUpdateCard('header_media_id',''); onUpdateCard('selected_fetch_image',''); }}
+                className="var-btn" style={{color:'rgba(248,113,113,0.8)'}}>Clear Image</button>
+            )}
           </div>
+
+          {/* Inline gallery picker */}
+          {pickerCard === idx && (
+            <InlineGalleryPicker galleries={galleries} galleryImages={galleryImages}
+              selectedId={card.image_id} selFolder={selFolder}
+              onSelectFolder={id=>{onSetSelFolder(id);loadFolderImages(id);}}
+              onSelect={onSelectImage} accentColor="purple" />
+          )}
         </div>
 
-        {/* Inline gallery picker */}
-        {pickerCard === idx && (
-          <InlineGalleryPicker galleries={galleries} galleryImages={galleryImages}
-            selectedId={card.image_id} selFolder={selFolder}
-            onSelectFolder={id=>{onSetSelFolder(id);loadFolderImages(id);}}
-            onSelect={onSelectImage} accentColor="purple" />
-        )}
-
-        {/* Source tabs */}
+        {/* ── SOURCE TABS ─────────────────────────────────────────────────── */}
         <div className="flex bg-white/5 rounded-lg p-0.5 gap-0.5">
-          {[{k:'manual',l:'Manual',I:Type},{k:'url',l:'URL Scrape',I:Globe},{k:'auto',l:'Auto-detect',I:Sparkles}].map(({k,l,I}) => (
+          {[
+            {k:'manual', l:'Manual',      I:Type,     c:'purple'},
+            {k:'url',    l:'URL Fetch',   I:Globe,    c:'blue'},
+            {k:'auto',   l:'Auto-detect', I:Sparkles, c:'orange'},
+          ].map(({k,l,I,c}) => (
             <button key={k} onClick={() => onSetSource(k)}
-              className={`flex-1 flex items-center justify-center gap-1 text-xs py-1.5 rounded-md font-medium transition-all ${source===k
-                ? k==='auto' ? 'bg-orange-600/30 text-orange-300' : 'bg-purple-600/20 text-purple-300'
-                : 'text-slate-500 hover:text-slate-300'}`}>
+              className={`flex-1 flex items-center justify-center gap-1 text-xs py-1.5 rounded-md font-medium transition-all ${
+                source===k
+                  ? c==='orange' ? 'bg-orange-600/30 text-orange-300'
+                  : c==='blue'   ? 'bg-blue-600/30 text-blue-300'
+                  :                'bg-purple-600/20 text-purple-300'
+                : 'text-slate-500 hover:text-slate-300'
+              }`}>
               <I size={10}/> {l}
             </button>
           ))}
         </div>
 
-        {/* URL mode */}
+        {/* ── URL FETCH MODE ──────────────────────────────────────────────── */}
         {source === 'url' && (
-          <ScrapeUrlInput initialUrl={card.scrape_url}
-            onUrlChange={url=>onUpdateCard('scrape_url',url)}
-            onFill={(s) => { if(s.title)onUpdateCard('_scraped_title',s.title); if(s.price)onUpdateCard('_scraped_price',s.price); }} />
+          <CardScrapeInput
+            initialUrl={card.scrape_url}
+            onUrlChange={url => onUpdateCard('scrape_url', url)}
+            onFill={(data) => onUpdateProductData({
+              title:               data.title      || '',
+              price:               data.price      || '',
+              link:                card.scrape_url || '',
+              image_url:           data.images?.[0]?.url || data.image_url || '',
+              fetched_images:      data.images || (data.image_url ? [{ url: data.image_url, alt: data.title||'' }] : []),
+              selected_fetch_image: data.images?.[0]?.url || data.image_url || '',
+            })}
+          />
         )}
 
-        {/* Auto mode */}
+        {/* ── AUTO-DETECT MODE ────────────────────────────────────────────── */}
         {source === 'auto' && (
           <div className="bg-orange-500/5 border border-orange-500/20 rounded-xl p-3 flex flex-col gap-2">
             <div className="flex items-center justify-between">
-              <p className="text-orange-400 text-xs font-medium flex items-center gap-1"><Flame size={11}/> Top trending products</p>
-              <button onClick={loadHotProducts} className="text-slate-500 hover:text-slate-300"><RefreshCw size={11} className={hotLoading?'animate-spin':''}/></button>
+              <p className="text-orange-400 text-xs font-medium flex items-center gap-1">
+                <Flame size={11}/> Trending + abandoned — click to auto-fill all fields
+              </p>
+              <button onClick={loadHotProducts} className="text-slate-500 hover:text-slate-300">
+                <RefreshCw size={11} className={hotLoading?'animate-spin':''}/>
+              </button>
             </div>
             {hotLoading && <div className="skeleton h-10 rounded-lg" />}
             {!hotLoading && hotProducts.length === 0 && (
-              <p className="text-slate-500 text-xs">No data yet — builds as visitors browse your store. Will fall back to product catalog.</p>
+              <p className="text-slate-500 text-xs">No data yet — builds as visitors browse. Falls back to product catalog.</p>
             )}
             {hotProducts.length > 0 && (
-              <div className="flex flex-col gap-1.5 max-h-48 overflow-y-auto">
-                {hotProducts.slice(0,6).map((hp,hi) => (
-                  <button key={hi} onClick={() => onAssignHotProduct(hp)}
-                    className={`flex items-center gap-2 p-2 rounded-lg text-left transition-all border ${hot?.url===hp.url ? 'border-orange-500/50 bg-orange-500/10' : 'border-white/5 bg-white/5 hover:border-orange-500/25 hover:bg-orange-500/5'}`}>
-                    {hp.image
-                      ? <img src={hp.image} alt="" className="w-8 h-8 object-cover rounded-lg shrink-0" onError={e=>e.target.style.display='none'} />
-                      : <div className="w-8 h-8 bg-white/5 rounded-lg shrink-0 flex items-center justify-center"><Image size={12} className="text-slate-600"/></div>
-                    }
-                    <div className="flex-1 min-w-0">
-                      <p className="text-white text-xs truncate">{hp.name}</p>
-                      <div className="flex items-center gap-2">
-                        {hp.price && <span className="text-green-400 text-xs">{hp.price}</span>}
-                        {hp.carts > 0 && <span className="text-orange-400 text-xs flex items-center gap-0.5"><ShoppingCart size={8}/>{hp.carts}</span>}
-                        {hp.views > 0 && <span className="text-slate-500 text-xs flex items-center gap-0.5"><Eye size={8}/>{hp.views}</span>}
+              <div className="flex flex-col gap-1.5 max-h-52 overflow-y-auto">
+                {hotProducts.slice(0,8).map((hp,hi) => {
+                  const isSel = productData.title === hp.name && productData.link === hp.url;
+                  return (
+                    <button key={hi} onClick={() => onAssignHotProduct(hp)}
+                      className={`flex items-center gap-2 p-2 rounded-lg text-left transition-all border ${
+                        isSel ? 'border-orange-500/50 bg-orange-500/10' : 'border-white/5 bg-white/5 hover:border-orange-500/25 hover:bg-orange-500/5'
+                      }`}>
+                      {hp.image
+                        ? <img src={hp.image} alt="" className="w-10 h-10 object-cover rounded-lg shrink-0" onError={e=>e.target.style.display='none'} />
+                        : <div className="w-10 h-10 bg-white/5 rounded-lg shrink-0 flex items-center justify-center"><Image size={14} className="text-slate-600"/></div>
+                      }
+                      <div className="flex-1 min-w-0">
+                        <p className="text-white text-xs truncate font-medium">{hp.name}</p>
+                        <div className="flex items-center gap-2 mt-0.5">
+                          {hp.price && <span className="text-green-400 text-xs">{hp.price}</span>}
+                          {hp.carts > 0 && <span className="text-orange-400 text-xs flex items-center gap-0.5"><ShoppingCart size={8}/>{hp.carts}</span>}
+                          {hp.views > 0 && <span className="text-slate-500 text-xs flex items-center gap-0.5"><Eye size={8}/>{hp.views}</span>}
+                        </div>
                       </div>
-                    </div>
-                    {hot?.url===hp.url && <Check size={13} className="text-orange-400 shrink-0"/>}
-                    <span className="text-xs text-slate-600 shrink-0">#{hi+1}</span>
-                  </button>
-                ))}
+                      {isSel && <Check size={13} className="text-orange-400 shrink-0"/>}
+                      <span className="text-xs text-slate-600 shrink-0">#{hi+1}</span>
+                    </button>
+                  );
+                })}
               </div>
             )}
           </div>
         )}
 
-        {/* Body textarea */}
+        {/* ── EDITABLE PRODUCT DATA — always visible, pre-filled from source ── */}
+        <div className="bg-white/[0.02] border border-white/[0.07] rounded-xl p-3 flex flex-col gap-3">
+          <p className="text-slate-400 text-xs font-medium flex items-center gap-1.5">
+            <Type size={11}/> Product Details
+            <span className="text-slate-600 font-normal text-[11px]">editable · auto-filled from URL/auto-detect</span>
+          </p>
+          <div className="grid grid-cols-2 gap-2">
+            <div className="flex flex-col gap-1">
+              <label className="text-slate-500 text-[11px]">Title</label>
+              <input value={productData.title||''} onChange={e => onUpdateProductData({ title: e.target.value })}
+                placeholder="e.g. Blue Cotton Kurti" className="input text-xs" />
+            </div>
+            <div className="flex flex-col gap-1">
+              <label className="text-slate-500 text-[11px]">Price</label>
+              <input value={productData.price||''} onChange={e => onUpdateProductData({ price: e.target.value })}
+                placeholder="e.g. ₹799" className="input text-xs" />
+            </div>
+            <div className="col-span-2 flex flex-col gap-1">
+              <label className="text-slate-500 text-[11px]">Product Link</label>
+              <input value={productData.link||''} onChange={e => onUpdateProductData({ link: e.target.value })}
+                placeholder="https://yourstore.com/product" className="input text-xs font-mono" />
+            </div>
+          </div>
+        </div>
+
+        {/* ── BODY TEXT ───────────────────────────────────────────────────── */}
         <div className="flex flex-col gap-1.5">
           <div className="flex items-center justify-between">
-            <label className="text-slate-500 text-xs">Body Text *</label>
-            <button onClick={onAddVar} className="var-btn">+ Var</button>
+            <label className="text-slate-500 text-xs">Body Text * <span className="text-slate-600">use {`{{1}}`} {`{{2}}`} etc.</span></label>
+            <button onClick={onAddVar} className="var-btn">+ Add Var</button>
           </div>
           <textarea value={card.body} onChange={e => onUpdateCard('body', e.target.value)}
             placeholder={"{{1}}\n₹{{2}}"} rows={3} className="input text-sm resize-none" />
+          <p className="text-slate-600 text-[11px]">Variables are replaced with live product data when sending. Example values below are shown to Meta for approval.</p>
         </div>
 
-        {/* Variable mapping */}
+        {/* ── VARIABLE MAPPING + EXAMPLE VALUES ──────────────────────────── */}
         {bodyVars.length > 0 && (
-          <div className="bg-green-500/5 border border-green-500/15 rounded-xl p-3 flex flex-col gap-2">
-            <p className="text-green-400 text-xs font-medium flex items-center gap-1"><Sparkles size={11}/> Variable Mapping</p>
-            {bodyVars.map(v => (
-              <div key={v} className="flex items-center gap-2">
-                <span className="text-green-400 font-mono text-xs w-10 shrink-0">{`{{${v}}}`}</span>
-                <select value={(card.var_map||{})[v]||''} onChange={e => onSetVarMap(v,e.target.value)} className="input text-xs flex-1">
-                  <option value="">— what is this? —</option>
-                  {VAR_FIELD_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-                </select>
-                {(card.var_map||{})[v]==='custom' && (
-                  <input placeholder="Fixed value" value={(card.var_map||{})[`${v}_custom`]||''} onChange={e=>onSetVarMap(`${v}_custom`,e.target.value)} className="input text-xs flex-1" />
-                )}
-              </div>
-            ))}
+          <div className="bg-green-500/5 border border-green-500/15 rounded-xl p-3 flex flex-col gap-2.5">
+            <p className="text-green-400 text-xs font-medium flex items-center gap-1">
+              <Sparkles size={11}/> Variable Mapping
+              <span className="text-slate-500 font-normal ml-1 text-[11px]">— example values required for Meta approval</span>
+            </p>
+            {bodyVars.map(v => {
+              const mapped = (card.var_map||{})[v] || '';
+              const exVal  = exVals[v] || '';
+              return (
+                <div key={v} className="flex flex-col gap-1.5">
+                  <div className="flex items-center gap-2">
+                    <span className="text-green-400 font-mono text-xs w-10 shrink-0">{`{{${v}}}`}</span>
+                    <select value={mapped} onChange={e => onSetVarMap(v, e.target.value)} className="input text-xs flex-1">
+                      <option value="">— maps to what? —</option>
+                      {VAR_FIELD_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                    </select>
+                  </div>
+                  <div className="flex items-center gap-2 ml-10">
+                    <div className="flex-1 relative">
+                      <input
+                        value={exVal}
+                        onChange={e => onSetExampleValue(v, e.target.value)}
+                        placeholder={mapped ? `Example for Meta (e.g. ${mapped==='product_title'?'Blue Kurti':mapped==='product_price'?'₹799':'https://...'})` : 'Enter example value…'}
+                        className={`input text-xs w-full pr-6 ${
+                          exVal ? 'border-green-500/40' : 'border-yellow-500/30'
+                        }`}
+                      />
+                      {exVal
+                        ? <Check size={10} className="absolute right-2 top-1/2 -translate-y-1/2 text-green-400"/>
+                        : <AlertCircle size={10} className="absolute right-2 top-1/2 -translate-y-1/2 text-yellow-400/70"/>
+                      }
+                    </div>
+                    {mapped === 'custom' && (
+                      <input placeholder="Fixed text" value={(card.var_map||{})[`${v}_custom`]||''}
+                        onChange={e=>onSetVarMap(`${v}_custom`,e.target.value)} className="input text-xs flex-1" />
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+            {bodyVars.some(v => !exVals[v]?.trim()) && (
+              <p className="text-yellow-400/70 text-[11px] flex items-center gap-1 mt-1">
+                <AlertCircle size={10}/> Fill all example values — Meta may reject without them
+              </p>
+            )}
           </div>
         )}
 
-        {/* Buttons */}
+        {/* ── BUTTONS ─────────────────────────────────────────────────────── */}
         <div className="flex flex-col gap-2">
           <div className="flex items-center justify-between">
             <label className="text-slate-500 text-xs">Buttons <span className="text-slate-600">(max 2)</span></label>
@@ -802,6 +1010,75 @@ function CarouselCardEditor({ card, idx, totalCards, hotProducts, hotLoading, ga
           ))}
         </div>
       </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CARD SCRAPE INPUT — URL fetch for carousel cards, returns multiple images
+function CardScrapeInput({ onFill, initialUrl, onUrlChange }) {
+  const [url, setUrl]         = useState(initialUrl || '');
+  const [loading, setLoading] = useState(false);
+  const [result, setResult]   = useState(null);
+  const [err, setErr]         = useState('');
+
+  async function handleFetch() {
+    if (!url.trim()) return;
+    setLoading(true); setErr(''); setResult(null);
+    try {
+      const res  = await fetch(`${BASE}/scrape-product`, {
+        method: 'POST',
+        headers: { ...CH(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: url.trim() }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to fetch product');
+      setResult(data);
+      onFill(data);
+    } catch (e) { setErr(e.message); }
+    finally { setLoading(false); }
+  }
+
+  return (
+    <div className="bg-blue-500/5 border border-blue-500/20 rounded-xl p-3 flex flex-col gap-2">
+      <label className="text-blue-400 text-xs font-semibold flex items-center gap-1">
+        <Globe size={11}/> Auto-fill from Product URL
+        <span className="text-slate-500 font-normal ml-1">(Shopify / any store)</span>
+      </label>
+      <div className="flex gap-2">
+        <input
+          value={url}
+          onChange={e => { setUrl(e.target.value); onUrlChange?.(e.target.value); }}
+          onKeyDown={e => e.key === 'Enter' && handleFetch()}
+          placeholder="https://yourstore.myshopify.com/products/product-name"
+          className="input text-xs font-mono flex-1"
+        />
+        <button onClick={handleFetch} disabled={loading || !url.trim()}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-600/30 hover:bg-blue-600/50 border border-blue-500/30 text-blue-400 text-xs font-medium disabled:opacity-50 shrink-0 transition-all">
+          {loading ? <Loader2 size={11} className="animate-spin"/> : <Globe size={11}/>}
+          {loading ? 'Fetching…' : 'Fetch'}
+        </button>
+      </div>
+      {err && <p className="text-red-400 text-xs">{err}</p>}
+      {result && (
+        <div className="flex items-start gap-2 bg-blue-500/10 rounded-lg p-2">
+          {result.image_url && <img src={result.image_url} alt="" className="w-12 h-12 object-cover rounded-lg shrink-0" onError={e=>e.target.style.display='none'} />}
+          <div className="flex-1 min-w-0">
+            {result.title && <p className="text-white text-xs font-medium truncate">{result.title}</p>}
+            {result.price && <p className="text-green-400 text-xs">{result.price}</p>}
+            <div className="flex items-center gap-2 mt-1">
+              {result.images?.length > 1 && (
+                <span className="text-blue-400 text-xs flex items-center gap-1">
+                  <Image size={9}/> {result.images.length} images — select above
+                </span>
+              )}
+              <span className="text-blue-400 text-xs flex items-center gap-1">
+                <CheckCircle2 size={9}/> Fields auto-filled
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1118,9 +1395,13 @@ function WaCarouselPreview({ introText, cards = [], productCards = [] }) {
     const pc = productCards[i] || {};
     const vm = card.var_map || { '1':'product_title','2':'product_price','3':'product_link' };
     const sampleProduct = pc.title ? null : { title: ['Blue Kurti','Cotton Saree','Ethnic Wear'][i%3], price: [`₹799`,`₹1,299`,`₹599`][i%3], link: 'https://store.com/p' };
-    const text = resolveText(card.body, vm, pc, sampleProduct);
-    const imageUrl = pc.image_id ? `/api/gallery/images/${pc.image_id}/preview` : (pc._hot_image_url || card._hot_preview?.image || null);
-    return { text, imageUrl, buttons: card.buttons || [], title: pc.title || sampleProduct?.title, price: pc.price || sampleProduct?.price };
+    const text = resolveText(card.body, vm, pc.title ? pc : (card.product_data || {}), sampleProduct);
+    // Image priority: configured gallery > fetched auto image > product_data image > legacy fallbacks
+    const imageUrl = pc.image_id
+      ? `/api/gallery/images/${pc.image_id}/preview`
+      : card.selected_fetch_image || card.product_data?.image_url
+        || pc._hot_image_url || card._hot_preview?.image || null;
+    return { text, imageUrl, buttons: card.buttons || [], title: pc.title || card.product_data?.title || sampleProduct?.title, price: pc.price || card.product_data?.price || sampleProduct?.price };
   });
 
   return (

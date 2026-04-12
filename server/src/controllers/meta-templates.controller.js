@@ -38,6 +38,14 @@ function buildMetaComponents(tpl) {
     // Carousel cards
     const cards = tpl.carousel_cards.map(card => {
       const cardComponents = [];
+      // Resolve example values: prefer card.example_values > product_data fields > generic fallback
+      const ev = card.example_values || {};
+      const pd = card.product_data   || {};
+      const vm = card.var_map        || {};
+      const fieldMap = { product_title: pd.title, product_price: pd.price, product_link: pd.link, customer_name: 'Customer', cart_total: '', cart_link: pd.link };
+      function resolveEx(varNum) {
+        return ev[varNum] || fieldMap[vm[varNum]] || `Value${varNum}`;
+      }
 
       // Each card must have IMAGE header (with example handle if provided)
       const headerComp = { type: 'HEADER', format: 'IMAGE' };
@@ -46,20 +54,28 @@ function buildMetaComponents(tpl) {
       }
       cardComponents.push(headerComp);
 
-      // Card body
+      // Card body — use real example values from product data
       if (card.body) {
         const vars = [...card.body.matchAll(/\{\{(\d+)\}\}/g)].map(m => m[1]);
         const comp = { type: 'BODY', text: card.body };
-        if (vars.length) comp.example = { body_text: [vars.map(v => `Value${v}`)] };
+        if (vars.length) comp.example = { body_text: [vars.map(v => resolveEx(v))] };
         cardComponents.push(comp);
       }
 
-      // Card buttons (max 2)
+      // Card buttons (max 2) — substitute URL variables with example values
       if (card.buttons?.length) {
         const buttons = card.buttons.slice(0, 2).map(b => {
           if (b.type === 'URL') {
             const btn = { type: 'URL', text: b.text, url: b.url };
-            if (b.url.includes('{{')) btn.example = [b.url.replace(/\{\{\d+\}\}/g, 'example.com')];
+            if (b.url.includes('{{')) {
+              let exUrl = b.url;
+              const urlVars = [...b.url.matchAll(/\{\{(\d+)\}\}/g)].map(m => m[1]);
+              for (const vn of urlVars) {
+                const val = resolveEx(vn);
+                exUrl = exUrl.replace(`{{${vn}}}`, val || 'example');
+              }
+              btn.example = [exUrl];
+            }
             return btn;
           }
           return { type: 'QUICK_REPLY', text: b.text };
@@ -435,10 +451,13 @@ export async function scrapeProduct(req, res) {
           const price = variant?.price;
           const currency = variant?.presentment_prices?.[0]?.price?.currency_code || 'INR';
           const symbol = currency === 'INR' ? '₹' : (currency === 'USD' ? '$' : currency + ' ');
+          // Collect all product images (up to 8)
+          const images = (p.images || []).slice(0, 8).map(img => ({ url: img.src, alt: img.alt || p.title }));
           return res.json({
             title: p.title,
             price: price ? `${symbol}${price}` : '',
-            image_url: p.images?.[0]?.src || '',
+            image_url: images[0]?.url || '',
+            images,
             description: (p.body_html || '').replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim().substring(0, 200),
             source: 'shopify',
           });
@@ -467,6 +486,7 @@ export async function scrapeProduct(req, res) {
       title: title.substring(0, 100),
       price: priceRaw ? `${symbol}${priceRaw}` : '',
       image_url,
+      images: image_url ? [{ url: image_url, alt: title }] : [],
       description: description.substring(0, 200),
       source: 'opengraph',
     });
