@@ -107,13 +107,13 @@ function buildMetaComponents(tpl) {
       const vm = card.var_map || {};   // per-card {{N}} → field mapping
 
       // 1. header — image is mandatory for carousel cards
+      // header_handle must be the real Meta media_id returned by /media upload endpoint
       const headerComp = { type: 'header', format: 'image' };
       if (card.header_media_id) {
-        // header_handle = the media_id returned by Meta's /media upload endpoint
-        headerComp.example = { header_handle: [card.header_media_id] };
+        headerComp.example = { header_handle: [String(card.header_media_id)] };
+        console.log(`[MetaTemplates] Card ${cardIdx + 1} header_handle = "${card.header_media_id}" (dynamic from media upload)`);
       } else {
-        // Warn — template will likely be REJECTED without a valid header_handle
-        console.warn(`[MetaTemplates] ⚠  Card ${cardIdx + 1}: no header_media_id — image not uploaded to Meta yet. Upload image to Gallery first.`);
+        console.warn(`[MetaTemplates] ⚠  Card ${cardIdx + 1}: header_media_id missing — header_handle will be absent. Upload image to Gallery first.`);
       }
       cardComponents.push(headerComp);
 
@@ -195,7 +195,7 @@ function buildMetaComponents(tpl) {
 async function autoUploadTemplateImages(channelId, carouselCards) {
   const db = getDb();
   let folder = (db.gallery_folders || []).find(f => f.channel_id === channelId && f.name === 'Template Assets');
-  
+
   if (!folder) {
     folder = { id: uuidv4(), channel_id: channelId, name: 'Template Assets', created_at: new Date().toISOString() };
     if (!db.gallery_folders) db.gallery_folders = [];
@@ -205,33 +205,63 @@ async function autoUploadTemplateImages(channelId, carouselCards) {
   const updatedCards = [...carouselCards];
   for (let i = 0; i < updatedCards.length; i++) {
     const card = updatedCards[i];
-    // If we have an external URL but no Meta media_id yet
-    if (card.selected_fetch_image && !card.header_media_id) {
+
+    // ── Priority 1: already have a valid Meta media_id — nothing to do ──────
+    if (card.header_media_id) {
+      console.log(`[AutoUpload] Card ${i + 1}: using existing header_media_id = ${card.header_media_id}`);
+      continue;
+    }
+
+    // ── Priority 2: card has a gallery image_id — look up media_id from DB ──
+    if (card.image_id) {
+      const galleryImg = (db.gallery_images || []).find(img => img.id === card.image_id && img.channel_id === channelId);
+      if (galleryImg?.media_id) {
+        updatedCards[i] = { ...card, header_media_id: galleryImg.media_id };
+        console.log(`[AutoUpload] Card ${i + 1}: resolved media_id from gallery image_id ${card.image_id} → ${galleryImg.media_id}`);
+        continue;
+      }
+    }
+
+    // ── Priority 3: external image URL — download + upload to Meta ──────────
+    const externalUrl = card.selected_fetch_image || card.product_data?.image_url || '';
+    if (externalUrl) {
+      let imageUrl = externalUrl;
+      if (imageUrl.startsWith('//')) imageUrl = 'https:' + imageUrl;
+      if (!imageUrl.startsWith('http')) {
+        console.warn(`[AutoUpload] Card ${i + 1}: skipping invalid image URL "${externalUrl}"`);
+        continue;
+      }
       try {
-        const { buffer, mimeType } = await whatsappService.downloadImage(card.selected_fetch_image);
+        const { buffer, mimeType } = await whatsappService.downloadImage(imageUrl);
         const filename = `auto_${Date.now()}_${i}.jpg`;
-        
-        // Upload to Meta
+
+        // Upload to Meta media endpoint → get real media_id
         const mediaId = await whatsappService.uploadMedia(buffer, filename, mimeType);
-        
-        // Save to Gallery
+
+        // Save to Gallery so it can be reused
         const image = {
           id: uuidv4(), folder_id: folder.id, channel_id: channelId,
           filename, mime_type: mimeType, size: buffer.length,
-          media_id: mediaId, created_at: new Date().toISOString()
+          media_id: mediaId, source_url: externalUrl,
+          created_at: new Date().toISOString(),
         };
         if (!db.gallery_images) db.gallery_images = [];
         db.gallery_images.push(image);
-        
-        // Update card
-        updatedCards[i] = { ...card, header_media_id: mediaId };
-        console.log(`[AutoUpload] Success for card ${i+1}: ${mediaId}`);
+
+        // Patch card: set both image_id (gallery) and header_media_id (Meta)
+        updatedCards[i] = { ...card, image_id: image.id, header_media_id: mediaId };
+        console.log(`[AutoUpload] Card ${i + 1}: uploaded "${externalUrl}" → media_id = ${mediaId}`);
       } catch (err) {
-        console.error(`[AutoUpload] Failed for card ${i+1}:`, err.message);
-        throw new Error(`Failed to upload image for card ${i+1}: ${err.message}`);
+        console.error(`[AutoUpload] Card ${i + 1}: upload failed — ${err.message}`);
+        throw new Error(`Failed to upload image for card ${i + 1}: ${err.message}`);
       }
+      continue;
     }
+
+    // ── No image source at all ───────────────────────────────────────────────
+    console.warn(`[AutoUpload] Card ${i + 1}: no image source (no header_media_id, image_id, or external URL) — header_handle will be missing`);
   }
+
   db.save();
   return updatedCards;
 }
@@ -398,7 +428,7 @@ export function buildSendMessagePayload(tpl, productConfig, recipientPhone = '{{
 }
 
 // ── Get send payload for an approved template (with current product config) ───
-export async function getSendPayload(req, res) {
+export async function   (req, res) {
   try {
     const db = getDb();
     const channelId = req.headers['x-channel-id'] || 'demo';
