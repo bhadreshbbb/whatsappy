@@ -36,12 +36,13 @@ export const campaignsController = {
       const channelId = req.headers['x-channel-id'] || 'demo';
       const b = req.body;
       // Accept both snake_case (from frontend) and camelCase
-      const campaignType   = b.campaign_type   || b.campaignType   || 'abandoned_cart';
-      const targetSegment  = b.target_segment  || b.targetSegment  || 'all';
-      const targetLanguage = b.target_language || b.targetLanguage || 'en';
-      const templateId     = b.template_id     || b.template?.id   || null;
-      const templateIds    = b.template_ids    || [];
-      const delayHours     = b.delay_hours     != null ? Number(b.delay_hours) : 1;
+      const campaignType    = b.campaign_type    || b.campaignType   || 'abandoned_cart';
+      const targetSegment   = b.target_segment   || b.targetSegment  || 'all';
+      const targetLanguage  = b.target_language  || b.targetLanguage || 'en';
+      const templateId      = b.template_id      || b.template?.id   || null;
+      const templateIds     = b.template_ids     || [];
+      const metaTemplateId  = b.meta_template_id || null;   // linked approved Meta carousel template
+      const delayHours      = b.delay_hours      != null ? Number(b.delay_hours) : 1;
 
       const id = Date.now(); // use timestamp for unique IDs
       const newCampaign = {
@@ -55,6 +56,7 @@ export const campaignsController = {
         filters: '{}',
         template_id: templateId,
         template_ids: templateIds,
+        meta_template_id: metaTemplateId,   // NEW — Meta carousel template for product recommendation
         schedule_type: 'delayed',
         delay_hours: delayHours,
         is_active: 1,
@@ -87,12 +89,13 @@ export const campaignsController = {
         name: name ?? existing.name,
         description: description ?? existing.description,
         filters: filters ? JSON.stringify(filters) : existing.filters,
-        template_id: template?.id ?? existing.template_id,
-        template_name: template?.name ?? existing.template_name,
-        template_ids: template_ids ?? existing.template_ids,
-        delay_hours: delayHours ?? existing.delay_hours,
-        is_active: isActive !== undefined ? (isActive ? 1 : 0) : existing.is_active,
-        updated_at: new Date().toISOString()
+        template_id:      template?.id ?? existing.template_id,
+        template_name:    template?.name ?? existing.template_name,
+        template_ids:     template_ids ?? existing.template_ids,
+        meta_template_id: req.body.meta_template_id !== undefined ? (req.body.meta_template_id || null) : existing.meta_template_id,
+        delay_hours:      delayHours ?? existing.delay_hours,
+        is_active:        isActive !== undefined ? (isActive ? 1 : 0) : existing.is_active,
+        updated_at:       new Date().toISOString()
       };
       
       db.save();

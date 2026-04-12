@@ -4,7 +4,7 @@ import { aiService } from '../services/ai.service.js';
 import { translateComponents } from '../services/translate.service.js';
 import { saveChatMessage } from '../controllers/chat.controller.js';
 import { upgradeStatus } from '../utils/statusMachine.js';
-import { computeHotProducts, buildSendMessagePayload } from '../controllers/meta-templates.controller.js';
+import { computeHotProducts, buildSendMessagePayload, LANG_MAP } from '../controllers/meta-templates.controller.js';
 import { v4 as uuidv4 } from 'uuid';
 
 let cronInterval;
@@ -431,7 +431,65 @@ async function sendMultiple(db, cam, events, type) {
         }
       }
 
-      // ── SEND ──
+      // ── Resolve language for this send ──
+      const userLang = cam.target_language === 'per_user'
+        ? (evt.language || visitor?.language || 'en')
+        : (cam.target_language || 'en');
+      const metaLangCode = LANG_MAP[userLang] || userLang; // 'hi' → 'hi', 'en' → 'en_US'
+
+      // ── PATH A: Meta Carousel Template (type: "template") ──────────��──────
+      // Used when campaign has a linked approved Meta carousel template.
+      // This is the correct format for product recommendation campaigns.
+      const metaTpl = cam.meta_template_id
+        ? (db.meta_templates || []).find(t => t.id === cam.meta_template_id && t.meta_status === 'APPROVED')
+        : null;
+
+      if (metaTpl) {
+        // Build the exact /messages carousel payload with language override
+        const sendPayload = buildSendMessagePayload(metaTpl, metaTpl.product_config, evt.phone, metaLangCode);
+
+        console.group(`[Automation] META TEMPLATE SEND → ${evt.phone}`);
+        console.log(`Template: "${metaTpl.name}" · Lang: ${metaLangCode}`);
+        console.log('API: POST https://graph.facebook.com/v25.0/{PHONE_ID}/messages');
+        console.log('Payload:', JSON.stringify(sendPayload, null, 2));
+        console.groupEnd();
+
+        const sendResult = await whatsappService.sendTemplateMessage(evt.phone, sendPayload);
+
+        saveChatMessage(db, evt.phone, sendResult.resolvedText || `[Carousel: ${metaTpl.name}]`, channelId, {
+          wamid: sendResult.messageId || null,
+          campaignName: cam.name,
+          templateName: metaTpl.name,
+        });
+
+        db.abandoned_cart_executions.push({
+          id: (db.abandoned_cart_executions.length || 0) + 1,
+          campaign_id: cam.id,
+          phone: evt.phone,
+          name: evt.name,
+          template_id: metaTpl.id,
+          template_name: metaTpl.name,
+          stage: currentStage,
+          language: metaLangCode,
+          status: sendResult.messageId ? 'sent' : 'failed',
+          sent_at: new Date().toISOString(),
+          is_meta_template: true,
+        });
+
+        if (type === 'upsell') {
+          evt.upsell_sent    = 1;
+          evt.upsell_count   = currentStage;
+          evt.upsell_sent_at = new Date().toISOString();
+        } else {
+          evt.whatsapp_sent    = 1;
+          evt.followup_count   = currentStage;
+          evt.whatsapp_sent_at = new Date().toISOString();
+        }
+        upgradeStatus(db, evt.phone, cam.campaign_type, channelId);
+        continue;  // skip PATH B
+      }
+
+      // ── PATH B: Old message_templates (type: "text") ───────────────────────
       const templateRecord = db.message_templates.find(t => t.id == templateId);
       if (!templateRecord) {
         console.warn(`[Automation] Template ${templateId} not found for campaign ${cam.name}, skipping ${evt.phone}`);
@@ -459,11 +517,6 @@ async function sendMultiple(db, cam, events, type) {
         console.warn(`[Automation] Template ${templateId} has no body text, skipping ${evt.phone}`);
         continue;
       }
-
-      // ── PER-USER LANGUAGE TRANSLATION ──
-      const userLang = cam.target_language === 'per_user'
-        ? (evt.language || visitor?.language || 'en')
-        : (cam.target_language || 'en');
 
       if (userLang && userLang !== 'en') {
         components = await translateComponents(components, userLang);

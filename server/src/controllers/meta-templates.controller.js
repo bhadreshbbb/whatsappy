@@ -66,6 +66,25 @@ function buildUrlExample(url, varMap) {
 }
 
 // ── Build Meta API components — v25.0 compliant ──────────────────────────────
+// All type/format values are lowercase to match Meta's documented API format exactly.
+//
+// Template creation payload structure (carousel):
+// {
+//   "name": "...", "language": "en_US", "category": "marketing",
+//   "components": [
+//     { "type": "body", "text": "...", "example": { "body_text": [["val1","val2"]] } },
+//     { "type": "carousel", "cards": [
+//       { "components": [
+//           { "type": "header", "format": "image", "example": { "header_handle": ["<media_id>"] } },
+//           { "type": "body",   "text": "...",     "example": { "body_text": [["val1","val2"]] } },
+//           { "type": "buttons","buttons": [
+//               { "type": "quick_reply", "text": "..." },
+//               { "type": "url", "text": "...", "url": "https://...{{1}}", "example": ["slug"] }
+//           ]}
+//       ]}
+//     ]}
+//   ]
+// }
 function buildMetaComponents(tpl) {
   const components = [];
 
@@ -75,9 +94,9 @@ function buildMetaComponents(tpl) {
   // ── CAROUSEL ────────────────────────────────────────────────────────────────
   if (tpl.is_carousel && tpl.carousel_cards?.length >= 2) {
 
-    // Optional carousel-level BODY (intro text shown above the cards)
+    // Optional carousel-level body (intro text shown above the cards)
     if (tpl.body?.trim()) {
-      const comp = { type: 'BODY', text: tpl.body };
+      const comp = { type: 'body', text: tpl.body };
       const ex = buildBodyExample(tpl.body, stdVarMap);
       if (ex) comp.example = ex;
       components.push(comp);
@@ -87,82 +106,83 @@ function buildMetaComponents(tpl) {
       const cardComponents = [];
       const vm = card.var_map || {};   // per-card {{N}} → field mapping
 
-      // 1. HEADER — IMAGE is mandatory for carousel cards
-      const headerComp = { type: 'HEADER', format: 'IMAGE' };
+      // 1. header — image is mandatory for carousel cards
+      const headerComp = { type: 'header', format: 'image' };
       if (card.header_media_id) {
-        // header_handle must be the media_id returned by Meta's /media upload endpoint
+        // header_handle = the media_id returned by Meta's /media upload endpoint
         headerComp.example = { header_handle: [card.header_media_id] };
       } else {
-        console.warn(`[MetaTemplates] ⚠  Card ${cardIdx + 1}: no header_media_id — image not uploaded to Meta. Template may be REJECTED. Upload image to Gallery first.`);
+        // Warn — template will likely be REJECTED without a valid header_handle
+        console.warn(`[MetaTemplates] ⚠  Card ${cardIdx + 1}: no header_media_id — image not uploaded to Meta yet. Upload image to Gallery first.`);
       }
       cardComponents.push(headerComp);
 
-      // 2. BODY with real example values
+      // 2. body (optional per card — product title/price variables)
       if (card.body?.trim()) {
-        const comp = { type: 'BODY', text: card.body };
+        const comp = { type: 'body', text: card.body };
         const ex = buildBodyExample(card.body, vm);
         if (ex) comp.example = ex;
         cardComponents.push(comp);
       }
 
-      // 3. BUTTONS — max 2 per card (Meta spec)
+      // 3. buttons — max 2 per card (Meta spec)
       if (card.buttons?.length) {
         const buttons = card.buttons.slice(0, 2).map(b => {
-          if (b.type === 'URL') {
-            const btn = { type: 'URL', text: b.text, url: b.url };
+          const bType = String(b.type || '').toLowerCase();
+          if (bType === 'url') {
+            const btn = { type: 'url', text: b.text, url: b.url };
             const ex = buildUrlExample(b.url, vm);
-            if (ex) btn.example = ex;
+            if (ex) btn.example = ex;   // ["slug-value"] — array per Meta spec
             return btn;
           }
-          return { type: 'QUICK_REPLY', text: b.text };
+          if (bType === 'quick_reply') return { type: 'quick_reply', text: b.text };
+          if (bType === 'phone_number') return { type: 'phone_number', text: b.text, phone_number: b.phone_number };
+          return null;
         }).filter(Boolean);
-        cardComponents.push({ type: 'BUTTONS', buttons });
+        if (buttons.length) cardComponents.push({ type: 'buttons', buttons });
       }
 
       return { components: cardComponents };
     });
 
-    components.push({ type: 'CAROUSEL', cards });
+    components.push({ type: 'carousel', cards });
     return components;
   }
 
   // ── STANDARD template ────────────────────────────────────────────────────────
 
-  // HEADER
   if (tpl.header_type === 'IMAGE') {
-    components.push({ type: 'HEADER', format: 'IMAGE' });
+    components.push({ type: 'header', format: 'image' });
   } else if (tpl.header_type === 'TEXT' && tpl.header_text?.trim()) {
     const hVars = [...tpl.header_text.matchAll(/\{\{(\d+)\}\}/g)].map(m => m[1]);
-    const comp = { type: 'HEADER', format: 'TEXT', text: tpl.header_text };
+    const comp = { type: 'header', format: 'text', text: tpl.header_text };
     if (hVars.length) comp.example = { header_text: hVars.map(v => getVarExample(v, stdVarMap)) };
     components.push(comp);
   }
 
-  // BODY — with real example values from variable_labels
   if (tpl.body?.trim()) {
-    const comp = { type: 'BODY', text: tpl.body };
+    const comp = { type: 'body', text: tpl.body };
     const ex = buildBodyExample(tpl.body, stdVarMap);
     if (ex) comp.example = ex;
     components.push(comp);
   }
 
-  // FOOTER
-  if (tpl.footer?.trim()) components.push({ type: 'FOOTER', text: tpl.footer });
+  if (tpl.footer?.trim()) components.push({ type: 'footer', text: tpl.footer });
 
-  // BUTTONS
   if (tpl.buttons?.length) {
     const buttons = tpl.buttons.map(b => {
-      if (b.type === 'URL') {
-        const btn = { type: 'URL', text: b.text, url: b.url };
+      const bType = String(b.type || '').toLowerCase();
+      if (bType === 'url') {
+        const btn = { type: 'url', text: b.text, url: b.url };
         const ex = buildUrlExample(b.url, stdVarMap);
         if (ex) btn.example = ex;
         return btn;
       }
-      if (b.type === 'QUICK_REPLY')  return { type: 'QUICK_REPLY',  text: b.text };
-      if (b.type === 'PHONE_NUMBER') return { type: 'PHONE_NUMBER', text: b.text, phone_number: b.phone_number };
+      if (bType === 'quick_reply')  return { type: 'quick_reply',  text: b.text };
+      if (bType === 'phone_number') return { type: 'phone_number', text: b.text, phone_number: b.phone_number };
       return b;
     });
-    components.push({ type: 'BUTTONS', buttons });
+    components.push({ type: 'buttons', buttons });
   }
 
   return components;
@@ -245,7 +265,7 @@ export async function previewPayload(req, res) {
     const components = buildMetaComponents(tpl);
     const payload = {
       name: cleanName,
-      category: tpl.category,
+      category: (tpl.category || 'MARKETING').toLowerCase(),  // "marketing" | "utility"
       language: langMap[tpl.language] || tpl.language,
       components,
     };
@@ -308,9 +328,17 @@ function getFieldValue(varNum, varMap, productCard) {
  * This is what campaigns POST to the WhatsApp Cloud API.
  * productConfig = tpl.product_config  |  recipientPhone = '+91...'
  */
-export function buildSendMessagePayload(tpl, productConfig, recipientPhone = '{{RECIPIENT_PHONE}}') {
-  const langMap = { en: 'en_US', hi: 'hi', gu: 'gu', ta: 'ta', te: 'te', mr: 'mr', bn: 'bn', ar: 'ar', ur: 'ur' };
-  const langCode = langMap[tpl.language] || tpl.language || 'en_US';
+/**
+ * LANG MAP — short code to Meta language code (exported for use in automation)
+ */
+export const LANG_MAP = { en: 'en_US', hi: 'hi', gu: 'gu', ta: 'ta', te: 'te', mr: 'mr', bn: 'bn', ar: 'ar', ur: 'ur' };
+
+export function buildSendMessagePayload(tpl, productConfig, recipientPhone = '{{RECIPIENT_PHONE}}', languageOverride = null) {
+  // languageOverride: Meta language code e.g. 'en_US', 'hi', 'gu' — from campaign target_language
+  // Falls back to the template's own stored language
+  const langCode = languageOverride
+    ? (LANG_MAP[languageOverride] || languageOverride)   // allow short ('hi') or full ('en_US')
+    : (LANG_MAP[tpl.language] || tpl.language || 'en_US');
   const stdVarMap = Array.isArray(tpl.variable_labels) ? {} : (tpl.variable_labels || {});
   const components = [];
 
@@ -378,7 +406,8 @@ export async function getSendPayload(req, res) {
     const tpl = (db.meta_templates || []).find(t => t.id === id && t.channel_id === channelId);
     if (!tpl) return res.status(404).json({ error: 'Template not found' });
 
-    const payload = buildSendMessagePayload(tpl, tpl.product_config, req.query.to || '{{RECIPIENT_PHONE}}');
+    const langOverride = req.query.lang || null;  // e.g. ?lang=hi or ?lang=en_US
+    const payload = buildSendMessagePayload(tpl, tpl.product_config, req.query.to || '{{RECIPIENT_PHONE}}', langOverride);
     const creds = getCreds(channelId);
 
     const sendApiUrl = creds
@@ -468,7 +497,7 @@ export async function createTemplate(req, res) {
       const langMap = { en: 'en_US', hi: 'hi', gu: 'gu', ta: 'ta', te: 'te', mr: 'mr', bn: 'bn', ar: 'ar', ur: 'ur' };
       const payload = {
         name: cleanName,
-        category: tpl.category,
+        category: (tpl.category || 'MARKETING').toLowerCase(),  // Meta accepts lowercase: "marketing", "utility"
         language: langMap[tpl.language] || tpl.language,
         components,
       };

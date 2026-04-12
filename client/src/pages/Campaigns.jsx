@@ -251,13 +251,24 @@ function CreateModal({ onClose, onCreated }) {
   const [previewStage, setPreviewStage] = useState(1); // Current stage being previewed
   const [delayHrs, setDelay] = useState(1);
   const [templates, setTemplates] = useState([]);
+  const [metaTemplates, setMetaTemplates] = useState([]);   // approved carousel Meta templates
+  const [metaTemplateId, setMetaTplId] = useState("");      // selected Meta template id
+  const [metaPayloadPreview, setMetaPayloadPreview] = useState(null); // payload preview from /send-payload
   const [saving, setSaving] = useState(false);
   const [translating, setTranslating] = useState(false);
   const [translatedTpl, setTranslatedTpl] = useState(null);
   const [validationErr, setValidationErr] = useState("");
 
+  const CH = () => ({ 'x-channel-id': localStorage.getItem('channelId') || 'demo' });
+  const META_LANG_MAP = { en: 'en_US', hi: 'hi', gu: 'gu', ta: 'ta', te: 'te', mr: 'mr', bn: 'bn', ar: 'ar' };
+
   useEffect(() => {
     templatesApi.list().then(setTemplates);
+    // Load approved carousel Meta templates for product recommendation campaigns
+    fetch('/api/meta-templates', { headers: CH() })
+      .then(r => r.json())
+      .then(d => setMetaTemplates((d.templates || []).filter(t => t.is_carousel && t.meta_status === 'APPROVED')))
+      .catch(() => {});
     // Auto-detect dominant language from visitor geo analytics
     analyticsApi.topLanguage().then(data => {
       if (data?.topLang) {
@@ -266,6 +277,16 @@ function CreateModal({ onClose, onCreated }) {
       }
     }).catch(() => {});
   }, []);
+
+  // Fetch send payload preview when Meta template or language changes
+  useEffect(() => {
+    if (!metaTemplateId) { setMetaPayloadPreview(null); return; }
+    const langCode = META_LANG_MAP[language] || language;
+    fetch(`/api/meta-templates/${metaTemplateId}/send-payload?lang=${langCode}`, { headers: CH() })
+      .then(r => r.json())
+      .then(d => setMetaPayloadPreview(d))
+      .catch(() => setMetaPayloadPreview(null));
+  }, [metaTemplateId, language]);
 
   const isMultiStage = type?.id === 'abandoned_cart' || type?.id === 'abandoned_checkout' || type?.id === 'product_view';
   const activeTplId = isMultiStage ? templateIds[previewStage - 1] : templateId;
@@ -293,7 +314,7 @@ function CreateModal({ onClose, onCreated }) {
 
   const handleNextStep = () => {
     setValidationErr("");
-    
+
     if (step === 1) {
         if (!type) {
             setValidationErr("Please select a Campaign Type to proceed.");
@@ -301,6 +322,9 @@ function CreateModal({ onClose, onCreated }) {
         }
         setStep(2);
     } else if (step === 2) {
+        // If a Meta carousel template is selected, that's sufficient — no regular template needed
+        if (metaTemplateId) { setStep(3); return; }
+
         let errs = [];
         if (isMultiStage) {
             if (!templateIds[0]) errs.push("• Follow-up 1: Please select a template.");
@@ -308,7 +332,7 @@ function CreateModal({ onClose, onCreated }) {
             if (!templateIds[2]) errs.push("• Follow-up 3: Please select a template.");
             if (!templateIds[3]) errs.push("• Follow-up 4: Please select a template.");
         } else {
-            if (!templateId) errs.push("• Message Blueprint: Please select a template.");
+            if (!templateId) errs.push("• Message Blueprint: Please select a template.\n  (or select a Meta Carousel Template above)");
         }
 
         if (errs.length > 0) {
@@ -329,7 +353,8 @@ function CreateModal({ onClose, onCreated }) {
         target_segment: type.targetSegment,
         target_language: language,
         template_id: isMultiStage ? templateIds[0] : templateId,
-        template_ids: isMultiStage ? templateIds.filter(id => id !== "") : [], // 4-Stage selectable templates
+        template_ids: isMultiStage ? templateIds.filter(id => id !== "") : [],
+        meta_template_id: metaTemplateId || null,   // linked Meta carousel template
         delay_hours: delayHrs,
         is_active: true,
       });
@@ -426,14 +451,49 @@ function CreateModal({ onClose, onCreated }) {
                       </div>
                    </div>
 
-                   {(type.id === 'abandoned_cart' || type.id === 'abandoned_checkout' || type.id === 'product_view') ? (
+                   {/* ── Meta Carousel Template (product recommendation) ─────── */}
+                   {metaTemplates.length > 0 && (
+                     <div className="space-y-2">
+                       <label className="label flex items-center gap-2">
+                         <span className="text-orange-400">🎠</span> Meta Carousel Template
+                         <span className="text-[9px] bg-orange-500/10 text-orange-400 border border-orange-500/20 px-2 py-0.5 rounded-full font-bold uppercase tracking-wider">Approved</span>
+                       </label>
+                       <p className="text-[10px] text-slate-500 -mt-1">Product recommendation — sends real carousel with auto-refreshed products. Language below changes the template language code.</p>
+                       <div className="space-y-2">
+                         <button
+                           onClick={() => setMetaTplId("")}
+                           className={`w-full p-2.5 rounded-xl border text-left flex justify-between items-center transition-all text-xs ${!metaTemplateId ? 'bg-slate-700/40 border-white/10 text-slate-400' : 'border-white/5 text-slate-500 hover:border-white/10'}`}>
+                           <span>None — use regular template below</span>
+                           {!metaTemplateId && <CheckCircle size={12} className="text-slate-400"/>}
+                         </button>
+                         {metaTemplates.map(t => (
+                           <button key={t.id} onClick={() => setMetaTplId(t.id)}
+                             className={`w-full p-3 rounded-2xl border text-left flex justify-between items-center transition-all ${metaTemplateId === t.id ? 'bg-orange-500/10 border-orange-500/50 text-white' : 'border-white/5 text-slate-400 hover:border-orange-500/30 hover:bg-orange-500/5'}`}>
+                             <div>
+                               <p className="text-xs font-bold">{t.name}</p>
+                               <div className="flex items-center gap-2 mt-0.5">
+                                 <span className="text-[10px] text-orange-400">{t.carousel_cards?.length} cards</span>
+                                 {t.auto_product_mode && <span className="text-[10px] text-orange-300">· Auto-products</span>}
+                                 <span className="text-[10px] text-slate-500">· {t.language?.toUpperCase()}</span>
+                               </div>
+                             </div>
+                             {metaTemplateId === t.id && <CheckCircle size={14} className="text-orange-400"/>}
+                           </button>
+                         ))}
+                       </div>
+                     </div>
+                   )}
+
+                   {/* ── Regular templates (hidden when Meta template selected) ─── */}
+                   {!metaTemplateId && (
+                   (type.id === 'abandoned_cart' || type.id === 'abandoned_checkout' || type.id === 'product_view') ? (
                      <div className="space-y-4">
                         <label className="label">Select 4-Stage Templates</label>
                         {[0,1,2,3].map(stg => (
                            <div key={stg} className="space-y-1">
                               <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">Follow-up {stg + 1}</p>
-                              <select 
-                                value={templateIds[stg]} 
+                              <select
+                                value={templateIds[stg]}
                                 onChange={e => {
                                    const newIds = [...templateIds];
                                    newIds[stg] = e.target.value;
@@ -465,7 +525,7 @@ function CreateModal({ onClose, onCreated }) {
                            ))}
                         </div>
                      </div>
-                   )}
+                   ))}
                 </div>
                 <div className="space-y-4">
                    <label className="label flex items-center justify-between">
@@ -487,9 +547,41 @@ function CreateModal({ onClose, onCreated }) {
                       </div>
                    )}
 
-                   <WAPreview template={translatedTpl || baseTpl}/>
-                   
-                   {isMultiStage && (
+                   {/* Meta carousel template preview */}
+                   {metaTemplateId && metaPayloadPreview ? (
+                     <div className="space-y-2">
+                       <div className="p-2 bg-orange-500/5 border border-orange-500/20 rounded-xl text-[10px] text-orange-400 font-mono">
+                         POST {metaPayloadPreview.api_url || 'https://graph.facebook.com/v25.0/.../messages'}
+                       </div>
+                       <div className="flex items-center gap-2 text-[10px] text-slate-500">
+                         <span>Lang code: <span className="text-white font-mono">{metaPayloadPreview.payload?.template?.language?.code}</span></span>
+                         {metaPayloadPreview.last_refresh && (
+                           <span>· Refreshed: {new Date(metaPayloadPreview.last_refresh).toLocaleTimeString()}</span>
+                         )}
+                       </div>
+                       <div className="space-y-1 max-h-52 overflow-y-auto">
+                         {(metaPayloadPreview.products || []).filter(p => p.title).map((p, i) => (
+                           <div key={i} className="flex items-center gap-2 bg-white/[0.03] border border-white/5 rounded-lg px-2 py-1.5">
+                             {p.image && <img src={p.image} alt="" className="w-8 h-8 object-cover rounded shrink-0" onError={e=>e.target.style.display='none'}/>}
+                             <div className="flex-1 min-w-0">
+                               <p className="text-white text-[11px] font-medium truncate">Card {i+1}: {p.title}</p>
+                               {p.price && <p className="text-green-400 text-[10px]">{p.price}</p>}
+                             </div>
+                           </div>
+                         ))}
+                         {!(metaPayloadPreview.products || []).some(p => p.title) && (
+                           <p className="text-slate-500 text-[10px] py-2 text-center">Products auto-fill every 6h from trending data.</p>
+                         )}
+                       </div>
+                       <div className="bg-black/20 rounded-xl p-2 max-h-40 overflow-y-auto">
+                         <pre className="text-[10px] font-mono text-slate-400 whitespace-pre-wrap">{JSON.stringify(metaPayloadPreview.payload, null, 2)}</pre>
+                       </div>
+                     </div>
+                   ) : (
+                     <WAPreview template={translatedTpl || baseTpl}/>
+                   )}
+
+                   {isMultiStage && !metaTemplateId && (
                       <p className="text-[10px] text-slate-600 text-center uppercase tracking-widest font-bold mt-2">
                          Previewing {previewStage} of 4 stages
                       </p>

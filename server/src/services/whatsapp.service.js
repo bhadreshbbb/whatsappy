@@ -118,6 +118,42 @@ export const whatsappService = {
     return { messageId: mockId, resolvedText: messageText };
   },
 
+  /**
+   * Send a Meta approved template message (type: "template").
+   * Used for product recommendation carousel campaigns.
+   * templatePayload = output of buildSendMessagePayload() — the full body object.
+   * The "to" field is overwritten with the cleaned phone number.
+   */
+  async sendTemplateMessage(phone, templatePayload) {
+    const clean = String(phone).replace(/\D/g, '');
+    const to = clean.startsWith('91') ? clean : `91${clean}`;
+    const creds = getCredentials();
+
+    const body = { ...templatePayload, to };
+
+    if (creds) {
+      const tplName = templatePayload?.template?.name || 'unknown';
+      const langCode = templatePayload?.template?.language?.code || 'en_US';
+      console.log(`[WhatsApp] Template "${tplName}" (${langCode}) → ${to}`);
+      console.log('[WhatsApp] Template payload:', JSON.stringify(body, null, 2));
+      try {
+        const result = await callMetaApi(creds.phoneId, creds.token, body);
+        console.log(`[WhatsApp] ✓ Template sent wamid: ${result.wamid}`);
+        return { messageId: result.wamid, resolvedText: `[Carousel: ${tplName}]`, wamid: result.wamid };
+      } catch (err) {
+        console.error(`[WhatsApp] ✗ Template send failed for ${to}:`, err.message);
+        return { messageId: null, resolvedText: `[Carousel: ${tplName}]` };
+      }
+    }
+
+    // Simulation mode — no real credentials
+    const tplName = templatePayload?.template?.name || 'carousel';
+    const mockId = `tpl_${Date.now()}_${Math.random().toString(36).substr(2, 8)}`;
+    console.log(`[WhatsApp SIM] Template "${tplName}" → ${to}`);
+    console.log('[WhatsApp SIM] Payload:', JSON.stringify(body, null, 2));
+    return { messageId: mockId, resolvedText: `[Carousel: ${tplName}]` };
+  },
+
   // kept for backward compat
   async sendTemplate(phone, templateName, language, components) {
     console.log(`[WhatsApp] Template "${templateName}" → ${phone}`);
