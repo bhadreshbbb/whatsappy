@@ -598,7 +598,9 @@ export async function createTemplate(req, res) {
       console.log('[MetaTemplates] META RESPONSE:', JSON.stringify(metaData, null, 2));
       if (metaRes.ok && metaData.id) {
         tpl.meta_template_id = metaData.id;
-        tpl.meta_status = metaData.status || 'PENDING';
+        // Meta can return "ACTIVE" (= approved) immediately for some accounts
+        const rawStatus = metaData.status || 'PENDING';
+        tpl.meta_status = rawStatus === 'ACTIVE' ? 'APPROVED' : rawStatus;
         tpl.submitted_at = new Date().toISOString();
         console.log(`[MetaTemplates] Submitted "${cleanName}" → id: ${metaData.id}`);
       } else {
@@ -641,7 +643,9 @@ export async function refreshStatus(req, res) {
 
     if (metaRes.ok && metaData.data?.length) {
       const found = metaData.data.find(t => t.name === tpl.name) || metaData.data[0];
-      tpl.meta_status = found.status;
+      // Meta returns "ACTIVE" for approved templates — normalise to "APPROVED" for consistency
+      const rawStatus = found.status || '';
+      tpl.meta_status = rawStatus === 'ACTIVE' ? 'APPROVED' : rawStatus;
       if (found.id) tpl.meta_template_id = found.id;
       if (found.rejected_reason) tpl.rejected_reason = found.rejected_reason;
       db.save();
