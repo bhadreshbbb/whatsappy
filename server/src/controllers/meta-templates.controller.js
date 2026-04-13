@@ -47,23 +47,24 @@ function getVarExample(varNum, varMap) {
 
 /**
  * Build body_text example for Meta — { body_text: [["val1","val2","val3"]] }
- * One inner array per message variant; Meta standard is exactly one variant.
+ * Prefers real product example_values filled by user/auto-detect over generic fallbacks.
  */
-function buildBodyExample(text, varMap) {
+function buildBodyExample(text, varMap, exampleValues = {}) {
   const vars = [...(text || '').matchAll(/\{\{(\d+)\}\}/g)].map(m => m[1]);
   if (!vars.length) return null;
-  return { body_text: [vars.map(v => getVarExample(v, varMap))] };
+  return { body_text: [vars.map(v => String(exampleValues[v] || '').trim() || getVarExample(v, varMap))] };
 }
 
 /**
  * Build URL button example for Meta.
- * Meta format: example = ["slug-val"]  — one entry per {{N}} in the URL (NOT the full URL).
+ * Meta format: example = ["slug-val"]  — just the variable VALUE, not the full URL.
  * e.g.  url: "https://store.com/{{1}}"  →  example: ["blue-cotton-kurti"]
+ * Uses original var numbers (before {{1}} normalisation) to look up values.
  */
-function buildUrlExample(url, varMap) {
+function buildUrlExample(url, varMap, exampleValues = {}) {
   const vars = [...(url || '').matchAll(/\{\{(\d+)\}\}/g)].map(m => m[1]);
   if (!vars.length) return null;
-  return vars.map(v => getVarExample(v, varMap));
+  return vars.map(v => String(exampleValues[v] || '').trim() || getVarExample(v, varMap));
 }
 
 // ── Build Meta API components — v25.0 compliant ──────────────────────────────
@@ -105,35 +106,45 @@ function buildMetaComponents(tpl) {
 
     const cards = tpl.carousel_cards.map((card, cardIdx) => {
       const cardComponents = [];
-      const vm = card.var_map || {};   // per-card {{N}} → field mapping
+      const vm  = card.var_map || {};          // per-card {{N}} → field mapping
+      const exV = card.example_values || {};   // actual product values filled by user/auto-detect
 
       // 1. header — image is mandatory for carousel cards
-      // header_handle must be the real Meta media_id returned by /media upload endpoint
       const headerComp = { type: 'header', format: 'image' };
       if (card.header_media_id) {
         headerComp.example = { header_handle: [String(card.header_media_id)] };
-        console.log(`[MetaTemplates] Card ${cardIdx + 1} header_handle = "${card.header_media_id}" (dynamic from media upload)`);
+        console.log(`[MetaTemplates] Card ${cardIdx + 1} header_handle = "${card.header_media_id}"`);
       } else {
-        console.warn(`[MetaTemplates] ⚠  Card ${cardIdx + 1}: header_media_id missing — header_handle will be absent. Upload image to Gallery first.`);
+        console.warn(`[MetaTemplates] ⚠  Card ${cardIdx + 1}: header_media_id missing — upload image to Gallery first.`);
       }
       cardComponents.push(headerComp);
 
-      // 2. body (optional per card — product title/price variables)
+      // 2. body — use real example_values so Meta reviewers see meaningful content
       if (card.body?.trim()) {
         const comp = { type: 'body', text: card.body };
-        const ex = buildBodyExample(card.body, vm);
+        const ex = buildBodyExample(card.body, vm, exV);
         if (ex) comp.example = ex;
         cardComponents.push(comp);
       }
 
       // 3. buttons — max 2 per card (Meta spec)
+      // CRITICAL: Meta requires URL button variable to always be {{1}} (button-scoped).
+      // We store {{3}} internally (to track which var_map entry = product_link),
+      // but normalise to {{1}} in the Meta payload.
       if (card.buttons?.length) {
         const buttons = card.buttons.slice(0, 2).map(b => {
           const bType = String(b.type || '').toLowerCase();
           if (bType === 'url') {
-            const btn = { type: 'url', text: b.text, url: b.url };
-            const ex = buildUrlExample(b.url, vm);
-            if (ex) btn.example = ex;   // ["slug-value"] — array per Meta spec
+            // Collect original var numbers BEFORE normalisation (for example lookup)
+            const origVars = [...(b.url || '').matchAll(/\{\{(\d+)\}\}/g)].map(m => m[1]);
+            // Normalise: replace any {{N}} → {{1}}  (Meta button-variable scope rule)
+            const normalizedUrl = (b.url || '').replace(/\{\{\d+\}\}/g, '{{1}}');
+            const btn = { type: 'url', text: b.text, url: normalizedUrl };
+            if (origVars.length) {
+              // example = [slug_value] — the value that replaces {{1}} at send time
+              const exVal = String(exV[origVars[0]] || '').trim() || getVarExample(origVars[0], vm);
+              btn.example = [exVal];
+            }
             return btn;
           }
           if (bType === 'quick_reply') return { type: 'quick_reply', text: b.text };
@@ -394,12 +405,22 @@ export function buildSendMessagePayload(tpl, productConfig, recipientPhone = '{{
   // Carousel cards
   if (tpl.is_carousel && tpl.carousel_cards?.length) {
     const cards = tpl.carousel_cards.map((card, i) => {
-      const pc = (productConfig?.cards || [])[i] || {};
-      const vm = card.var_map || {};
+      const pc  = (productConfig?.cards || [])[i] || {};
+      const vm  = card.var_map || {};
+      const exV = card.example_values || {};
       const cardComponents = [];
 
-      // Header image — use Meta media_id (preferred) or public image URL
-      const imgId  = pc.header_media_id || card.header_media_id || '';
+      // Merged product data: product_config > card.product_data (auto-fill fallback)
+      // This ensures price/title/link are always dynamic even before product_config is saved
+      const pd = {
+        title: pc.title || card.product_data?.title || '',
+        price: pc.price || card.product_data?.price || '',
+        link:  pc.link  || card.product_data?.link  || '',
+        ...pc,
+      };
+
+      // Header image — file_handle (resumable) > media_id > public URL
+      const imgId  = pc.file_handle || pc.header_media_id || card.file_handle || card.header_media_id || '';
       const imgUrl = pc._hot_image_url || pc.image_url || card.product_data?.image_url || '';
       if (imgId) {
         cardComponents.push({ type: 'header', parameters: [{ type: 'image', image: { id: imgId } }] });
@@ -407,19 +428,27 @@ export function buildSendMessagePayload(tpl, productConfig, recipientPhone = '{{
         cardComponents.push({ type: 'header', parameters: [{ type: 'image', image: { link: imgUrl } }] });
       }
 
-      // Body text parameters (one per {{N}} variable)
+      // Body text parameters — resolve each {{N}} via var_map against merged product data
       if (card.body?.trim()) {
         const vars = [...card.body.matchAll(/\{\{(\d+)\}\}/g)].map(m => m[1]);
         if (vars.length > 0) {
-          cardComponents.push({ type: 'body', parameters: vars.map(v => ({ type: 'text', text: getFieldValue(v, vm, pc) })) });
+          const params = vars.map(v => {
+            const val = getFieldValue(v, vm, pd) || String(exV[v] || '');
+            return { type: 'text', text: val };
+          });
+          cardComponents.push({ type: 'body', parameters: params });
         }
       }
 
-      // URL button parameters (variable slug substitution)
+      // URL button parameters — {{N}} in stored URL resolves via var_map to product field.
+      // At send time the button expects exactly 1 parameter for its {{1}} (normalised at creation).
       (card.buttons || []).slice(0, 2).forEach((btn, bi) => {
         if (String(btn.type || '').toLowerCase() === 'url' && btn.url?.includes('{{')) {
           const urlVars = [...btn.url.matchAll(/\{\{(\d+)\}\}/g)].map(m => m[1]);
-          cardComponents.push({ type: 'button', sub_type: 'url', index: String(bi), parameters: urlVars.map(v => ({ type: 'text', text: getFieldValue(v, vm, pc) })) });
+          const paramVal = getFieldValue(urlVars[0], vm, pd) || String(exV[urlVars[0]] || '');
+          if (paramVal) {
+            cardComponents.push({ type: 'button', sub_type: 'url', index: String(bi), parameters: [{ type: 'text', text: paramVal }] });
+          }
         }
       });
 
