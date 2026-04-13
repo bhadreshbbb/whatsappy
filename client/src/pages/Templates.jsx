@@ -32,11 +32,12 @@ const LANGUAGES = [
   { value: 'bn', label: '🇧🇩 Bengali' }, { value: 'ar', label: '🇦🇪 Arabic'  },
 ];
 const VAR_FIELD_OPTIONS = [
-  { value: 'product_title', label: 'Product Title'  },
-  { value: 'product_price', label: 'Product Price'  },
-  { value: 'product_link',  label: 'Product Link'   },
-  { value: 'customer_name', label: 'Customer Name'  },
-  { value: 'cart_total',    label: 'Cart Total'     },
+  { value: 'product_title',       label: 'Product Title'              },
+  { value: 'product_price',       label: 'Product Price'              },
+  { value: 'product_title_price', label: 'Title + Price (compact) ✦'  },
+  { value: 'product_link',        label: 'Product Link'               },
+  { value: 'customer_name',       label: 'Customer Name'              },
+  { value: 'cart_total',          label: 'Cart Total'                 },
   { value: 'cart_link',     label: 'Cart Link'      },
   { value: 'custom',        label: 'Custom Fixed Text' },
 ];
@@ -80,6 +81,7 @@ function resolveText(bodyText, varMap, productData, sampleData) {
   const lookup = {
     product_title: productData?.title || sampleData?.title || 'Product Name',
     product_price: productData?.price || sampleData?.price || '₹999',
+    product_title_price: `${productData?.title || sampleData?.title || 'Product Name'}\n${productData?.price || sampleData?.price || '₹999'}`,
     product_link:  productData?.link  || sampleData?.link  || 'https://store.com/product',
     customer_name: 'Priya',
     cart_total:    '₹1,499',
@@ -568,12 +570,13 @@ function CreateView({ form, setForm, error, setError, loading, onSubmit, onBack,
     const card  = cards[idx];
     const pd    = card.product_data || {};
     const fieldToValue = {
-      product_title: pd.title  || '',
-      product_price: pd.price  || '',
-      product_link:  pd.link   || '',
-      customer_name: 'Customer',
-      cart_total:    pd.cart_total || '',
-      cart_link:     pd.link   || '',
+      product_title:       pd.title  || '',
+      product_price:       pd.price  || '',
+      product_title_price: pd.title && pd.price ? `${pd.title}\n${pd.price}` : (pd.title || pd.price || ''),
+      product_link:        pd.link   || '',
+      customer_name:       'Customer',
+      cart_total:          pd.cart_total || '',
+      cart_link:           pd.link   || '',
     };
     const autoEx = fieldToValue[val] || '';
     cards[idx] = {
@@ -597,9 +600,14 @@ function CreateView({ form, setForm, error, setError, loading, onSubmit, onBack,
     const varMap = card.var_map || {};
     const exVals = { ...(card.example_values || {}) };
     for (const [vn, field] of Object.entries(varMap)) {
-      if (field === 'product_title' && patch.title  !== undefined) exVals[vn] = patch.title;
-      if (field === 'product_price' && patch.price  !== undefined) exVals[vn] = patch.price;
-      if (field === 'product_link'  && patch.link   !== undefined) exVals[vn] = patch.link;
+      if (field === 'product_title' && patch.title !== undefined) exVals[vn] = patch.title;
+      if (field === 'product_price' && patch.price !== undefined) exVals[vn] = patch.price;
+      if (field === 'product_link'  && patch.link  !== undefined) exVals[vn] = patch.link;
+      if (field === 'product_title_price' && (patch.title !== undefined || patch.price !== undefined)) {
+        const t = patch.title !== undefined ? patch.title : newPd.title || '';
+        const p = patch.price !== undefined ? patch.price : newPd.price || '';
+        exVals[vn] = t && p ? `${t}\n${p}` : (t || p);
+      }
     }
     const updates = { product_data: newPd, example_values: exVals };
     if (patch.fetched_images        !== undefined) updates.fetched_images       = patch.fetched_images;

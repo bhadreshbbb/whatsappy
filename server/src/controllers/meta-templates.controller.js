@@ -26,12 +26,13 @@ function getCreds(channelId) {
 // ── Variable example values — Meta reviewers see these; use realistic strings ──
 // Mapped from the var_map field options so Meta understands what each {{N}} is.
 const FIELD_EXAMPLES = {
-  product_title:  'Blue Cotton Kurti',
-  product_price:  '₹799',
-  product_link:   'blue-cotton-kurti',
-  customer_name:  'Priya Sharma',
-  cart_total:     '₹1,499',
-  cart_link:      'cart-abc123',
+  product_title:       'Blue Cotton Kurti',
+  product_price:       '₹799',
+  product_title_price: 'Blue Cotton Kurti\n₹799',   // compact: title + newline + price in one var
+  product_link:        'blue-cotton-kurti',
+  customer_name:       'Priya Sharma',
+  cart_total:          '₹1,499',
+  cart_link:           'cart-abc123',
 };
 
 /**
@@ -358,8 +359,14 @@ function getFieldValue(varNum, varMap, productCard) {
   const field = (varMap || {})[String(varNum)];
   if (!field) return '';
   switch (field) {
-    case 'product_title':  return productCard?.title  || '';
-    case 'product_price':  return productCard?.price  || '';
+    case 'product_title':       return productCard?.title  || '';
+    case 'product_price':       return productCard?.price  || '';
+    case 'product_title_price': {
+      // Compact: title + newline + price in a single variable
+      const t = productCard?.title || '';
+      const p = productCard?.price || '';
+      return t && p ? `${t}\n${p}` : (t || p);
+    }
     case 'product_link': {
       const link = productCard?.link || '';
       // URL buttons expect just the variable segment (slug), not the full URL
