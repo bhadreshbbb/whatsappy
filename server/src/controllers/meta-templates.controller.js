@@ -9,14 +9,15 @@ function getCreds(channelId) {
   const token = process.env.WHATSAPP_TOKEN;
   const phoneId = process.env.WHATSAPP_PHONE_ID;
   const wabaId = process.env.WHATSAPP_BUSINESS_ID;
-  if (token && phoneId && wabaId) return { token, phoneId, wabaId };
+  const appId  = process.env.WHATSAPP_APP_ID;
+  if (token && phoneId && wabaId) return { token, phoneId, wabaId, appId: appId || null };
   try {
     const db = getDb();
     const row = db.channel_settings.find(s => s.channel_id === channelId)
       || db.channel_settings[0];
     const s = JSON.parse(row?.settings || '{}');
     if (s?.whatsapp_token && s?.whatsapp_phone_id && s?.whatsapp_business_id) {
-      return { token: s.whatsapp_token, phoneId: s.whatsapp_phone_id, wabaId: s.whatsapp_business_id };
+      return { token: s.whatsapp_token, phoneId: s.whatsapp_phone_id, wabaId: s.whatsapp_business_id, appId: s.whatsapp_app_id || null };
     }
   } catch (_) { }
   return null;
@@ -206,23 +207,33 @@ async function autoUploadTemplateImages(channelId, carouselCards) {
   for (let i = 0; i < updatedCards.length; i++) {
     const card = updatedCards[i];
 
-    // ── Priority 1: already have a valid Meta media_id — nothing to do ──────
+    // ── Priority 1: already have a file_handle (resumable upload) — use it ───
+    if (card.file_handle) {
+      console.log(`[AutoUpload] Card ${i + 1}: using existing file_handle = ${card.file_handle}`);
+      updatedCards[i] = { ...card, header_media_id: card.file_handle };
+      continue;
+    }
+
+    // ── Priority 2: header_media_id already set (legacy or manual) ───────────
     if (card.header_media_id) {
       console.log(`[AutoUpload] Card ${i + 1}: using existing header_media_id = ${card.header_media_id}`);
       continue;
     }
 
-    // ── Priority 2: card has a gallery image_id — look up media_id from DB ──
+    // ── Priority 3: gallery image_id — look up file_handle or media_id from DB
     if (card.image_id) {
       const galleryImg = (db.gallery_images || []).find(img => img.id === card.image_id && img.channel_id === channelId);
-      if (galleryImg?.media_id) {
-        updatedCards[i] = { ...card, header_media_id: galleryImg.media_id };
-        console.log(`[AutoUpload] Card ${i + 1}: resolved media_id from gallery image_id ${card.image_id} → ${galleryImg.media_id}`);
-        continue;
+      if (galleryImg) {
+        const handle = galleryImg.file_handle || galleryImg.media_id || '';
+        if (handle) {
+          updatedCards[i] = { ...card, header_media_id: handle };
+          console.log(`[AutoUpload] Card ${i + 1}: resolved from gallery image_id ${card.image_id} → handle = ${handle}`);
+          continue;
+        }
       }
     }
 
-    // ── Priority 3: external image URL — download + upload to Meta ──────────
+    // ── Priority 4: external image URL — download + resumable upload to Meta ─
     const externalUrl = card.selected_fetch_image || card.product_data?.image_url || '';
     if (externalUrl) {
       let imageUrl = externalUrl;
@@ -233,24 +244,23 @@ async function autoUploadTemplateImages(channelId, carouselCards) {
       }
       try {
         const { buffer, mimeType } = await whatsappService.downloadImage(imageUrl);
-        const filename = `auto_${Date.now()}_${i}.jpg`;
+        const filename = `auto_card${i + 1}_${Date.now()}.jpg`;
 
-        // Upload to Meta media endpoint → get real media_id
-        const mediaId = await whatsappService.uploadMedia(buffer, filename, mimeType);
+        // Use resumable upload API → returns file_handle like "4:abcXYZ..."
+        const fileHandle = await whatsappService.uploadMediaResumable(buffer, filename, mimeType);
 
-        // Save to Gallery so it can be reused
+        // Save to Gallery for reuse
         const image = {
           id: uuidv4(), folder_id: folder.id, channel_id: channelId,
           filename, mime_type: mimeType, size: buffer.length,
-          media_id: mediaId, source_url: externalUrl,
+          file_handle: fileHandle, source_url: externalUrl,
           created_at: new Date().toISOString(),
         };
         if (!db.gallery_images) db.gallery_images = [];
         db.gallery_images.push(image);
 
-        // Patch card: set both image_id (gallery) and header_media_id (Meta)
-        updatedCards[i] = { ...card, image_id: image.id, header_media_id: mediaId };
-        console.log(`[AutoUpload] Card ${i + 1}: uploaded "${externalUrl}" → media_id = ${mediaId}`);
+        updatedCards[i] = { ...card, image_id: image.id, file_handle: fileHandle, header_media_id: fileHandle };
+        console.log(`[AutoUpload] Card ${i + 1}: uploaded → file_handle = ${fileHandle}`);
       } catch (err) {
         console.error(`[AutoUpload] Card ${i + 1}: upload failed — ${err.message}`);
         throw new Error(`Failed to upload image for card ${i + 1}: ${err.message}`);
@@ -259,7 +269,7 @@ async function autoUploadTemplateImages(channelId, carouselCards) {
     }
 
     // ── No image source at all ───────────────────────────────────────────────
-    console.warn(`[AutoUpload] Card ${i + 1}: no image source (no header_media_id, image_id, or external URL) — header_handle will be missing`);
+    console.warn(`[AutoUpload] Card ${i + 1}: no image source — header_handle will be missing`);
   }
 
   db.save();

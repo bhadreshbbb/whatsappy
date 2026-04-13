@@ -122,8 +122,13 @@ export default function Settings() {
               <input className="input font-mono" placeholder="e.g. 123456789012345" value={settings.whatsapp_phone_id||""} onChange={e=>s("whatsapp_phone_id",e.target.value)}/>
             </div>
             <div>
-              <label className="label">Business Account ID</label>
+              <label className="label">Business Account ID (WABA ID)</label>
               <input className="input font-mono" placeholder="e.g. 987654321098765" value={settings.whatsapp_business_id||""} onChange={e=>s("whatsapp_business_id",e.target.value)}/>
+            </div>
+            <div>
+              <label className="label">App ID <span className="text-slate-500 font-normal text-xs ml-1">(required for template image upload)</span></label>
+              <input className="input font-mono" placeholder="e.g. 123456789" value={settings.whatsapp_app_id||""} onChange={e=>s("whatsapp_app_id",e.target.value)}/>
+              <p className="text-slate-600 text-xs mt-1">Find it at developers.facebook.com → your app → App ID</p>
             </div>
             <div>
               <label className="label">Permanent Access Token</label>

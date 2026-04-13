@@ -138,8 +138,18 @@ export async function uploadImage(req, res) {
 
     const { originalname, mimetype, buffer, size } = req.file;
 
-    // Upload to Meta and get media ID using shared service
-    const mediaId = await whatsappService.uploadMedia(buffer, originalname, mimetype);
+    // Try resumable upload (returns file_handle "4:abcXYZ..." for template header_handle)
+    // Falls back to regular media upload if App ID not configured
+    let fileHandle = null;
+    let mediaId = null;
+    try {
+      fileHandle = await whatsappService.uploadMediaResumable(buffer, originalname, mimetype);
+      console.log(`[Gallery] Resumable upload → file_handle: ${fileHandle}`);
+    } catch (resumableErr) {
+      console.warn(`[Gallery] Resumable upload failed (${resumableErr.message}), falling back to /media upload`);
+      mediaId = await whatsappService.uploadMedia(buffer, originalname, mimetype);
+      console.log(`[Gallery] /media upload → media_id: ${mediaId}`);
+    }
 
     const image = {
       id: uuidv4(),
@@ -148,7 +158,8 @@ export async function uploadImage(req, res) {
       filename: originalname,
       mime_type: mimetype,
       size,
-      media_id: mediaId,
+      file_handle: fileHandle,   // preferred — used in template header_handle
+      media_id: mediaId,         // fallback / used for previewImage
       created_at: new Date().toISOString(),
     };
 
@@ -241,8 +252,17 @@ export async function importImageFromUrl(req, res) {
       filename = p.split('?')[0] || 'product.jpg';
     } catch (_) {}
 
-    // Upload to Meta media endpoint to obtain a media_id for template header_handle
-    const mediaId = await whatsappService.uploadMedia(buffer, filename, mimeType);
+    // Try resumable upload (returns file_handle for template header_handle)
+    let fileHandle = null;
+    let mediaId = null;
+    try {
+      fileHandle = await whatsappService.uploadMediaResumable(buffer, filename, mimeType);
+      console.log(`[Gallery] Import resumable upload → file_handle: ${fileHandle}`);
+    } catch (resumableErr) {
+      console.warn(`[Gallery] Resumable upload failed (${resumableErr.message}), falling back to /media upload`);
+      mediaId = await whatsappService.uploadMedia(buffer, filename, mimeType);
+      console.log(`[Gallery] Import /media upload → media_id: ${mediaId}`);
+    }
 
     if (!db.gallery_images) db.gallery_images = [];
     const image = {
@@ -252,7 +272,8 @@ export async function importImageFromUrl(req, res) {
       filename,
       mime_type: mimeType,
       size: buffer.length,
-      media_id: mediaId,
+      file_handle: fileHandle,   // preferred for template header_handle
+      media_id: mediaId,         // fallback
       source_url: image_url,
       created_at: new Date().toISOString(),
     };
@@ -260,7 +281,7 @@ export async function importImageFromUrl(req, res) {
     db.gallery_images.push(image);
     db.save();
 
-    console.log(`[Gallery] Imported image from ${imageUrl} → media_id: ${mediaId}`);
+    console.log(`[Gallery] Imported from ${imageUrl} → handle: ${fileHandle || mediaId}`);
     res.json({ image });
   } catch (err) {
     console.error('[Gallery] Import URL error:', err.message);

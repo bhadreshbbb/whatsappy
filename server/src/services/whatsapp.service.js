@@ -14,14 +14,15 @@ function getCredentials() {
   // Check env first, then fall back to channel settings in DB
   const token   = process.env.WHATSAPP_TOKEN;
   const phoneId = process.env.WHATSAPP_PHONE_ID;
-  if (token && phoneId) return { token, phoneId };
+  const appId   = process.env.WHATSAPP_APP_ID;
+  if (token && phoneId) return { token, phoneId, appId: appId || null };
 
   try {
     const db = getDb();
     const row = db.channel_settings[0];
     const s = JSON.parse(row?.settings || '{}');
     if (s?.whatsapp_token && s?.whatsapp_phone_id) {
-      return { token: s.whatsapp_token, phoneId: s.whatsapp_phone_id };
+      return { token: s.whatsapp_token, phoneId: s.whatsapp_phone_id, appId: s.whatsapp_app_id || null };
     }
   } catch (_) {}
   return null;
@@ -180,6 +181,65 @@ export const whatsappService = {
     const data = await res.json();
     if (!res.ok) throw new Error(`Meta Media API error: ${JSON.stringify(data?.error || data)}`);
     return data.id;
+  },
+
+  /**
+   * Upload image via Meta Resumable Upload API (2-step).
+   * Returns a file_handle like "4:abcXYZ..." for use in template header_handle.
+   * Requires App ID (whatsapp_app_id in Settings).
+   *
+   * Step 1: POST /{APP_ID}/uploads  → upload session id
+   * Step 2: POST /{sessionId}       → file handle "h"
+   */
+  async uploadMediaResumable(buffer, filename, mimeType) {
+    const creds = getCredentials();
+    if (!creds) throw new Error('WhatsApp credentials not configured.');
+    if (!creds.appId) throw new Error('App ID not configured. Add it in Settings → WhatsApp → App ID.');
+
+    // Step 1 — create upload session
+    const sessionRes = await fetch(
+      `https://graph.facebook.com/v25.0/${creds.appId}/uploads`,
+      {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${creds.token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          file_name: filename,
+          file_type: mimeType,
+          file_length: buffer.length,
+        }),
+      }
+    );
+    const sessionData = await sessionRes.json();
+    if (!sessionRes.ok || !sessionData.id) {
+      throw new Error(`Resumable upload session failed: ${JSON.stringify(sessionData?.error || sessionData)}`);
+    }
+    const uploadSessionId = sessionData.id; // e.g. "upload:XXXXXXX"
+    console.log(`[WhatsApp] Resumable upload session: ${uploadSessionId}`);
+
+    // Step 2 — upload file bytes
+    const uploadRes = await fetch(
+      `https://graph.facebook.com/v25.0/${uploadSessionId}`,
+      {
+        method: 'POST',
+        headers: {
+          'Authorization': `OAuth ${creds.token}`,
+          'file_offset': '0',
+          'Content-Type': mimeType,
+        },
+        body: buffer,
+      }
+    );
+    const uploadData = await uploadRes.json();
+    if (!uploadRes.ok || !uploadData.h) {
+      throw new Error(`Resumable upload failed: ${JSON.stringify(uploadData?.error || uploadData)}`);
+    }
+
+    const fileHandle = uploadData.h; // e.g. "4:abcXYZ..."
+    console.log(`[WhatsApp] Resumable upload complete → file_handle: ${fileHandle}`);
+    return fileHandle;
   },
 
   async downloadImage(url) {
