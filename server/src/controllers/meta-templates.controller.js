@@ -69,20 +69,21 @@ function buildUrlExample(url, varMap, exampleValues = {}) {
 }
 
 // ── Build Meta API components — v25.0 compliant ──────────────────────────────
-// All type/format values are lowercase to match Meta's documented API format exactly.
+// Meta template creation API requires UPPERCASE type/format values.
+// Message send API uses lowercase — these are different APIs!
 //
 // Template creation payload structure (carousel):
 // {
-//   "name": "...", "language": "en_US", "category": "marketing",
+//   "name": "...", "language": "en_US", "category": "MARKETING",
 //   "components": [
-//     { "type": "body", "text": "...", "example": { "body_text": [["val1","val2"]] } },
-//     { "type": "carousel", "cards": [
+//     { "type": "BODY", "text": "...", "example": { "body_text": [["val1","val2"]] } },
+//     { "type": "CAROUSEL", "cards": [
 //       { "components": [
-//           { "type": "header", "format": "image", "example": { "header_handle": ["<media_id>"] } },
-//           { "type": "body",   "text": "...",     "example": { "body_text": [["val1","val2"]] } },
-//           { "type": "buttons","buttons": [
-//               { "type": "quick_reply", "text": "..." },
-//               { "type": "url", "text": "...", "url": "https://...{{1}}", "example": ["slug"] }
+//           { "type": "HEADER", "format": "IMAGE", "example": { "header_handle": ["<file_handle>"] } },
+//           { "type": "BODY",   "text": "...",     "example": { "body_text": [["val1","val2"]] } },
+//           { "type": "BUTTONS","buttons": [
+//               { "type": "QUICK_REPLY", "text": "..." },
+//               { "type": "URL", "text": "...", "url": "https://...{{1}}", "example": ["slug"] }
 //           ]}
 //       ]}
 //     ]}
@@ -100,7 +101,7 @@ function buildMetaComponents(tpl) {
     // REQUIRED carousel-level body (Meta mandates a top-level BODY for carousel templates)
     // If the user left it blank, use a sensible default so Meta doesn't reject.
     const bodyText = tpl.body?.trim() || 'Check out our latest products for you!';
-    const bodyComp = { type: 'body', text: bodyText };
+    const bodyComp = { type: 'BODY', text: bodyText };
     const bodyEx = buildBodyExample(bodyText, stdVarMap);
     if (bodyEx) bodyComp.example = bodyEx;
     components.push(bodyComp);
@@ -110,8 +111,8 @@ function buildMetaComponents(tpl) {
       const vm  = card.var_map || {};          // per-card {{N}} → field mapping
       const exV = card.example_values || {};   // actual product values filled by user/auto-detect
 
-      // 1. header — image is mandatory for carousel cards
-      const headerComp = { type: 'header', format: 'image' };
+      // 1. HEADER — image is mandatory for carousel cards
+      const headerComp = { type: 'HEADER', format: 'IMAGE' };
       if (card.header_media_id) {
         headerComp.example = { header_handle: [String(card.header_media_id)] };
         console.log(`[MetaTemplates] Card ${cardIdx + 1} header_handle = "${card.header_media_id}"`);
@@ -120,27 +121,27 @@ function buildMetaComponents(tpl) {
       }
       cardComponents.push(headerComp);
 
-      // 2. body — use real example_values so Meta reviewers see meaningful content
+      // 2. BODY — use real example_values so Meta reviewers see meaningful content
       if (card.body?.trim()) {
-        const comp = { type: 'body', text: card.body };
+        const comp = { type: 'BODY', text: card.body };
         const ex = buildBodyExample(card.body, vm, exV);
         if (ex) comp.example = ex;
         cardComponents.push(comp);
       }
 
-      // 3. buttons — max 2 per card (Meta spec)
+      // 3. BUTTONS — max 2 per card (Meta spec)
       // CRITICAL: Meta requires URL button variable to always be {{1}} (button-scoped).
       // We store {{3}} internally (to track which var_map entry = product_link),
       // but normalise to {{1}} in the Meta payload.
       if (card.buttons?.length) {
         const buttons = card.buttons.slice(0, 2).map(b => {
-          const bType = String(b.type || '').toLowerCase();
-          if (bType === 'url') {
+          const bType = String(b.type || '').toUpperCase();
+          if (bType === 'URL') {
             // Collect original var numbers BEFORE normalisation (for example lookup)
             const origVars = [...(b.url || '').matchAll(/\{\{(\d+)\}\}/g)].map(m => m[1]);
             // Normalise: replace any {{N}} → {{1}}  (Meta button-variable scope rule)
             const normalizedUrl = (b.url || '').replace(/\{\{\d+\}\}/g, '{{1}}');
-            const btn = { type: 'url', text: b.text, url: normalizedUrl };
+            const btn = { type: 'URL', text: b.text, url: normalizedUrl };
             if (origVars.length) {
               // example = [slug_value] — the value that replaces {{1}} at send time
               const exVal = String(exV[origVars[0]] || '').trim() || getVarExample(origVars[0], vm);
@@ -148,54 +149,54 @@ function buildMetaComponents(tpl) {
             }
             return btn;
           }
-          if (bType === 'quick_reply') return { type: 'quick_reply', text: b.text };
-          if (bType === 'phone_number') return { type: 'phone_number', text: b.text, phone_number: b.phone_number };
+          if (bType === 'QUICK_REPLY') return { type: 'QUICK_REPLY', text: b.text };
+          if (bType === 'PHONE_NUMBER') return { type: 'PHONE_NUMBER', text: b.text, phone_number: b.phone_number };
           return null;
         }).filter(Boolean);
-        if (buttons.length) cardComponents.push({ type: 'buttons', buttons });
+        if (buttons.length) cardComponents.push({ type: 'BUTTONS', buttons });
       }
 
       return { components: cardComponents };
     });
 
-    components.push({ type: 'carousel', cards });
+    components.push({ type: 'CAROUSEL', cards });
     return components;
   }
 
   // ── STANDARD template ────────────────────────────────────────────────────────
 
   if (tpl.header_type === 'IMAGE') {
-    components.push({ type: 'header', format: 'image' });
+    components.push({ type: 'HEADER', format: 'IMAGE' });
   } else if (tpl.header_type === 'TEXT' && tpl.header_text?.trim()) {
     const hVars = [...tpl.header_text.matchAll(/\{\{(\d+)\}\}/g)].map(m => m[1]);
-    const comp = { type: 'header', format: 'text', text: tpl.header_text };
+    const comp = { type: 'HEADER', format: 'TEXT', text: tpl.header_text };
     if (hVars.length) comp.example = { header_text: hVars.map(v => getVarExample(v, stdVarMap)) };
     components.push(comp);
   }
 
   if (tpl.body?.trim()) {
-    const comp = { type: 'body', text: tpl.body };
+    const comp = { type: 'BODY', text: tpl.body };
     const ex = buildBodyExample(tpl.body, stdVarMap);
     if (ex) comp.example = ex;
     components.push(comp);
   }
 
-  if (tpl.footer?.trim()) components.push({ type: 'footer', text: tpl.footer });
+  if (tpl.footer?.trim()) components.push({ type: 'FOOTER', text: tpl.footer });
 
   if (tpl.buttons?.length) {
     const buttons = tpl.buttons.map(b => {
-      const bType = String(b.type || '').toLowerCase();
-      if (bType === 'url') {
-        const btn = { type: 'url', text: b.text, url: b.url };
+      const bType = String(b.type || '').toUpperCase();
+      if (bType === 'URL') {
+        const btn = { type: 'URL', text: b.text, url: b.url };
         const ex = buildUrlExample(b.url, stdVarMap);
         if (ex) btn.example = ex;
         return btn;
       }
-      if (bType === 'quick_reply')  return { type: 'quick_reply',  text: b.text };
-      if (bType === 'phone_number') return { type: 'phone_number', text: b.text, phone_number: b.phone_number };
+      if (bType === 'QUICK_REPLY')  return { type: 'QUICK_REPLY',  text: b.text };
+      if (bType === 'PHONE_NUMBER') return { type: 'PHONE_NUMBER', text: b.text, phone_number: b.phone_number };
       return b;
     });
-    components.push({ type: 'buttons', buttons });
+    components.push({ type: 'BUTTONS', buttons });
   }
 
   return components;
@@ -317,7 +318,7 @@ export async function previewPayload(req, res) {
     const components = buildMetaComponents(tpl);
     const payload = {
       name: cleanName,
-      category: (tpl.category || 'MARKETING').toLowerCase(),  // "marketing" | "utility"
+      category: (tpl.category || 'MARKETING').toUpperCase(),  // "MARKETING" | "UTILITY" — Meta requires UPPERCASE
       language: langMap[tpl.language] || tpl.language,
       components,
     };
@@ -474,7 +475,7 @@ export function buildSendMessagePayload(tpl, productConfig, recipientPhone = '{{
 }
 
 // ── Get send payload for an approved template (with current product config) ───
-export async function   getSendPayload(req, res) {
+export async function getSendPayload(req, res) {
   try {
     const db = getDb();
     const channelId = req.headers['x-channel-id'] || 'demo';
@@ -573,7 +574,7 @@ export async function createTemplate(req, res) {
       const langMap = { en: 'en_US', hi: 'hi', gu: 'gu', ta: 'ta', te: 'te', mr: 'mr', bn: 'bn', ar: 'ar', ur: 'ur' };
       const payload = {
         name: cleanName,
-        category: (tpl.category || 'MARKETING').toLowerCase(),  // Meta accepts lowercase: "marketing", "utility"
+        category: (tpl.category || 'MARKETING').toUpperCase(),  // Meta requires UPPERCASE: "MARKETING", "UTILITY"
         language: langMap[tpl.language] || tpl.language,
         components,
       };

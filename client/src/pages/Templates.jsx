@@ -51,7 +51,7 @@ const STATUS_CFG = {
 };
 
 const BLANK_CARD = {
-  body: '{{1}}\n₹{{2}}',
+  body: '{{1}}\n{{2}}',
   buttons: [{ type: 'URL', text: 'Buy Now', url: 'https://yourstore.com/{{3}}' }],
   image_id: '', header_media_id: '',
   source: 'manual', scrape_url: '',
