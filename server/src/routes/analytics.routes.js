@@ -10,6 +10,7 @@ router.get('/cities',       analyticsController.getCityAnalytics);
 router.get('/contacts',     analyticsController.getContactPower);
 router.get('/devices',      analyticsController.getDeviceBreakdown);
 router.get('/engagement',   analyticsController.getEngagementStats);
+router.get('/brand',        analyticsController.getBrandIntel);
 router.get('/',             analyticsController.getAnalytics);
 
 export { router as analyticsRoutes };
