@@ -52,9 +52,14 @@ export const contactsApi = {
 };
 
 export const analyticsApi = {
-  overview:     (days = 7) => request(`/analytics?period=${days}`),
-  dashboard:    ()         => request('/analytics/dashboard'),
-  topLanguage:  ()         => request('/analytics/top-language'),
+  overview:    (days = 7) => request(`/analytics?period=${days}`),
+  dashboard:   ()         => request('/analytics/dashboard'),
+  topLanguage: ()         => request('/analytics/top-language'),
+  pages:       (days = 30)=> request(`/analytics/pages?days=${days}`),
+  cities:      (days = 30)=> request(`/analytics/cities?days=${days}`),
+  contacts:    (days = 30, limit = 50) => request(`/analytics/contacts?days=${days}&limit=${limit}`),
+  devices:     (days = 30)=> request(`/analytics/devices?days=${days}`),
+  engagement:  (days = 7) => request(`/analytics/engagement?days=${days}`),
 };
 
 export const settingsApi = {

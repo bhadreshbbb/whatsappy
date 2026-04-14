@@ -316,15 +316,71 @@ export const trackingController = {
   async trackPageView(req, res, next) {
     try {
       const db = getDb();
-      const { channelId, sessionId, url, pageTitle } = req.body;
+      const {
+        channelId, sessionId, url, pageTitle, pageViewId, referrer,
+        durationSec, maxScrollPct, scrollEvents, clickEvents,
+        activeTimeSec, engagementScore, exitEvent,
+        deviceType, browser, os, screenRes,
+      } = req.body;
+      const cid = channelId || 'demo';
+      const now = new Date().toISOString();
+
+      // Upsert by pageViewId so heartbeat updates don't create duplicates
+      if (pageViewId) {
+        const idx = db.page_views.findIndex(p => p.page_view_id === pageViewId);
+        if (idx >= 0) {
+          // Update existing record with latest engagement data
+          Object.assign(db.page_views[idx], {
+            duration_sec:     durationSec     ?? db.page_views[idx].duration_sec,
+            max_scroll_pct:   maxScrollPct    ?? db.page_views[idx].max_scroll_pct,
+            scroll_events:    scrollEvents    ?? db.page_views[idx].scroll_events,
+            click_events:     clickEvents     ?? db.page_views[idx].click_events,
+            active_time_sec:  activeTimeSec   ?? db.page_views[idx].active_time_sec,
+            engagement_score: engagementScore ?? db.page_views[idx].engagement_score,
+            exit_event:       exitEvent       ?? db.page_views[idx].exit_event,
+            updated_at: now,
+          });
+          db.save();
+          return res.json({ success: true });
+        }
+      }
+
+      // Find visitor for phone linkage
+      const visitor = db.website_visitors.find(v => v.channel_id === cid && v.session_id === sessionId);
+
       db.page_views.push({
         id: (db.page_views.length || 0) + 1,
-        channel_id: channelId || 'demo',
-        session_id: sessionId,
-        url,
-        page_title: pageTitle,
-        viewed_at: new Date().toISOString()
+        page_view_id:    pageViewId || null,
+        channel_id:      cid,
+        session_id:      sessionId,
+        phone:           visitor?.phone || null,
+        url:             url || '',
+        page_title:      pageTitle || '',
+        referrer:        referrer || '',
+        duration_sec:    durationSec    || 0,
+        max_scroll_pct:  maxScrollPct   || 0,
+        scroll_events:   scrollEvents   || 0,
+        click_events:    clickEvents    || 0,
+        active_time_sec: activeTimeSec  || 0,
+        engagement_score: engagementScore || 0,
+        exit_event:      !!exitEvent,
+        device_type:     deviceType || visitor?.device_type || null,
+        browser:         browser    || null,
+        os:              os         || null,
+        screen_res:      screenRes  || null,
+        viewed_at:       now,
+        updated_at:      now,
       });
+
+      // Update visitor engagement score (rolling average)
+      if (visitor) {
+        const myViews = db.page_views.filter(p => p.channel_id === cid && p.session_id === sessionId && p.engagement_score > 0);
+        const avgScore = myViews.length ? Math.round(myViews.reduce((s, p) => s + p.engagement_score, 0) / myViews.length) : 0;
+        visitor.engagement_score = avgScore;
+        visitor.total_page_views = (visitor.total_page_views || 0) + 1;
+        visitor.total_time_sec   = (visitor.total_time_sec || 0) + (durationSec || 0);
+      }
+
       db.save();
       res.json({ success: true });
     } catch (e) { next(e); }

@@ -1,190 +1,211 @@
-/**
- * WhatsCart Pro - Website Tracker v2.1
- * Enhanced data capture for granular template segments
- */
+!function() {
+  var config = window.WhatswayConfig || {};
+  var baseUrl = config.baseUrl || '';
 
-(function (window, document) {
-  'use strict';
-
-  var cfg = window.WhatsCartConfig || {};
-  if (!cfg.apiKey || !cfg.channelId) {
-    console.warn('[WhatsCart] Missing apiKey or channelId');
-    return;
-  }
-
-  var BASE_URL = cfg.baseUrl || window.location.origin;
-  var SESSION_KEY = '_wc_sid';
-  var USER_KEY = '_wc_user';
-  var VIEWS_KEY = '_wc_views';
-
-  // ── Identity ──
-  var sessionId = localStorage.getItem(SESSION_KEY);
+  // ── Session ──────────────────────────────────────────────────────────────────
+  var sessionId = sessionStorage.getItem('ww_session');
   if (!sessionId) {
-    sessionId = 'sess_' + Math.random().toString(36).substring(2, 15) + Date.now().toString(36);
-    localStorage.setItem(SESSION_KEY, sessionId);
+    sessionId = 'sess_' + Date.now() + '_' + Math.random().toString(36).substring(2, 11);
+    sessionStorage.setItem('ww_session', sessionId);
   }
 
-  var pageViews = parseInt(localStorage.getItem(VIEWS_KEY) || '0') + 1;
-  localStorage.setItem(VIEWS_KEY, pageViews);
-
-  var knownUser = JSON.parse(localStorage.getItem(USER_KEY) || '{}');
-
-  function post(path, data) {
-    var payload = Object.assign({
-      channelId: cfg.channelId,
-      sessionId: sessionId,
-      url: window.location.href,
-      referrer: document.referrer,
-      language: navigator.language,
-      deviceType: getDeviceType(),
-      pageViews: pageViews
-    }, knownUser, data);
-
-    return fetch(BASE_URL + path, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-api-key': cfg.apiKey },
-      body: JSON.stringify(payload),
-      keepalive: true
-    }).catch(function (e) { console.warn('[WhatsCart]', e.message); });
-  }
-
+  // ── Device detection ─────────────────────────────────────────────────────────
   function getDeviceType() {
     var ua = navigator.userAgent;
-    if (/(tablet|ipad|playbook|silk)|(android(?!.*mobi))/i.test(ua)) return 'tablet';
-    if (/Mobile|Android|iP(hone|od)|IEMobile|BlackBerry|Kindle|Silk-Accelerated/.test(ua)) return 'mobile';
+    if (/tablet|ipad|playbook|silk/i.test(ua)) return 'tablet';
+    if (/mobile|iphone|android|iemobile|blackberry|opera mini|opera mobi|windows phone/i.test(ua)) return 'mobile';
     return 'desktop';
   }
+  function getBrowser() {
+    var ua = navigator.userAgent;
+    if (ua.indexOf('Firefox') > -1) return 'Firefox';
+    if (ua.indexOf('Edg') > -1) return 'Edge';
+    if (ua.indexOf('Chrome') > -1) return 'Chrome';
+    if (ua.indexOf('Safari') > -1) return 'Safari';
+    return 'Other';
+  }
+  function getOS() {
+    var ua = navigator.userAgent;
+    if (ua.indexOf('Win') > -1) return 'Windows';
+    if (ua.indexOf('Mac') > -1) return 'MacOS';
+    if (ua.indexOf('Android') > -1) return 'Android';
+    if (/iPhone|iPad|iPod/i.test(ua)) return 'iOS';
+    if (ua.indexOf('Linux') > -1) return 'Linux';
+    return 'Other';
+  }
 
-  var urlParams = new URLSearchParams(window.location.search);
-  if (urlParams.get('wc_ref') === 'wa') {
-    post('/api/tracking/click', {
-      eventType: 'whatsapp_click',
-      campaignId: urlParams.get('wc_cid'),
-      timestamp: Date.now()
+  // ── Post helper ──────────────────────────────────────────────────────────────
+  function track(type, data) {
+    data = data || {};
+    data.sessionId = sessionId;
+    data.type = type;
+    data.channelId = config.channelId || 'demo';
+    fetch(baseUrl + '/api/tracking/' + type, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+      keepalive: true
+    }).catch(function() {});
+  }
+
+  // ── Page engagement tracking ─────────────────────────────────────────────────
+  var pageStartTime  = Date.now();
+  var maxScrollPct   = 0;
+  var pageUrl        = window.location.href;
+  var pageTitle      = document.title;
+  var scrollEvents   = 0;
+  var clickEvents    = 0;
+  var activeTime     = 0;        // ms user was active (not idle)
+  var lastActiveAt   = Date.now();
+  var idleTimer      = null;
+  var isIdle         = false;
+  var pageViewId     = 'pv_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6);
+
+  // Track scroll depth
+  function onScroll() {
+    var scrolled   = window.scrollY || document.documentElement.scrollTop;
+    var docHeight  = Math.max(
+      document.body.scrollHeight, document.documentElement.scrollHeight,
+      document.body.offsetHeight, document.documentElement.offsetHeight
+    ) - window.innerHeight;
+    if (docHeight > 0) {
+      var pct = Math.round((scrolled / docHeight) * 100);
+      if (pct > maxScrollPct) maxScrollPct = pct;
+    }
+    scrollEvents++;
+    markActive();
+  }
+
+  // Track clicks
+  function onPageClick() { clickEvents++; markActive(); }
+
+  // Idle detection: if no activity for 30s, stop counting active time
+  function markActive() {
+    if (isIdle) { lastActiveAt = Date.now(); isIdle = false; }
+    clearTimeout(idleTimer);
+    idleTimer = setTimeout(function() { isIdle = true; }, 30000);
+  }
+
+  // Compute engagement score 0–100
+  // Weights: scroll depth (40%), active time ratio (30%), click density (20%), return visit (10%)
+  function calcEngagementScore(durationSec, scrollDepth, clicks, scrollEvts) {
+    var scrollScore  = Math.min(scrollDepth, 100) * 0.40;
+    var activeRatio  = durationSec > 0 ? Math.min(activeTime / 1000 / durationSec, 1) : 0;
+    var activeScore  = activeRatio * 100 * 0.30;
+    var clickScore   = Math.min(clicks * 5, 100) * 0.20;        // 20 clicks = max
+    var scrollDScore = Math.min(scrollEvts * 2, 100) * 0.10;    // 50 scrolls = max
+    return Math.round(scrollScore + activeScore + clickScore + scrollDScore);
+  }
+
+  // Send page view data (called on leave OR periodically)
+  function flushPageView(exit) {
+    var now       = Date.now();
+    var durationMs = now - pageStartTime;
+    var durationSec = Math.round(durationMs / 1000);
+    // Add remaining active time
+    if (!isIdle) activeTime += (now - lastActiveAt);
+
+    var score = calcEngagementScore(durationSec, maxScrollPct, clickEvents, scrollEvents);
+
+    track('pageview', {
+      pageViewId:    pageViewId,
+      url:           pageUrl,
+      pageTitle:     pageTitle,
+      referrer:      document.referrer || '',
+      durationSec:   durationSec,
+      maxScrollPct:  maxScrollPct,
+      scrollEvents:  scrollEvents,
+      clickEvents:   clickEvents,
+      activeTimeSec: Math.round(activeTime / 1000),
+      engagementScore: score,
+      exitEvent:     !!exit,
+      deviceType:    getDeviceType(),
+      browser:       getBrowser(),
+      os:            getOS(),
+      screenRes:     window.screen.width + 'x' + window.screen.height,
     });
   }
 
-  // ── Page Type Detection ──
-  function detectPageType() {
-    var path = window.location.pathname.toLowerCase();
-    if (path === '/' || path === '' || path.includes('/collections') || path.includes('/search') || path.includes('/pages')) return 'listing';
-    if (path.includes('/products/') && path.split('/').length > 2) return 'product';
-    if (path.includes('/cart')) return 'cart';
-    if (path.includes('/checkout')) return 'checkout';
-    if (path.includes('/orders') || path.includes('/thank')) return 'confirmation';
-    return 'listing';
+  // ── Initial visitor ping ─────────────────────────────────────────────────────
+  function trackVisitor() {
+    track('visitor', {
+      deviceType:  getDeviceType(),
+      browser:     getBrowser(),
+      os:          getOS(),
+      url:         window.location.href,
+      pageTitle:   document.title,
+      referrer:    document.referrer || '',
+      language:    navigator.language || navigator.userLanguage,
+      screen_res:  window.screen.width + 'x' + window.screen.height,
+      timezone:    Intl.DateTimeFormat().resolvedOptions().timeZone
+    });
   }
 
-  // ── Automated Dynamic Catalog Scraper ──
-  async function scrapeShopifyCarousel() {
-    try {
-      var isShopify = window.Shopify || document.querySelector('script[src*="shopify"]');
-      if (isShopify) {
-        var res = await fetch(window.location.origin + '/products.json?limit=12');
-        var data = await res.json();
-        if (data && data.products) {
-          return data.products.map(function(p) {
-            return {
-              name: p.title,
-              url: window.location.origin + '/products/' + p.handle,
-              image: p.images && p.images[0] ? p.images[0].src : '',
-              price: p.variants && p.variants[0] ? p.variants[0].price : '0.00'
-            };
-          });
-        }
-      }
-    } catch(e) {}
-    return [];
-  }
+  // ── Attach listeners ──────────────────────────────────────────────────────────
+  window.addEventListener('scroll',     onScroll,   { passive: true });
+  document.addEventListener('click',    onPageClick, { passive: true });
+  document.addEventListener('keydown',  markActive,  { passive: true });
+  document.addEventListener('mousemove',markActive,  { passive: true });
 
-  // ── Sync full product catalog to server (background) ──
-  async function syncProductCatalog(products) {
-    if (!products || products.length === 0) return;
-    try {
-      await fetch(BASE_URL + '/api/tracking/shopify-products', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-api-key': cfg.apiKey },
-        body: JSON.stringify({ channelId: cfg.channelId, products: products }),
-        keepalive: true
-      });
-    } catch(e) {}
-  }
+  // Flush on page leave
+  window.addEventListener('beforeunload', function() { flushPageView(true); });
+  // Also flush on visibility hidden (tab switch / mobile background)
+  document.addEventListener('visibilitychange', function() {
+    if (document.visibilityState === 'hidden') flushPageView(false);
+  });
+  // Periodic heartbeat every 30s (for long reads)
+  setInterval(function() {
+    if (!document.hidden) flushPageView(false);
+  }, 30000);
 
-  // ── API ──
-  window.WhatsCart = {
-    identify: function (userData) {
-      knownUser = Object.assign(knownUser, userData);
-      localStorage.setItem(USER_KEY, JSON.stringify(knownUser));
-      post('/api/tracking/identify', userData);
+  // ── Public API ────────────────────────────────────────────────────────────────
+  var WhatsWay = {
+    identify: function(data) {
+      if (!data || !data.phone) return;
+      track('identify', { phone: data.phone, name: data.name || '', email: data.email || '' });
     },
-
-    trackProductView: function (product) {
-      var autoImg = document.querySelector('meta[property="og:image"]');
-      post('/api/tracking/product', {
-        eventType: 'product_viewed',
-        product_name: product.name,
-        product_price: product.price,
-        product_image: product.image || (autoImg ? autoImg.content : ''),
-        product_url: product.url ? new URL(product.url, window.location.origin).href : window.location.href,
-        currency: product.currency || cfg.currency || null,
-        category: product.category || 'general'
+    trackAddToCart: function(data) {
+      if (!data) return;
+      track('cart', {
+        cartId:        data.cartId || 'cart_' + Date.now(),
+        products:      data.products || [],
+        totalAmount:   data.totalAmount || 0,
+        currency:      data.currency || config.currency || null,
+        product_name:  data.product_name || document.title,
+        product_image: data.product_image || (document.querySelector('meta[property="og:image"]') || {}).content,
+        product_url:   data.product_url || window.location.href,
+        cart_url:      data.cart_url || (window.location.origin + '/cart')
       });
     },
-
-    trackAddToCart: function (cartData) {
-      var firstProd = (cartData.products && cartData.products[0]) || {};
-      var autoImg = document.querySelector('meta[property="og:image"]');
-      var cartUrl = new URL('/cart', window.location.origin);
-      cartUrl.searchParams.set('sid', sessionId);
-      cartUrl.searchParams.set('wc_ref', 'wa_recovery');
-
-      post('/api/tracking/cart', {
-        eventType: 'add_to_cart',
-        cartId: cartData.cartId || 'cart_' + sessionId,
-        products: cartData.products || [],
-        totalAmount: cartData.totalAmount || 0,
-        currency: cartData.currency || cfg.currency || null,
-        // ── Automated Variables for WhatsApp ──
-        product_name: firstProd.name,
-        product_price: firstProd.price || cartData.totalAmount,
-        product_image: firstProd.image || (autoImg ? autoImg.content : ''),
-        product_url: firstProd.url ? new URL(firstProd.url, window.location.origin).href : window.location.href,
-        cart_url: cartUrl.href
+    trackProductView: function(data) {
+      if (!data) return;
+      track('product', {
+        eventType:     'product_viewed',
+        product:       data.product || {},
+        product_name:  data.product_name || document.title,
+        product_image: data.product_image || (document.querySelector('meta[property="og:image"]') || {}).content,
+        product_url:   data.product_url || window.location.href,
+        product_price: data.product_price || 0,
+        currency:      data.currency || config.currency || null
       });
     },
-
-    trackPurchase: function (data) {
-      post('/api/tracking/purchase', {
-        eventType: 'purchase_complete',
-        orderId: data.orderId || 'ord_' + Date.now(),
-        products: data.products || [],
-        totalAmount: data.totalAmount || 0,
-        currency: data.currency || cfg.currency || null
+    trackCheckout: function(data) {
+      if (!data || !data.eventType) return;
+      track('checkout', {
+        eventType:   data.eventType,
+        cartId:      data.cartId || '',
+        orderId:     data.orderId || '',
+        totalAmount: data.totalAmount || 0
       });
-      localStorage.setItem(VIEWS_KEY, '0');
     }
   };
 
+  window.WhatsWay = WhatsWay;
 
-
-  (async function() {
-    var trendingItems = await scrapeShopifyCarousel();
-    var pageType = detectPageType();
-
-    // Track visitor with page type + scraped carousel
-    post('/api/tracking/visitor', {
-      pageTitle: document.title,
-      pageType: pageType,
-      language: navigator.languages ? navigator.languages[0] : navigator.language,
-      screen_res: window.screen.width + 'x' + window.screen.height,
-      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-      shopify_carousel: JSON.stringify(trendingItems)
-    });
-
-    // Sync full catalog to server in background (so website_visit campaigns have products)
-    if (trendingItems.length > 0) {
-      syncProductCatalog(trendingItems);
-    }
-  })();
-
-})(window, document);
+  // Kick off
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', trackVisitor);
+  } else {
+    trackVisitor();
+  }
+}();
