@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
-  FolderOpen, FolderPlus, Trash2, Upload, Image,
+  FolderOpen, FolderPlus, Trash2, Upload, ImageIcon,
   Copy, Check, X, ChevronLeft, Loader2, AlertCircle
 } from 'lucide-react';
 
@@ -18,16 +18,23 @@ async function apiFetch(path, opts = {}) {
   return data;
 }
 
+function formatSize(bytes) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 export default function Gallery() {
-  const [folders, setFolders]         = useState([]);
+  const [folders, setFolders]           = useState([]);
   const [activeFolder, setActiveFolder] = useState(null);
-  const [images, setImages]           = useState([]);
-  const [loading, setLoading]         = useState(false);
-  const [uploading, setUploading]     = useState(false);
-  const [error, setError]             = useState('');
+  const [images, setImages]             = useState([]);
+  const [loading, setLoading]           = useState(false);
+  const [uploading, setUploading]       = useState(false);
+  const [error, setError]               = useState('');
   const [newFolderName, setNewFolderName] = useState('');
   const [showNewFolder, setShowNewFolder] = useState(false);
-  const [copiedId, setCopiedId]       = useState(null);
+  const [copiedId, setCopiedId]         = useState(null);
+  const [dragOver, setDragOver]         = useState(false);
   const fileRef = useRef();
 
   useEffect(() => { loadFolders(); }, []);
@@ -87,9 +94,7 @@ export default function Gallery() {
         const form = new FormData();
         form.append('file', file);
         const res = await fetch(API(`/folders/${activeFolder.id}/upload`), {
-          method: 'POST',
-          headers: headers(),
-          body: form,
+          method: 'POST', headers: headers(), body: form,
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || 'Upload failed');
@@ -98,10 +103,7 @@ export default function Gallery() {
         setError(`Failed to upload ${file.name}: ${e.message}`);
       }
     }
-    if (uploaded > 0) {
-      loadImages(activeFolder);
-      loadFolders();
-    }
+    if (uploaded > 0) { loadImages(activeFolder); loadFolders(); }
     setUploading(false);
   }
 
@@ -122,188 +124,197 @@ export default function Gallery() {
 
   function onDrop(e) {
     e.preventDefault();
+    setDragOver(false);
     uploadFiles([...e.dataTransfer.files]);
   }
 
-  function formatSize(bytes) {
-    if (bytes < 1024) return `${bytes} B`;
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  }
-
   return (
-    <div className="flex gap-6 h-full">
+    <div className="flex gap-5 h-full">
 
-      {/* ── Left: Folders panel ─────────────────────────── */}
-      <div className="w-64 shrink-0 flex flex-col gap-3">
+      {/* ── Folders sidebar ── */}
+      <div className="w-60 shrink-0 flex flex-col gap-3">
         <div className="flex items-center justify-between">
-          <h2 className="text-white font-semibold text-sm">My Gallery</h2>
-          <button
-            onClick={() => setShowNewFolder(v => !v)}
-            className="flex items-center gap-1 text-xs bg-green-600 hover:bg-green-500 text-white px-2 py-1 rounded-lg"
-          >
-            <FolderPlus size={13} /> New Folder
+          <h2 className="text-sm font-semibold text-white">My Gallery</h2>
+          <button onClick={() => setShowNewFolder(v => !v)}
+            className="flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-lg font-medium transition-all"
+            style={{ background: "rgba(37,211,102,0.12)", border: "1px solid rgba(37,211,102,0.25)", color: "#4ade80" }}
+            onMouseEnter={e => e.currentTarget.style.background = "rgba(37,211,102,0.2)"}
+            onMouseLeave={e => e.currentTarget.style.background = "rgba(37,211,102,0.12)"}>
+            <FolderPlus size={12} /> New
           </button>
         </div>
 
         {showNewFolder && (
           <div className="flex gap-2">
-            <input
-              autoFocus
-              value={newFolderName}
-              onChange={e => setNewFolderName(e.target.value)}
+            <input autoFocus value={newFolderName} onChange={e => setNewFolderName(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && createFolder()}
-              placeholder="Folder name..."
-              className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-white text-xs outline-none focus:border-green-500"
-            />
-            <button onClick={createFolder} className="bg-green-600 hover:bg-green-500 text-white px-3 py-1.5 rounded-lg text-xs">Add</button>
-            <button onClick={() => { setShowNewFolder(false); setNewFolderName(''); }} className="bg-white/5 hover:bg-white/10 text-slate-400 px-2 py-1.5 rounded-lg">
+              placeholder="Folder name…"
+              className="input flex-1 text-xs py-1.5" />
+            <button onClick={createFolder}
+              className="px-3 py-1.5 rounded-lg text-xs font-medium"
+              style={{ background: "rgba(37,211,102,0.15)", border: "1px solid rgba(37,211,102,0.3)", color: "#4ade80" }}>
+              Add
+            </button>
+            <button onClick={() => { setShowNewFolder(false); setNewFolderName(''); }}
+              className="p-1.5 rounded-lg" style={{ background: "rgba(255,255,255,0.04)", color: "#64748b" }}>
               <X size={13} />
             </button>
           </div>
         )}
 
         {loading && !activeFolder && (
-          <div className="flex items-center gap-2 text-slate-400 text-xs">
-            <Loader2 size={14} className="animate-spin" /> Loading...
+          <div className="flex items-center gap-2 text-xs" style={{ color: "#64748b" }}>
+            <Loader2 size={13} className="animate-spin" /> Loading…
           </div>
         )}
 
         <div className="flex flex-col gap-1">
           {folders.length === 0 && !loading && (
-            <p className="text-slate-500 text-xs text-center py-6">No folders yet.<br />Create one to start uploading.</p>
-          )}
-          {folders.map(f => (
-            <div
-              key={f.id}
-              onClick={() => loadImages(f)}
-              className={`flex items-center justify-between px-3 py-2.5 rounded-xl cursor-pointer group transition-all ${
-                activeFolder?.id === f.id
-                  ? 'bg-green-600/20 border border-green-600/40 text-white'
-                  : 'hover:bg-white/5 border border-transparent text-slate-300'
-              }`}
-            >
-              <div className="flex items-center gap-2 min-w-0">
-                <FolderOpen size={15} className={activeFolder?.id === f.id ? 'text-green-400' : 'text-slate-400'} />
-                <span className="text-xs truncate">{f.name}</span>
-              </div>
-              <div className="flex items-center gap-2 shrink-0">
-                <span className="text-xs text-slate-500">{f.imageCount}</span>
-                <button
-                  onClick={(e) => deleteFolder(e, f)}
-                  className="opacity-0 group-hover:opacity-100 text-red-400 hover:text-red-300 transition-opacity"
-                >
-                  <Trash2 size={12} />
-                </button>
-              </div>
+            <div className="text-center py-8">
+              <FolderOpen size={28} className="mx-auto mb-2" style={{ color: "#1e293b" }} />
+              <p className="text-xs" style={{ color: "#475569" }}>No folders yet.<br />Create one to start.</p>
             </div>
-          ))}
+          )}
+          {folders.map(f => {
+            const isActive = activeFolder?.id === f.id;
+            return (
+              <div key={f.id} onClick={() => loadImages(f)}
+                className="flex items-center justify-between px-3 py-2.5 rounded-xl cursor-pointer group transition-all"
+                style={isActive
+                  ? { background: "rgba(37,211,102,0.1)", border: "1px solid rgba(37,211,102,0.3)" }
+                  : { background: "transparent", border: "1px solid transparent" }}
+                onMouseEnter={e => { if (!isActive) e.currentTarget.style.background = "rgba(255,255,255,0.04)"; }}
+                onMouseLeave={e => { if (!isActive) e.currentTarget.style.background = "transparent"; }}>
+                <div className="flex items-center gap-2 min-w-0">
+                  <FolderOpen size={14} style={{ color: isActive ? "#4ade80" : "#64748b", flexShrink: 0 }} />
+                  <span className="text-xs truncate" style={{ color: isActive ? "#fff" : "#94a3b8" }}>{f.name}</span>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <span className="text-xs" style={{ color: "#475569" }}>{f.imageCount}</span>
+                  <button onClick={e => deleteFolder(e, f)}
+                    className="opacity-0 group-hover:opacity-100 transition-opacity"
+                    style={{ color: "#ef4444" }}>
+                    <Trash2 size={12} />
+                  </button>
+                </div>
+              </div>
+            );
+          })}
         </div>
       </div>
 
-      {/* ── Right: Images panel ─────────────────────────── */}
+      {/* ── Images panel ── */}
       <div className="flex-1 flex flex-col gap-4 min-w-0">
         {!activeFolder ? (
-          <div className="flex-1 flex flex-col items-center justify-center text-slate-500 gap-3">
-            <FolderOpen size={48} className="opacity-30" />
-            <p className="text-sm">Select a folder to view images</p>
+          <div className="flex-1 flex flex-col items-center justify-center gap-3" style={{ color: "#334155" }}>
+            <FolderOpen size={52} style={{ opacity: 0.3 }} />
+            <p className="text-sm" style={{ color: "#475569" }}>Select a folder to view images</p>
           </div>
         ) : (
           <>
-            {/* Header */}
+            {/* Panel header */}
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <button onClick={() => { setActiveFolder(null); setImages([]); }} className="text-slate-400 hover:text-white">
+                <button onClick={() => { setActiveFolder(null); setImages([]); }}
+                  className="transition-colors" style={{ color: "#475569" }}
+                  onMouseEnter={e => e.currentTarget.style.color = "#e2e8f0"}
+                  onMouseLeave={e => e.currentTarget.style.color = "#475569"}>
                   <ChevronLeft size={18} />
                 </button>
-                <h3 className="text-white font-semibold">{activeFolder.name}</h3>
-                <span className="text-xs text-slate-500 bg-white/5 px-2 py-0.5 rounded-full">{images.length} images</span>
+                <h3 className="text-white font-semibold text-sm">{activeFolder.name}</h3>
+                <span className="text-xs px-2 py-0.5 rounded-full"
+                  style={{ background: "rgba(255,255,255,0.05)", color: "#64748b" }}>
+                  {images.length} images
+                </span>
               </div>
-              <button
-                onClick={() => fileRef.current?.click()}
-                disabled={uploading}
-                className="flex items-center gap-2 bg-green-600 hover:bg-green-500 disabled:opacity-50 text-white text-sm px-4 py-2 rounded-xl"
-              >
-                {uploading ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />}
-                {uploading ? 'Uploading to Meta...' : 'Upload Images'}
+              <button onClick={() => fileRef.current?.click()} disabled={uploading}
+                className="btn-primary gap-2">
+                {uploading ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />}
+                {uploading ? 'Uploading to Meta…' : 'Upload Images'}
               </button>
-              <input ref={fileRef} type="file" accept="image/*,video/mp4" multiple hidden onChange={e => uploadFiles([...e.target.files])} />
+              <input ref={fileRef} type="file" accept="image/*,video/mp4" multiple hidden
+                onChange={e => uploadFiles([...e.target.files])} />
             </div>
 
+            {/* Error */}
             {error && (
-              <div className="flex items-center gap-2 bg-red-500/10 border border-red-500/20 text-red-400 text-xs px-4 py-3 rounded-xl">
-                <AlertCircle size={14} />
+              <div className="flex items-center gap-2 px-4 py-3 rounded-xl text-xs"
+                style={{ background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.2)", color: "#f87171" }}>
+                <AlertCircle size={13} />
                 {error}
                 <button onClick={() => setError('')} className="ml-auto"><X size={12} /></button>
               </div>
             )}
 
             {/* Drop zone */}
-            <div
-              onDragOver={e => e.preventDefault()}
+            <div onDragOver={e => { e.preventDefault(); setDragOver(true); }}
+              onDragLeave={() => setDragOver(false)}
               onDrop={onDrop}
               onClick={() => fileRef.current?.click()}
-              className="border-2 border-dashed border-white/10 hover:border-green-600/40 rounded-2xl p-6 text-center cursor-pointer transition-colors"
-            >
-              <Upload size={20} className="mx-auto text-slate-500 mb-2" />
-              <p className="text-slate-500 text-xs">Drag & drop images here or click Upload<br />JPG, PNG, WEBP, MP4 — max 16MB</p>
+              className="rounded-2xl p-6 text-center cursor-pointer transition-all"
+              style={{
+                border: `2px dashed ${dragOver ? "rgba(37,211,102,0.5)" : "rgba(255,255,255,0.07)"}`,
+                background: dragOver ? "rgba(37,211,102,0.05)" : "transparent",
+              }}>
+              <Upload size={20} className="mx-auto mb-2" style={{ color: dragOver ? "#4ade80" : "#475569" }} />
+              <p className="text-xs" style={{ color: "#475569" }}>
+                Drag & drop images here or click Upload<br />
+                JPG, PNG, WEBP, MP4 — max 16 MB
+              </p>
             </div>
 
-            {/* Images grid */}
+            {/* Grid */}
             {loading ? (
-              <div className="flex items-center gap-2 text-slate-400 text-sm">
-                <Loader2 size={16} className="animate-spin" /> Loading images...
+              <div className="flex items-center gap-2 text-sm" style={{ color: "#64748b" }}>
+                <Loader2 size={16} className="animate-spin" /> Loading images…
               </div>
             ) : images.length === 0 ? (
-              <div className="flex-1 flex flex-col items-center justify-center text-slate-500 gap-2">
-                <Image size={40} className="opacity-30" />
-                <p className="text-sm">No images yet. Upload your first image.</p>
+              <div className="flex-1 flex flex-col items-center justify-center gap-2">
+                <ImageIcon size={40} style={{ color: "#1e293b" }} />
+                <p className="text-sm" style={{ color: "#475569" }}>No images yet. Upload your first image.</p>
               </div>
             ) : (
               <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
                 {images.map(img => (
-                  <div key={img.id} className="group relative bg-white/5 border border-white/10 rounded-2xl overflow-hidden hover:border-green-600/40 transition-all">
-                    {/* Image preview */}
-                    <div className="aspect-square bg-gradient-to-br from-green-900/20 to-slate-800 overflow-hidden">
-                      <img
-                        src={`/api/gallery/images/${img.id}/preview`}
-                        alt={img.filename}
+                  <div key={img.id} className="group relative rounded-2xl overflow-hidden transition-all"
+                    style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)" }}
+                    onMouseEnter={e => { e.currentTarget.style.border = "1px solid rgba(37,211,102,0.3)"; e.currentTarget.style.transform = "translateY(-2px)"; }}
+                    onMouseLeave={e => { e.currentTarget.style.border = "1px solid rgba(255,255,255,0.07)"; e.currentTarget.style.transform = "translateY(0)"; }}>
+
+                    {/* Preview */}
+                    <div className="aspect-square overflow-hidden"
+                      style={{ background: "linear-gradient(135deg, rgba(37,211,102,0.08), rgba(8,13,23,0.9))" }}>
+                      <img src={`/api/gallery/images/${img.id}/preview`} alt={img.filename}
                         className="w-full h-full object-cover"
-                        onError={e => {
-                          e.target.style.display = 'none';
-                          e.target.nextSibling.style.display = 'flex';
-                        }}
-                      />
+                        onError={e => { e.target.style.display = 'none'; e.target.nextSibling.style.display = 'flex'; }} />
                       <div className="w-full h-full items-center justify-center hidden">
-                        <Image size={28} className="text-slate-600" />
+                        <ImageIcon size={28} style={{ color: "#334155" }} />
                       </div>
                     </div>
 
                     {/* Info */}
                     <div className="p-3">
                       <p className="text-white text-xs font-medium truncate" title={img.filename}>{img.filename}</p>
-                      <p className="text-slate-500 text-xs mt-0.5">{formatSize(img.size)}</p>
-
-                      {/* Media ID */}
-                      <div className="mt-2 flex items-center gap-1 bg-black/30 rounded-lg px-2 py-1.5">
-                        <span className="text-green-400 text-xs font-mono truncate flex-1" title={img.media_id}>
-                          {img.media_id.slice(0, 14)}...
-                        </span>
-                        <button
-                          onClick={() => copyMediaId(img.media_id)}
-                          className="text-slate-400 hover:text-green-400 shrink-0"
-                          title="Copy Media ID"
-                        >
-                          {copiedId === img.media_id ? <Check size={12} className="text-green-400" /> : <Copy size={12} />}
+                      <p className="text-xs mt-0.5" style={{ color: "#475569" }}>{formatSize(img.size)}</p>
+                      <div className="mt-2 flex items-center gap-1 rounded-lg px-2 py-1.5"
+                        style={{ background: "rgba(0,0,0,0.3)" }}>
+                        <span className="text-xs font-mono flex-1 truncate" style={{ color: "#4ade80" }}
+                          title={img.media_id}>{img.media_id.slice(0, 14)}…</span>
+                        <button onClick={() => copyMediaId(img.media_id)}
+                          className="shrink-0 transition-colors"
+                          style={{ color: "#64748b" }}
+                          onMouseEnter={e => e.currentTarget.style.color = "#4ade80"}
+                          onMouseLeave={e => e.currentTarget.style.color = "#64748b"}
+                          title="Copy Media ID">
+                          {copiedId === img.media_id ? <Check size={12} style={{ color: "#4ade80" }} /> : <Copy size={12} />}
                         </button>
                       </div>
                     </div>
 
-                    {/* Delete */}
-                    <button
-                      onClick={() => deleteImage(img)}
-                      className="absolute top-2 right-2 bg-red-500/80 hover:bg-red-500 text-white p-1 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity"
-                    >
+                    {/* Delete btn */}
+                    <button onClick={() => deleteImage(img)}
+                      className="absolute top-2 right-2 p-1 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity"
+                      style={{ background: "rgba(239,68,68,0.85)", color: "#fff" }}>
                       <Trash2 size={11} />
                     </button>
                   </div>
