@@ -4,13 +4,14 @@ import {
   PieChart, Pie, Cell,
 } from "recharts";
 import {
-  BarChart2, Globe, Users, Clock, TrendingUp, Smartphone, MousePointer,
+  BarChart2, Globe, Users, Clock, TrendingUp, Smartphone, Monitor, Tablet,
   Flame, Eye, ArrowUpRight, ArrowDownRight, RefreshCw, ChevronDown, ChevronUp,
   MapPin, Zap, Activity, Star, Search, Target, Calendar, Repeat,
   Image, Map, ShoppingBag, DollarSign, Megaphone, BrainCircuit,
-  Phone, CheckCircle, TrendingDown, Filter, X, Link, Trophy,
+  Phone, CheckCircle, TrendingDown, Filter, X, Trophy, LayoutDashboard,
+  MousePointer, ShoppingCart, Package, UserCheck,
 } from "lucide-react";
-import { analyticsApi } from "../api";
+import { analyticsApi, visitorsApi } from "../api";
 
 const COLORS = ["#22c55e","#3b82f6","#f97316","#a855f7","#ec4899","#14b8a6","#f59e0b","#64748b","#ef4444","#06b6d4"];
 
@@ -181,6 +182,7 @@ function MiniBar({ pct, color = "#3b82f6", width = 60 }) {
 
 /* ─── Tab definitions ────────────────────────────────────────────────────── */
 const TABS = [
+  { id: 'dash',       label: 'Command Center', icon: LayoutDashboard },
   { id: 'brand',      label: 'Brand Intel ✦', icon: BrainCircuit },
   { id: 'overview',   label: 'Overview',      icon: BarChart2    },
   { id: 'pages',      label: 'Pages',         icon: Eye          },
@@ -192,7 +194,7 @@ const TABS = [
 
 /* ═══════════════════════════════════════════════════════════════════════════ */
 export default function Analytics() {
-  const [tab,        setTab]        = useState('brand');
+  const [tab,        setTab]        = useState('dash');
   const [days,       setDays]       = useState(30);
   const [loading,    setLoading]    = useState(true);
   const [overview,   setOverview]   = useState(null);
@@ -226,6 +228,15 @@ export default function Analytics() {
   const [ctMinScore,   setCtMinScore]   = useState('');
   const [ctSortBy,     setCtSortBy]     = useState('power_score');
   const [ctSortDir,    setCtSortDir]    = useState('desc');
+
+  // Command Center unified filters
+  const [dashSearch,  setDashSearch]  = useState('');
+  const [dashCity,    setDashCity]    = useState('');
+  const [dashStatus,  setDashStatus]  = useState('all');
+  const [dashDevice,  setDashDevice]  = useState('');
+  const [dashScore,   setDashScore]   = useState('');
+  const [dashSortBy,  setDashSortBy]  = useState('power_score');
+  const [dashSortDir, setDashSortDir] = useState('desc');
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -323,6 +334,65 @@ export default function Analytics() {
   const ctAvg   = contacts?.contacts?.length
     ? Math.round(contacts.contacts.reduce((s, c) => s + c.power_score, 0) / contacts.contacts.length)
     : 0;
+
+  /* ─── Command Center (unified) ─── */
+  const allDashCities = useMemo(() =>
+    [...new Set((contacts?.contacts || []).map(c => c.city).filter(Boolean))].sort(),
+    [contacts]);
+
+  const filteredDash = useMemo(() => {
+    let arr = [...(contacts?.contacts || [])];
+    if (dashSearch) arr = arr.filter(c =>
+      (c.phone || '').includes(dashSearch) ||
+      (c.name  || '').toLowerCase().includes(dashSearch.toLowerCase()) ||
+      (c.city  || '').toLowerCase().includes(dashSearch.toLowerCase())
+    );
+    if (dashStatus !== 'all') arr = arr.filter(c => c.status === dashStatus);
+    if (dashCity)   arr = arr.filter(c => (c.city   || '').toLowerCase().includes(dashCity.toLowerCase()));
+    if (dashDevice) arr = arr.filter(c => c.device === dashDevice);
+    if (dashScore)  arr = arr.filter(c => c.power_score >= +dashScore);
+    arr.sort((a, b) => {
+      const va = a[dashSortBy] ?? 0, vb = b[dashSortBy] ?? 0;
+      if (typeof va === 'string') return dashSortDir === 'desc' ? String(vb).localeCompare(String(va)) : String(va).localeCompare(String(vb));
+      return dashSortDir === 'desc' ? vb - va : va - vb;
+    });
+    return arr;
+  }, [contacts, dashSearch, dashStatus, dashCity, dashDevice, dashScore, dashSortBy, dashSortDir]);
+
+  const dashKpi = useMemo(() => ({
+    total:     filteredDash.length,
+    carts:     filteredDash.filter(c => c.cart_events > 0).length,
+    abandoned: filteredDash.filter(c => c.status === 'abandoned_cart').length,
+    active:    filteredDash.filter(c => c.status === 'active').length,
+    purchased: filteredDash.filter(c => c.status === 'purchased').length,
+    hot:       filteredDash.filter(c => c.power_score >= 80).length,
+  }), [filteredDash]);
+
+  const dashStatusChart = useMemo(() => {
+    const labels = { active: 'Active', product_view: 'Product View', abandoned_cart: 'Abandoned Cart', purchased: 'Purchased' };
+    const map = {};
+    filteredDash.forEach(c => { const s = c.status || 'active'; map[s] = (map[s] || 0) + 1; });
+    return Object.entries(map).map(([k, v]) => ({ name: labels[k] || k, value: v }));
+  }, [filteredDash]);
+
+  const dashCityChart = useMemo(() => {
+    const map = {};
+    filteredDash.forEach(c => { if (c.city) map[c.city] = (map[c.city] || 0) + 1; });
+    return Object.entries(map).sort((a, b) => b[1] - a[1]).slice(0, 10).map(([name, visitors]) => ({ name, visitors }));
+  }, [filteredDash]);
+
+  const dashDeviceChart = useMemo(() => {
+    const map = {};
+    filteredDash.forEach(c => { const d = c.device || 'unknown'; map[d] = (map[d] || 0) + 1; });
+    return Object.entries(map).sort((a, b) => b[1] - a[1]).map(([name, value]) => ({ name, value }));
+  }, [filteredDash]);
+
+  const dashPageChart = useMemo(() =>
+    (pages?.pages || []).slice(0, 10).map(p => ({
+      name: cleanUrl(p.url).slice(0, 22) || '/',
+      views: p.views,
+      unique: p.unique_visitors,
+    })), [pages]);
 
   /* ═══ RENDER ══════════════════════════════════════════════════════════════ */
   return (
@@ -911,6 +981,331 @@ export default function Analytics() {
                 </div>
               )}
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ════════════════════ COMMAND CENTER ════════════════════ */}
+      {tab === 'dash' && (
+        <div className="space-y-4">
+
+          {/* ── Unified filter bar ── */}
+          <div className="p-4 rounded-2xl space-y-3"
+            style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)" }}>
+            <div className="flex items-center gap-2 flex-wrap">
+              <Filter size={13} style={{ color: "#475569" }} />
+              <span className="text-xs font-semibold" style={{ color: "#64748b" }}>FILTER — all charts & list update live</span>
+              {(dashCity || dashStatus !== 'all' || dashDevice || dashScore || dashSearch) && (
+                <button onClick={() => { setDashCity(''); setDashStatus('all'); setDashDevice(''); setDashScore(''); setDashSearch(''); }}
+                  className="ml-auto flex items-center gap-1 text-xs px-2 py-1 rounded-lg transition-colors"
+                  style={{ background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.2)", color: "#f87171" }}>
+                  <X size={10} /> Clear all
+                </button>
+              )}
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <SearchInput value={dashSearch} onChange={setDashSearch} placeholder="Search name, phone, city…" />
+              <FilterSelect value={dashStatus} onChange={setDashStatus}>
+                <option value="all">All Status</option>
+                <option value="active">Active</option>
+                <option value="product_view">Product View</option>
+                <option value="abandoned_cart">Abandoned Cart</option>
+                <option value="purchased">Purchased</option>
+              </FilterSelect>
+              <FilterSelect value={dashDevice} onChange={setDashDevice}>
+                <option value="">All Devices</option>
+                <option value="mobile">Mobile</option>
+                <option value="desktop">Desktop</option>
+                <option value="tablet">Tablet</option>
+              </FilterSelect>
+              <FilterSelect value={dashScore} onChange={setDashScore}>
+                <option value="">Any Score</option>
+                <option value="80">Hot (80+)</option>
+                <option value="60">High (60+)</option>
+                <option value="40">Medium (40+)</option>
+              </FilterSelect>
+              {allDashCities.length > 0 && (
+                <FilterSelect value={dashCity} onChange={setDashCity}>
+                  <option value="">All Cities</option>
+                  {allDashCities.map(c => <option key={c} value={c}>{c}</option>)}
+                </FilterSelect>
+              )}
+            </div>
+            {/* Active filter chips */}
+            {(dashCity || dashStatus !== 'all' || dashDevice || dashScore) && (
+              <div className="flex flex-wrap gap-1.5 pt-1">
+                {dashStatus !== 'all' && (
+                  <span className="flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full"
+                    style={{ background: "rgba(59,130,246,0.12)", border: "1px solid rgba(59,130,246,0.25)", color: "#60a5fa" }}>
+                    Status: {dashStatus.replace('_', ' ')}
+                    <button onClick={() => setDashStatus('all')}><X size={9} /></button>
+                  </span>
+                )}
+                {dashCity && (
+                  <span className="flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full"
+                    style={{ background: "rgba(168,85,247,0.12)", border: "1px solid rgba(168,85,247,0.25)", color: "#c084fc" }}>
+                    City: {dashCity}
+                    <button onClick={() => setDashCity('')}><X size={9} /></button>
+                  </span>
+                )}
+                {dashDevice && (
+                  <span className="flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full"
+                    style={{ background: "rgba(20,184,166,0.12)", border: "1px solid rgba(20,184,166,0.25)", color: "#2dd4bf" }}>
+                    Device: {dashDevice}
+                    <button onClick={() => setDashDevice('')}><X size={9} /></button>
+                  </span>
+                )}
+                {dashScore && (
+                  <span className="flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full"
+                    style={{ background: "rgba(249,115,22,0.12)", border: "1px solid rgba(249,115,22,0.25)", color: "#fb923c" }}>
+                    Score ≥{dashScore}
+                    <button onClick={() => setDashScore('')}><X size={9} /></button>
+                  </span>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* ── KPI Row ── */}
+          <div className="grid grid-cols-3 md:grid-cols-6 gap-2">
+            {[
+              { label: 'Contacts',      value: dashKpi.total,     icon: Users,        color: 'blue'   },
+              { label: 'Add to Cart',   value: dashKpi.carts,     icon: ShoppingCart, color: 'orange' },
+              { label: 'Abandoned',     value: dashKpi.abandoned, icon: Package,      color: 'pink'   },
+              { label: 'Active',        value: dashKpi.active,    icon: UserCheck,    color: 'green'  },
+              { label: 'Purchased',     value: dashKpi.purchased, icon: CheckCircle,  color: 'purple' },
+              { label: 'Hot (80+)',     value: dashKpi.hot,       icon: Flame,        color: 'orange' },
+            ].map(k => (
+              <StatCard key={k.label} label={k.label} value={loading ? '…' : k.value} icon={k.icon} color={k.color} />
+            ))}
+          </div>
+
+          {/* ── Charts row ── */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+
+            {/* Status Breakdown */}
+            <div className="card p-5">
+              <h3 className="text-sm font-semibold text-white mb-4 flex items-center gap-2">
+                <Activity size={13} style={{ color: "#a855f7" }} /> Status Breakdown
+              </h3>
+              {loading ? <div className="skeleton h-44 rounded-xl" /> : dashStatusChart.length === 0 ? (
+                <p className="text-xs text-center py-10" style={{ color: "#475569" }}>No data</p>
+              ) : (
+                <div className="flex flex-col items-center gap-3">
+                  <ResponsiveContainer width="100%" height={140}>
+                    <PieChart>
+                      <Pie data={dashStatusChart} dataKey="value" cx="50%" cy="50%"
+                        innerRadius={38} outerRadius={62} paddingAngle={3}>
+                        {dashStatusChart.map((_, i) => <Cell key={i} fill={["#60a5fa","#3b82f6","#fb923c","#4ade80"][i % 4]} />)}
+                      </Pie>
+                      <Tooltip content={<Tip />} />
+                    </PieChart>
+                  </ResponsiveContainer>
+                  <div className="w-full space-y-1.5">
+                    {dashStatusChart.map((d, i) => {
+                      const total = dashStatusChart.reduce((s, x) => s + x.value, 0);
+                      const pct = total ? Math.round(d.value / total * 100) : 0;
+                      const cls = ["#60a5fa","#3b82f6","#fb923c","#4ade80"][i % 4];
+                      return (
+                        <div key={d.name} className="flex items-center gap-2">
+                          <span className="w-2 h-2 rounded-full shrink-0" style={{ background: cls }} />
+                          <span className="text-xs flex-1 truncate" style={{ color: "#cbd5e1" }}>{d.name}</span>
+                          <span className="text-xs font-mono font-semibold" style={{ color: cls }}>{d.value}</span>
+                          <span className="text-[10px] font-mono" style={{ color: "#475569" }}>{pct}%</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* City Distribution */}
+            <div className="card p-5">
+              <h3 className="text-sm font-semibold text-white mb-4 flex items-center gap-2">
+                <MapPin size={13} style={{ color: "#22c55e" }} /> Visitors by City
+                {dashCityChart.length > 0 && (
+                  <span className="ml-auto text-[10px] px-1.5 py-0.5 rounded"
+                    style={{ background: "rgba(34,197,94,0.1)", color: "#4ade80" }}>
+                    {dashCityChart.length} cities
+                  </span>
+                )}
+              </h3>
+              {loading ? <div className="skeleton h-44 rounded-xl" /> : dashCityChart.length === 0 ? (
+                <p className="text-xs text-center py-10" style={{ color: "#475569" }}>No city data</p>
+              ) : (
+                <ResponsiveContainer width="100%" height={180}>
+                  <BarChart data={dashCityChart} layout="vertical" barSize={12} margin={{ left: 0, right: 8 }}>
+                    <XAxis type="number" tick={{ fill: '#64748b', fontSize: 9 }} axisLine={false} tickLine={false} />
+                    <YAxis type="category" dataKey="name" width={90} tick={{ fill: '#94a3b8', fontSize: 9 }} axisLine={false} tickLine={false} />
+                    <Tooltip content={<Tip />} />
+                    <Bar dataKey="visitors" name="Contacts" radius={[0, 4, 4, 0]}>
+                      {dashCityChart.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              )}
+            </div>
+
+            {/* Device Distribution */}
+            <div className="card p-5">
+              <h3 className="text-sm font-semibold text-white mb-4 flex items-center gap-2">
+                <Smartphone size={13} style={{ color: "#3b82f6" }} /> Devices
+              </h3>
+              {loading ? <div className="skeleton h-44 rounded-xl" /> : dashDeviceChart.length === 0 ? (
+                <p className="text-xs text-center py-10" style={{ color: "#475569" }}>No data</p>
+              ) : (
+                <div className="flex flex-col items-center gap-3">
+                  <ResponsiveContainer width="100%" height={130}>
+                    <PieChart>
+                      <Pie data={dashDeviceChart} dataKey="value" cx="50%" cy="50%"
+                        innerRadius={32} outerRadius={58} paddingAngle={3}>
+                        {dashDeviceChart.map((_, i) => <Cell key={i} fill={["#3b82f6","#22c55e","#a855f7"][i % 3]} />)}
+                      </Pie>
+                      <Tooltip content={<Tip />} />
+                    </PieChart>
+                  </ResponsiveContainer>
+                  <div className="w-full space-y-2">
+                    {dashDeviceChart.map((d, i) => {
+                      const total = dashDeviceChart.reduce((s, x) => s + x.value, 0);
+                      const pct = total ? Math.round(d.value / total * 100) : 0;
+                      const col = ["#3b82f6","#22c55e","#a855f7"][i % 3];
+                      const Icon = d.name === 'mobile' ? Smartphone : d.name === 'desktop' ? Monitor : TrendingUp;
+                      return (
+                        <div key={d.name} className="flex items-center gap-2">
+                          <Icon size={11} style={{ color: col }} />
+                          <span className="text-xs flex-1 capitalize" style={{ color: "#cbd5e1" }}>{d.name}</span>
+                          <span className="text-xs font-mono font-semibold" style={{ color: col }}>{d.value}</span>
+                          <span className="text-[10px] font-mono" style={{ color: "#475569" }}>{pct}%</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* ── Page Traffic chart (always full data, not contact-filtered) ── */}
+          <div className="card p-5">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-sm font-semibold text-white flex items-center gap-2">
+                <Eye size={13} style={{ color: "#f59e0b" }} /> Page Traffic — Visitors per Page
+              </h3>
+              <span className="text-[10px] px-2 py-1 rounded-lg"
+                style={{ background: "rgba(245,158,11,0.08)", border: "1px solid rgba(245,158,11,0.15)", color: "#fbbf24" }}>
+                {pages?.total_views || 0} total views
+              </span>
+            </div>
+            {loading ? <div className="skeleton h-52 rounded-xl" /> : dashPageChart.length === 0 ? (
+              <p className="text-sm text-center py-12" style={{ color: "#475569" }}>No page data yet.</p>
+            ) : (
+              <ResponsiveContainer width="100%" height={210}>
+                <BarChart data={dashPageChart} layout="vertical" barSize={14} margin={{ left: 10, right: 16 }}>
+                  <XAxis type="number" tick={{ fill: '#64748b', fontSize: 10 }} axisLine={false} tickLine={false} />
+                  <YAxis type="category" dataKey="name" width={130} tick={{ fill: '#94a3b8', fontSize: 9 }} axisLine={false} tickLine={false} />
+                  <Tooltip content={<Tip />} />
+                  <Bar dataKey="views"  name="Views"  fill="#3b82f6" radius={[0, 4, 4, 0]} />
+                  <Bar dataKey="unique" name="Unique" fill="#22c55e" radius={[0, 4, 4, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            )}
+          </div>
+
+          {/* ── Contact list (filtered) ── */}
+          <div className="card">
+            <div className="flex items-center justify-between px-4 py-3"
+              style={{ borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
+              <h3 className="text-sm font-semibold text-white flex items-center gap-2">
+                <Users size={13} style={{ color: "#60a5fa" }} /> Contact List
+              </h3>
+              <div className="flex items-center gap-3">
+                <span className="text-xs" style={{ color: "#475569" }}>{filteredDash.length} contacts</span>
+                <FilterSelect value={`${dashSortBy}|${dashSortDir}`} onChange={v => {
+                  const [col, dir] = v.split('|');
+                  setDashSortBy(col); setDashSortDir(dir);
+                }}>
+                  <option value="power_score|desc">Sort: Power ↓</option>
+                  <option value="power_score|asc">Sort: Power ↑</option>
+                  <option value="last_seen|desc">Sort: Recent</option>
+                  <option value="cart_events|desc">Sort: Most Carts</option>
+                  <option value="page_views|desc">Sort: Most Pages</option>
+                  <option value="total_time_sec|desc">Sort: Most Time</option>
+                </FilterSelect>
+              </div>
+            </div>
+            {loading ? <div className="skeleton h-64 rounded-xl m-5" /> : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr style={{ borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
+                      {[
+                        'Contact', 'Power', 'Status', 'City', 'Device',
+                        'Pages', 'Carts', 'Time', 'Scroll', 'Engage', 'Last Seen',
+                      ].map(h => (
+                        <th key={h} className="text-left py-2.5 px-3 font-medium whitespace-nowrap"
+                          style={{ color: "#64748b" }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredDash.length === 0 && (
+                      <tr><td colSpan={11} className="text-center py-14" style={{ color: "#475569" }}>
+                        No contacts match your filters.
+                      </td></tr>
+                    )}
+                    {filteredDash.slice(0, 200).map((c, i) => {
+                      const ss =
+                        c.status === 'purchased'      ? { bg: "rgba(34,197,94,0.1)",   border: "rgba(34,197,94,0.25)",   color: "#4ade80"  } :
+                        c.status === 'abandoned_cart' ? { bg: "rgba(249,115,22,0.1)",  border: "rgba(249,115,22,0.25)",  color: "#fb923c"  } :
+                        c.status === 'product_view'   ? { bg: "rgba(59,130,246,0.1)",  border: "rgba(59,130,246,0.25)",  color: "#60a5fa"  } :
+                                                        { bg: "rgba(100,116,139,0.1)", border: "rgba(100,116,139,0.25)", color: "#94a3b8"  };
+                      return (
+                        <tr key={i} className="transition-colors"
+                          style={{ borderBottom: "1px solid rgba(255,255,255,0.03)" }}
+                          onMouseEnter={e => e.currentTarget.style.background = "rgba(255,255,255,0.025)"}
+                          onMouseLeave={e => e.currentTarget.style.background = ""}>
+                          <td className="py-2.5 px-3">
+                            <p className="font-medium text-white leading-tight">{c.name || '—'}</p>
+                            <p className="font-mono text-[10px] mt-0.5" style={{ color: "#4ade80" }}>{c.phone}</p>
+                          </td>
+                          <td className="py-2.5 px-3"><ScoreBadge score={c.power_score} /></td>
+                          <td className="py-2.5 px-3">
+                            <span className="text-[10px] px-1.5 py-0.5 rounded font-medium whitespace-nowrap"
+                              style={{ background: ss.bg, border: `1px solid ${ss.border}`, color: ss.color }}>
+                              {(c.status || 'active').replace(/_/g, ' ')}
+                            </span>
+                          </td>
+                          <td className="py-2.5 px-3">
+                            <button className="text-xs transition-colors" style={{ color: "#94a3b8" }}
+                              onClick={() => setDashCity(c.city || '')}
+                              onMouseEnter={e => e.currentTarget.style.color = "#c084fc"}
+                              onMouseLeave={e => e.currentTarget.style.color = "#94a3b8"}
+                              title="Filter by city">
+                              {c.city || '—'}
+                            </button>
+                          </td>
+                          <td className="py-2.5 px-3 text-xs capitalize" style={{ color: "#64748b" }}>{c.device || '—'}</td>
+                          <td className="py-2.5 px-3 font-mono text-center text-white">{c.page_views}</td>
+                          <td className="py-2.5 px-3 font-mono text-center"
+                            style={{ color: c.cart_events > 0 ? "#fb923c" : "#64748b" }}>{c.cart_events}</td>
+                          <td className="py-2.5 px-3 font-mono text-xs" style={{ color: "#94a3b8" }}>{fmt(c.total_time_sec)}</td>
+                          <td className="py-2.5 px-3">
+                            <MiniBar pct={c.avg_scroll_pct} color="#3b82f6" width={44} />
+                          </td>
+                          <td className="py-2.5 px-3">
+                            <MiniBar pct={c.engagement_score} color="#a855f7" width={44} />
+                          </td>
+                          <td className="py-2.5 px-3 whitespace-nowrap text-xs" style={{ color: "#64748b" }}>
+                            {c.last_seen ? new Date(c.last_seen).toLocaleDateString('en', { month: 'short', day: 'numeric' }) : '—'}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
         </div>
       )}
