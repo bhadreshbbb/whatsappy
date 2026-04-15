@@ -223,33 +223,31 @@ async function autoUploadTemplateImages(channelId, carouselCards, templateName =
   for (let i = 0; i < updatedCards.length; i++) {
     const card = updatedCards[i];
 
-    // ── Priority 1: already have a file_handle (resumable upload) — use it ───
-    if (card.file_handle) {
-      console.log(`[AutoUpload] Card ${i + 1}: using existing file_handle = ${card.file_handle}`);
+    // ── Priority 1: already have both file_handle + media_id — use them ────────
+    if (card.file_handle && card.media_id) {
+      console.log(`[AutoUpload] Card ${i + 1}: existing file_handle=${card.file_handle}  media_id=${card.media_id}`);
       updatedCards[i] = { ...card, header_media_id: card.file_handle };
       continue;
     }
 
-    // ── Priority 2: header_media_id already set (legacy or manual) ───────────
-    if (card.header_media_id) {
-      console.log(`[AutoUpload] Card ${i + 1}: using existing header_media_id = ${card.header_media_id}`);
-      continue;
-    }
-
-    // ── Priority 3: gallery image_id — look up file_handle or media_id from DB
+    // ── Priority 2: gallery image_id — look up file_handle + media_id from DB ─
     if (card.image_id) {
       const galleryImg = (db.gallery_images || []).find(img => img.id === card.image_id && img.channel_id === channelId);
-      if (galleryImg) {
-        const handle = galleryImg.file_handle || galleryImg.media_id || '';
-        if (handle) {
-          updatedCards[i] = { ...card, header_media_id: handle };
-          console.log(`[AutoUpload] Card ${i + 1}: resolved from gallery image_id ${card.image_id} → handle = ${handle}`);
-          continue;
-        }
+      if (galleryImg?.file_handle) {
+        updatedCards[i] = {
+          ...card,
+          file_handle:     galleryImg.file_handle,
+          media_id:        galleryImg.media_id || '',
+          header_media_id: galleryImg.file_handle,   // template creation uses file_handle
+        };
+        console.log(`[AutoUpload] Card ${i + 1}: from gallery → file_handle=${galleryImg.file_handle}  media_id=${galleryImg.media_id || 'none'}`);
+        continue;
       }
     }
 
-    // ── Priority 4: external image URL — download + resumable upload to Meta ─
+    // ── Priority 3: external image URL — upload TWICE to Meta ────────────────
+    // • uploadMediaResumable → file_handle  (used in template creation example)
+    // • uploadMedia          → media_id     (stored in gallery, used in send payload { "id": media_id })
     const externalUrl = card.selected_fetch_image || card.product_data?.image_url || '';
     if (externalUrl) {
       let imageUrl = externalUrl;
@@ -260,23 +258,38 @@ async function autoUploadTemplateImages(channelId, carouselCards, templateName =
       }
       try {
         const { buffer, mimeType } = await whatsappService.downloadImage(imageUrl);
-        const filename = `auto_card${i + 1}_${Date.now()}.jpg`;
 
-        // Use resumable upload API → returns file_handle like "4:abcXYZ..."
-        const fileHandle = await whatsappService.uploadMediaResumable(buffer, filename, mimeType);
+        // Upload 1: resumable → file_handle for template creation example
+        const fileHandle = await whatsappService.uploadMediaResumable(buffer, `auto_card${i + 1}_${Date.now()}.jpg`, mimeType);
+        console.log(`[AutoUpload] Card ${i + 1}: resumable upload → file_handle=${fileHandle}`);
 
-        // Save to Gallery for reuse
+        // Upload 2: regular → media_id for message send payload
+        const mediaId = await whatsappService.uploadMedia(buffer, `auto_card${i + 1}.jpg`, mimeType);
+        console.log(`[AutoUpload] Card ${i + 1}: regular upload → media_id=${mediaId}`);
+
+        // Save to gallery — folder named after template, image record named by media_id
         const image = {
-          id: uuidv4(), folder_id: folder.id, channel_id: channelId,
-          filename, mime_type: mimeType, size: buffer.length,
-          file_handle: fileHandle, source_url: externalUrl,
-          created_at: new Date().toISOString(),
+          id:          uuidv4(),
+          folder_id:   folder.id,
+          channel_id:  channelId,
+          filename:    mediaId,          // named by media_id
+          mime_type:   mimeType,
+          size:        buffer.length,
+          file_handle: fileHandle,       // for template creation
+          media_id:    mediaId,          // for message send: { "id": media_id }
+          source_url:  externalUrl,
+          created_at:  new Date().toISOString(),
         };
         if (!db.gallery_images) db.gallery_images = [];
         db.gallery_images.push(image);
 
-        updatedCards[i] = { ...card, image_id: image.id, file_handle: fileHandle, header_media_id: fileHandle };
-        console.log(`[AutoUpload] Card ${i + 1}: uploaded → file_handle = ${fileHandle}`);
+        updatedCards[i] = {
+          ...card,
+          image_id:        image.id,
+          file_handle:     fileHandle,
+          media_id:        mediaId,
+          header_media_id: fileHandle,   // template creation uses file_handle in example
+        };
       } catch (err) {
         console.error(`[AutoUpload] Card ${i + 1}: upload failed — ${err.message}. Continuing without image.`);
         // Don't throw — other cards should still work; template can still be submitted
@@ -285,7 +298,7 @@ async function autoUploadTemplateImages(channelId, carouselCards, templateName =
     }
 
     // ── No image source at all ───────────────────────────────────────────────
-    console.warn(`[AutoUpload] Card ${i + 1}: no image source — header_handle will be missing`);
+    console.warn(`[AutoUpload] Card ${i + 1}: no image source — header will be missing`);
   }
 
   db.save();
@@ -431,8 +444,9 @@ export function buildSendMessagePayload(tpl, productConfig, recipientPhone = '{{
         link:  pc.link  || card.product_data?.link  || '',
       };
 
-      // Header image — file_handle (resumable) > media_id > public URL
-      const imgId  = pc.file_handle || pc.header_media_id || card.file_handle || card.header_media_id || '';
+      // Header image — media_id preferred for send payload (regular upload, numeric ID)
+      // Falls back to file_handle if media_id not yet available (first run / legacy records)
+      const imgId  = pc.media_id || pc.file_handle || card.media_id || card.file_handle || pc.header_media_id || card.header_media_id || '';
       const imgUrl = pc._hot_image_url || pc.image_url || card.product_data?.image_url || '';
       if (imgId) {
         cardComponents.push({ type: 'header', parameters: [{ type: 'image', image: { id: imgId } }] });
@@ -604,7 +618,9 @@ export async function createTemplate(req, res) {
               price:           c.product_data?.price  || hot?.price || '',
               link:            c.product_data?.link   || hot?.url   || '',
               image_id:        c.image_id             || '',
-              header_media_id: c.header_media_id      || c.file_handle || '',
+              file_handle:     c.file_handle          || '',          // for template creation example
+              media_id:        c.media_id             || '',          // for send payload { "id": media_id }
+              header_media_id: c.file_handle          || c.header_media_id || '',
               _hot_image_url:  c.product_data?.image_url || c.selected_fetch_image || hot?.image || '',
               _hot_score:      hot?.score   ?? 0,
               _hot_views:      hot?.views   ?? 0,
@@ -834,7 +850,24 @@ export async function refreshAutoProducts(req, res) {
         const existing = existingCards[i] || {};
         if (!hot) return existing;
 
-        const newImageUrl  = hot.image || '';
+        // ── Scrape fresh product data when URL is available ──────────────────
+        let hotName  = hot.name  || '';
+        let hotPrice = hot.price || '';
+        let hotImage = hot.image || '';
+
+        if (hot.url) {
+          try {
+            const scraped = await scrapeProductData(hot.url);
+            if (scraped.title)     hotName  = scraped.title;
+            if (scraped.price)     hotPrice = scraped.price;
+            if (scraped.image_url) hotImage = scraped.image_url;
+            console.log(`[RefreshAutoProducts] "${tpl.name}" card ${i + 1}: scraped "${hotName}"`);
+          } catch (scrapeErr) {
+            console.warn(`[RefreshAutoProducts] "${tpl.name}" card ${i + 1}: scrape failed (${scrapeErr.message}), using cached data`);
+          }
+        }
+
+        const newImageUrl  = hotImage;
         const prevImageUrl = existing._hot_image_url || '';
         const productChanged = newImageUrl && newImageUrl !== prevImageUrl;
         const needsUpload    = newImageUrl && (productChanged || !existing.header_media_id);
@@ -847,23 +880,25 @@ export async function refreshAutoProducts(req, res) {
             img => img.source_url === newImageUrl && img.channel_id === channelId && !productChanged
           );
           if (cached) {
-            header_media_id = cached.file_handle || cached.media_id || '';
+            header_media_id = cached.media_id || '';
             image_id        = cached.id;
           } else {
             try {
               const { buffer, mimeType } = await whatsappService.downloadImage(newImageUrl);
-              const filename = `${folderName}_card${i + 1}_${nowDt.getTime()}.jpg`;
-              const fileHandle = await whatsappService.uploadMediaResumable(buffer, filename, mimeType);
+              // uploadMedia() → numeric media_id used as { "image": { "id": media_id } } in send payload
+              const mediaId = await whatsappService.uploadMedia(buffer, `${folderName}_card${i + 1}.jpg`, mimeType);
               const imgRecord = {
                 id: uuidv4(), folder_id: folder.id, channel_id: channelId,
-                filename, mime_type: mimeType, size: buffer.length,
-                file_handle: fileHandle, source_url: newImageUrl,
+                filename: mediaId,          // named by media_id
+                mime_type: mimeType, size: buffer.length,
+                media_id: mediaId,           // used in send payload
+                source_url: newImageUrl,
                 created_at: nowDt.toISOString(), template_name: tpl.name, card_index: i,
               };
               db.gallery_images.push(imgRecord);
-              header_media_id = fileHandle;
+              header_media_id = mediaId;
               image_id        = imgRecord.id;
-              console.log(`[RefreshAutoProducts] "${tpl.name}" card ${i + 1}: uploaded → ${fileHandle}`);
+              console.log(`[RefreshAutoProducts] "${tpl.name}" card ${i + 1}: uploaded → media_id: ${mediaId}`);
             } catch (imgErr) {
               console.error(`[RefreshAutoProducts] card ${i + 1} upload failed:`, imgErr.message);
             }
@@ -871,10 +906,12 @@ export async function refreshAutoProducts(req, res) {
         }
 
         return {
-          title: hot.name  || existing.title || '',
-          price: hot.price || existing.price || '',
-          link:  hot.url   || existing.link  || '',
-          image_id, header_media_id,
+          title: hotName  || existing.title || '',
+          price: hotPrice || existing.price || '',
+          link:  hot.url  || existing.link  || '',
+          image_id,
+          media_id:        header_media_id,  // numeric ID for send payload { "id": media_id }
+          header_media_id,
           _hot_image_url: newImageUrl,
           _hot_score: hot.score, _hot_views: hot.views, _hot_carts: hot.carts,
           _auto_updated: nowDt.toISOString(),
@@ -936,68 +973,74 @@ export function computeHotProducts(db, channelId, limit = 10) {
     .slice(0, limit);
 }
 
-// ── Scrape product from URL (Shopify JSON API + OpenGraph fallback) ───────────
+// ── Scrape product data from URL — shared helper (no Express dependency) ────────
+// Returns { title, price, image_url, images, description, source } or throws.
+export async function scrapeProductData(url) {
+  if (!url || !url.startsWith('http')) throw new Error('Valid URL required');
+
+  const cleanUrl = url.split('?')[0].replace(/\/$/, '');
+
+  // ── 1. Try Shopify JSON API ────────────────────────────────────────────────
+  try {
+    const shopifyJson = cleanUrl + '.json';
+    const r = await fetch(shopifyJson, {
+      headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json' },
+      signal: AbortSignal.timeout(8000),
+    });
+    if (r.ok) {
+      const data = await r.json();
+      const p = data.product;
+      if (p?.title) {
+        const variant = p.variants?.[0];
+        const price = variant?.price;
+        const currency = variant?.presentment_prices?.[0]?.price?.currency_code || 'INR';
+        const symbol = currency === 'INR' ? '₹' : (currency === 'USD' ? '$' : currency + ' ');
+        const images = (p.images || []).slice(0, 8).map(img => ({ url: img.src, alt: img.alt || p.title }));
+        return {
+          title: p.title,
+          price: price ? `${symbol}${price}` : '',
+          image_url: images[0]?.url || '',
+          images,
+          description: (p.body_html || '').replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim().substring(0, 200),
+          source: 'shopify',
+        };
+      }
+    }
+  } catch (_) { }
+
+  // ── 2. OpenGraph / meta tag scraping ──────────────────────────────────────
+  const html = await fetchHtml(url);
+  function getMeta(props) {
+    for (const prop of [].concat(props)) {
+      const m = html.match(new RegExp(`<meta[^>]+(?:property|name)=["']${prop}["'][^>]*content=["']([^"']+)["']`, 'i'))
+        || html.match(new RegExp(`<meta[^>]+content=["']([^"']+)["'][^>]*(?:property|name)=["']${prop}["']`, 'i'));
+      if (m?.[1]) return m[1].trim();
+    }
+    return '';
+  }
+  const title = getMeta(['og:title', 'twitter:title']) || (html.match(/<title[^>]*>([^<]+)<\/title>/i)?.[1] || '').trim();
+  const image_url = getMeta(['og:image', 'twitter:image:src', 'twitter:image']);
+  const description = getMeta(['og:description', 'twitter:description', 'description']);
+  const priceRaw = getMeta(['product:price:amount', 'og:price:amount']);
+  const currency = getMeta(['product:price:currency', 'og:price:currency']) || 'INR';
+  const symbol = currency === 'INR' ? '₹' : (currency === 'USD' ? '$' : currency + ' ');
+
+  return {
+    title: title.substring(0, 100),
+    price: priceRaw ? `${symbol}${priceRaw}` : '',
+    image_url,
+    images: image_url ? [{ url: image_url, alt: title }] : [],
+    description: description.substring(0, 200),
+    source: 'opengraph',
+  };
+}
+
+// ── Scrape product from URL — Express HTTP endpoint ───────────────────────────
 export async function scrapeProduct(req, res) {
   try {
     const { url } = req.body;
-    if (!url || !url.startsWith('http')) return res.status(400).json({ error: 'Valid URL required' });
-
-    const cleanUrl = url.split('?')[0].replace(/\/$/, '');
-
-    // ── 1. Try Shopify JSON API ──────────────────────────────────────────────
-    try {
-      const shopifyJson = cleanUrl + '.json';
-      const r = await fetch(shopifyJson, {
-        headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json' },
-        signal: AbortSignal.timeout(8000),
-      });
-      if (r.ok) {
-        const data = await r.json();
-        const p = data.product;
-        if (p?.title) {
-          const variant = p.variants?.[0];
-          const price = variant?.price;
-          const currency = variant?.presentment_prices?.[0]?.price?.currency_code || 'INR';
-          const symbol = currency === 'INR' ? '₹' : (currency === 'USD' ? '$' : currency + ' ');
-          // Collect all product images (up to 8)
-          const images = (p.images || []).slice(0, 8).map(img => ({ url: img.src, alt: img.alt || p.title }));
-          return res.json({
-            title: p.title,
-            price: price ? `${symbol}${price}` : '',
-            image_url: images[0]?.url || '',
-            images,
-            description: (p.body_html || '').replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim().substring(0, 200),
-            source: 'shopify',
-          });
-        }
-      }
-    } catch (_) { }
-
-    // ── 2. OpenGraph / meta tag scraping ────────────────────────────────────
-    const html = await fetchHtml(url);
-    function getMeta(props) {
-      for (const prop of [].concat(props)) {
-        const m = html.match(new RegExp(`<meta[^>]+(?:property|name)=["']${prop}["'][^>]*content=["']([^"']+)["']`, 'i'))
-          || html.match(new RegExp(`<meta[^>]+content=["']([^"']+)["'][^>]*(?:property|name)=["']${prop}["']`, 'i'));
-        if (m?.[1]) return m[1].trim();
-      }
-      return '';
-    }
-    const title = getMeta(['og:title', 'twitter:title']) || (html.match(/<title[^>]*>([^<]+)<\/title>/i)?.[1] || '').trim();
-    const image_url = getMeta(['og:image', 'twitter:image:src', 'twitter:image']);
-    const description = getMeta(['og:description', 'twitter:description', 'description']);
-    const priceRaw = getMeta(['product:price:amount', 'og:price:amount']);
-    const currency = getMeta(['product:price:currency', 'og:price:currency']) || 'INR';
-    const symbol = currency === 'INR' ? '₹' : (currency === 'USD' ? '$' : currency + ' ');
-
-    res.json({
-      title: title.substring(0, 100),
-      price: priceRaw ? `${symbol}${priceRaw}` : '',
-      image_url,
-      images: image_url ? [{ url: image_url, alt: title }] : [],
-      description: description.substring(0, 200),
-      source: 'opengraph',
-    });
+    const result = await scrapeProductData(url);
+    res.json(result);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

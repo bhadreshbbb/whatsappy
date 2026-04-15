@@ -4,7 +4,7 @@ import { aiService } from '../services/ai.service.js';
 import { translateComponents } from '../services/translate.service.js';
 import { saveChatMessage } from '../controllers/chat.controller.js';
 import { upgradeStatus } from '../utils/statusMachine.js';
-import { computeHotProducts, buildSendMessagePayload, LANG_MAP } from '../controllers/meta-templates.controller.js';
+import { computeHotProducts, buildSendMessagePayload, scrapeProductData, LANG_MAP } from '../controllers/meta-templates.controller.js';
 import { v4 as uuidv4 } from 'uuid';
 
 let cronInterval;
@@ -111,7 +111,24 @@ async function refreshAutoProductTemplates() {
           const hot      = hotProducts[i % hotProducts.length];
           const existing = existingCards[i] || {};
 
-          const newImageUrl = hot.image || '';
+          // ── Scrape fresh product data when URL is available ──────────────────
+          let hotName  = hot.name  || '';
+          let hotPrice = hot.price || '';
+          let hotImage = hot.image || '';
+
+          if (hot.url) {
+            try {
+              const scraped = await scrapeProductData(hot.url);
+              if (scraped.title)     hotName  = scraped.title;
+              if (scraped.price)     hotPrice = scraped.price;
+              if (scraped.image_url) hotImage = scraped.image_url;
+              console.log(`[AutoProducts] "${tpl.name}" card ${i + 1}: scraped "${hotName}" — image: ${hotImage ? 'found' : 'none'}`);
+            } catch (scrapeErr) {
+              console.warn(`[AutoProducts] "${tpl.name}" card ${i + 1}: scrape failed (${scrapeErr.message}), using cached data`);
+            }
+          }
+
+          const newImageUrl  = hotImage;
           const prevImageUrl = existing._hot_image_url || '';
 
           // Re-upload image if:
@@ -129,36 +146,35 @@ async function refreshAutoProductTemplates() {
               img => img.source_url === newImageUrl && img.channel_id === channelId
             );
             if (cached && !productChanged) {
-              header_media_id = cached.file_handle || cached.media_id || '';
+              header_media_id = cached.media_id || '';
               image_id        = cached.id;
-              console.log(`[AutoProducts] "${tpl.name}" card ${i + 1}: reuse cached → ${header_media_id}`);
+              console.log(`[AutoProducts] "${tpl.name}" card ${i + 1}: reuse cached media_id → ${header_media_id}`);
             } else {
-              // Download and upload fresh image to Meta Graph API
+              // Download image and upload to Meta Graph API → get media_id for send payload
               try {
                 const { buffer, mimeType } = await whatsappService.downloadImage(newImageUrl);
-                const filename = `${folderName}_card${i + 1}_${nowDt.getTime()}.jpg`;
 
-                // Use resumable upload → returns file_handle suitable for template creation AND send
-                const fileHandle = await whatsappService.uploadMediaResumable(buffer, filename, mimeType);
+                // uploadMedia() returns a numeric media_id used in { "image": { "id": media_id } }
+                const mediaId = await whatsappService.uploadMedia(buffer, `${folderName}_card${i + 1}.jpg`, mimeType);
 
                 const imgRecord = {
-                  id:          uuidv4(),
-                  folder_id:   folder.id,
-                  channel_id:  channelId,
-                  filename,
-                  mime_type:   mimeType,
-                  size:        buffer.length,
-                  file_handle: fileHandle,
-                  source_url:  newImageUrl,
-                  created_at:  nowDt.toISOString(),
+                  id:           uuidv4(),
+                  folder_id:    folder.id,
+                  channel_id:   channelId,
+                  filename:     mediaId,           // named by media_id
+                  mime_type:    mimeType,
+                  size:         buffer.length,
+                  media_id:     mediaId,            // what the send payload uses
+                  source_url:   newImageUrl,
+                  created_at:   nowDt.toISOString(),
                   template_name: tpl.name,
-                  card_index:  i,
+                  card_index:   i,
                 };
                 db.gallery_images.push(imgRecord);
 
-                header_media_id = fileHandle;
+                header_media_id = mediaId;
                 image_id        = imgRecord.id;
-                console.log(`[AutoProducts] "${tpl.name}" card ${i + 1}: ${productChanged ? 're-uploaded new product' : 'first upload'} → ${fileHandle}`);
+                console.log(`[AutoProducts] "${tpl.name}" card ${i + 1}: ${productChanged ? 're-uploaded new product' : 'first upload'} → media_id: ${mediaId}`);
               } catch (imgErr) {
                 console.error(`[AutoProducts] "${tpl.name}" card ${i + 1} image upload failed:`, imgErr.message);
                 // Keep existing IDs if upload fails — don't break the whole refresh
@@ -167,10 +183,11 @@ async function refreshAutoProductTemplates() {
           }
 
           return {
-            title:           hot.name   || existing.title  || '',
-            price:           hot.price  || existing.price  || '',
-            link:            hot.url    || existing.link   || '',
+            title:           hotName   || existing.title  || '',
+            price:           hotPrice  || existing.price  || '',
+            link:            hot.url   || existing.link   || '',
             image_id,
+            media_id:        header_media_id,   // numeric ID for send payload { "id": media_id }
             header_media_id,
             _hot_image_url:  newImageUrl,
             _hot_score:      hot.score,
