@@ -342,8 +342,8 @@
         '%c[WhatsWay] Visitor tracked  ' + (ok ? '✓ Geo OK' : '⚠ Geo Unknown'),
         'color:' + (ok ? '#4ade80' : '#fb923c') + ';font-weight:bold'
       );
-      console.log('%cSession ID    %c' + (d.session   || sessionId),          'color:#64748b', 'color:#e2e8f0');
-      console.log('%cIP Address    %c' + (d.ip        || '— not detected'),   'color:#64748b', d.ip  ? 'color:#4ade80' : 'color:#f87171');
+      console.log('%cSession ID    %c' + (d.session   || sessionId),                          'color:#64748b', 'color:#e2e8f0');
+      console.log('%cIP Address    %c' + (d.ip || '— not detected') + '  (' + (d.ipSource || '?') + ')', 'color:#64748b', d.ip ? 'color:#4ade80' : 'color:#f87171');
       console.log('%cCity          %c' + (d.city      || '—'),                'color:#64748b', ok    ? 'color:#4ade80' : 'color:#f87171');
       console.log('%cState         %c' + (d.state     || '—'),                'color:#64748b', 'color:#e2e8f0');
       console.log('%cCountry       %c' + (d.country   || '—'),                'color:#64748b', 'color:#e2e8f0');

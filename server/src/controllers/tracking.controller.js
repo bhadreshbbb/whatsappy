@@ -107,11 +107,22 @@ export const trackingController = {
     try {
       const db = getDb();
       const { channelId, sessionId, url, deviceType, language, pageViews, pageTitle, screen_res, timezone: tz, shopify_carousel } = req.body;
-      const ip = req.headers['x-forwarded-for']?.split(',')[0]?.trim()
-              || req.ip
-              || req.socket?.remoteAddress
-              || '';
-              console.log('bbbbbb',ip)
+      // ── IP extraction: check all proxy headers in priority order ────────────
+      // Cloudflare (most reliable on Render) → standard proxy → socket
+      const _cfIp    = req.headers['cf-connecting-ip']?.trim();
+      const _fwdIp   = req.headers['x-forwarded-for']?.split(',')[0]?.trim();
+      const _realIp  = req.headers['x-real-ip']?.trim();
+      const _sockIp  = req.socket?.remoteAddress?.trim();
+      const _reqIp   = req.ip?.trim();
+
+      const ip = _cfIp || _fwdIp || _realIp || _reqIp || _sockIp || '';
+
+      console.log('[IP] cf-connecting-ip:', _cfIp    || '—');
+      console.log('[IP] x-forwarded-for: ', _fwdIp   || '—');
+      console.log('[IP] x-real-ip:       ', _realIp  || '—');
+      console.log('[IP] req.ip:          ', _reqIp   || '—');
+      console.log('[IP] socket.addr:     ', _sockIp  || '—');
+      console.log('[IP] → using:         ', ip       || '— (empty)');
       const geo = await this._getGeoData(ip);
 
       // Geo-based language is the source of truth (city/state → native language)
@@ -165,22 +176,24 @@ export const trackingController = {
 
       db.save();
       // Return full geo debug payload so browser console can show everything
+      const ipSource = _cfIp ? 'cf-connecting-ip' : _fwdIp ? 'x-forwarded-for' : _realIp ? 'x-real-ip' : _reqIp ? 'req.ip' : 'socket';
       res.json({
         success: true,
         debug: {
-          ip:          ip            || null,
-          city:        geo.city      || null,
-          state:       geo.state     || null,
-          country:     geo.country   || null,
-          timezone:    geo.timezone  || null,
-          language:    resolvedLanguage,
-          session:     sessionId,
-          geoApiStep:  geo._debug?.step       || null,
-          geoApiCalled: geo._debug?.apiCalled ?? null,
-          geoHttpStatus: geo._debug?.httpStatus || null,
-          geoApiUrl:   geo._debug?.apiUrl      || null,
+          ip:            ip            || null,
+          ipSource:      ipSource,
+          city:          geo.city      || null,
+          state:         geo.state     || null,
+          country:       geo.country   || null,
+          timezone:      geo.timezone  || null,
+          language:      resolvedLanguage,
+          session:       sessionId,
+          geoApiStep:    geo._debug?.step         || null,
+          geoApiCalled:  geo._debug?.apiCalled    ?? null,
+          geoHttpStatus: geo._debug?.httpStatus   || null,
+          geoApiUrl:     geo._debug?.apiUrl       || null,
           geoRawResponse: geo._debug?.rawResponse || null,
-          geoError:    geo._debug?.error || geo._debug?.errorBody || null,
+          geoError:      geo._debug?.error || geo._debug?.errorBody || null,
         }
       });
     } catch (e) { next(e); }
@@ -808,14 +821,22 @@ export const trackingController = {
       return { ...fallback, _debug: { step: 'no_ip', ip: null, apiCalled: false } };
     }
 
-    const cleanIp = ip.replace(/^::ffff:/, '');
-    console.log(`[Geo] IP: "${cleanIp}" (raw: "${ip}")`);
+    // Strip IPv4-mapped IPv6 (::ffff:1.2.3.4 → 1.2.3.4)
+    // Strip brackets from [::1] style IPv6
+    // Pure IPv6 (mobile) kept as-is — ip-api.com supports it
+    let cleanIp = ip
+      .replace(/^::ffff:/i, '')   // IPv4-mapped IPv6
+      .replace(/^\[/, '')         // leading bracket
+      .replace(/\]$/, '');        // trailing bracket
+    console.log(`[Geo] IP: "${cleanIp}" (raw: "${ip}") — ${/^[\da-fA-F:]+$/.test(cleanIp) && cleanIp.includes(':') ? 'IPv6 mobile' : 'IPv4 desktop'}`);
 
     if (
-      cleanIp === '127.0.0.1' || cleanIp === '::1' ||
-      cleanIp.startsWith('192.168.') || cleanIp.startsWith('10.') || cleanIp.startsWith('172.')
+      cleanIp === '127.0.0.1' || cleanIp === '::1' || cleanIp === 'localhost' ||
+      cleanIp.startsWith('192.168.') || cleanIp.startsWith('10.') ||
+      /^172\.(1[6-9]|2\d|3[01])\./.test(cleanIp) ||
+      cleanIp.startsWith('fc') || cleanIp.startsWith('fd') // IPv6 private range
     ) {
-      console.log('[Geo] Local IP — skipping API');
+      console.log('[Geo] Local/private IP — skipping API');
       return { city: 'Local', state: 'Local', country: 'Local', countryCode: 'XX', timezone: 'UTC',
                _debug: { step: 'local_ip', ip: cleanIp, apiCalled: false } };
     }
