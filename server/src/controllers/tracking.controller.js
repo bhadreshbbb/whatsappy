@@ -358,18 +358,32 @@ export const trackingController = {
   async trackPurchase(req, res, next) {
     try {
       const db = getDb();
-      const { channelId, sessionId, phone, orderId, products, totalAmount } = req.body;
-      
-      db.purchase_history.push({
-        id: (db.purchase_history.length || 0) + 1,
-        channel_id: channelId || 'demo',
-        phone, order_id: orderId,
-        products: JSON.stringify(products || []),
-        total_amount: totalAmount || 0,
-        purchased_at: new Date().toISOString()
-      });
+      const { channelId, sessionId, phone, orderId, products, totalAmount, currency } = req.body;
+      const cid = channelId || 'demo';
 
-      // 🔥 AUTOMATIC DETECTION: mark all abandonment events for this user as recovered
+      // Avoid duplicate purchase records for same order
+      const existing = orderId
+        ? db.purchase_history.find(p => p.channel_id === cid && p.order_id === String(orderId))
+        : null;
+
+      if (!existing) {
+        db.purchase_history.push({
+          id:           (db.purchase_history.length || 0) + 1,
+          channel_id:   cid,
+          session_id:   sessionId,
+          phone:        phone    || null,
+          order_id:     orderId  || null,
+          products:     JSON.stringify(products || []),
+          total_amount: totalAmount || 0,
+          currency:     currency || null,
+          purchased_at: new Date().toISOString(),
+        });
+        console.log(`[Purchase] Order ${orderId || 'N/A'} — ₹${totalAmount || 0} — phone=${phone || 'unknown'} session=${sessionId}`);
+      } else {
+        console.log(`[Purchase] Duplicate order ${orderId} — skipped`);
+      }
+
+      // Mark all cart events recovered + set visitor status → purchased
       this._markRecovered(db, channelId, sessionId, phone);
       db.save();
 

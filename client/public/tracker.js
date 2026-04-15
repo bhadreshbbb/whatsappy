@@ -717,13 +717,94 @@
       });
     },
 
-    // Minimal call: WhatsWay.trackProductView() — auto-captures everything from page
-    // Full call:    WhatsWay.trackProductView({ product_name:'...', product_price:'...', ... })
-    // Cart call:    WhatsWay.trackAddToCart({ products:[{name,price,url}], totalAmount:799 })
-    // Identify:     WhatsWay.identify({ phone:'+91...', name:'...' })
+    // ── trackPurchase: call on order confirmation / thank you page ───────────
+    trackPurchase: function(data) {
+      if (!data) data = {};
+      var products = data.products || captureCartProducts();
+      track('purchase', {
+        orderId:     data.orderId     || data.order_id    || '',
+        products:    products,
+        totalAmount: data.totalAmount || data.total       || 0,
+        currency:    data.currency    || config.currency  || null,
+        phone:       data.phone       || '',
+      }, function() {
+        console.log('%c[WhatsWay] Purchase tracked — status → purchased', 'color:#4ade80;font-weight:bold');
+      });
+    },
   };
 
   window.WhatsWay = WhatsWay;
+
+  // ── Auto-detect purchase / thank-you page ─────────────────────────────────
+  // Fires automatically on Shopify thank_you, WooCommerce order-received,
+  // and common custom store patterns. No manual call needed.
+  (function() {
+    var url   = window.location.href.toLowerCase();
+    var path  = window.location.pathname.toLowerCase();
+
+    // Shopify: /checkout/thank_you  OR  /orders/<id>
+    var isShopifyThankYou = /\/checkout\/thank_you/.test(path) || /\/orders\/[a-z0-9]+/.test(path);
+
+    // WooCommerce: /checkout/order-received/
+    var isWCThankYou = /\/checkout\/order-received\//.test(path) || /\/order-received\//.test(path);
+
+    // Generic patterns: thank-you, thankyou, order-confirmed, order-success, payment-success
+    var isGenericThankYou = /thank.?you|order.?confirm|order.?success|payment.?success|purchase.?complete/i.test(path + ' ' + document.title);
+
+    if (isShopifyThankYou || isWCThankYou || isGenericThankYou) {
+      // Pull order details from Shopify global or page
+      var orderId     = '';
+      var totalAmount = 0;
+      var products    = [];
+
+      // Shopify exposes order in window.Shopify.checkout
+      if (window.Shopify && window.Shopify.checkout) {
+        var co = window.Shopify.checkout;
+        orderId     = co.order_id || co.name || '';
+        totalAmount = parseFloat(co.total_price || 0);
+        products    = (co.line_items || []).map(function(item) {
+          return {
+            name:  item.title || item.product_title || '',
+            price: (item.price / 100) || 0,
+            image: item.image || '',
+            url:   item.url   || '',
+          };
+        });
+      }
+
+      // WooCommerce: order total from DOM
+      if (!totalAmount) {
+        var totalEl = document.querySelector('.woocommerce-order-overview__total .woocommerce-Price-amount, .order-total .amount');
+        if (totalEl) totalAmount = parseFloat((totalEl.textContent || '').replace(/[^0-9.]/g, '')) || 0;
+      }
+
+      // Order ID from URL path (/orders/12345 or /order-received/12345)
+      if (!orderId) {
+        var m = path.match(/\/orders?\/([a-z0-9#\-]+)/i) || path.match(/order-received\/(\d+)/i);
+        if (m) orderId = m[1];
+      }
+
+      // Auto-fire purchase event after DOM is ready (slight delay to let page settle)
+      setTimeout(function() {
+        WhatsWay.trackPurchase({ orderId: orderId, totalAmount: totalAmount, products: products });
+      }, 500);
+    }
+
+    // Shopify: also listen for the checkout:complete JS event (fired by Shopify theme)
+    document.addEventListener('checkout:complete', function(e) {
+      var detail = (e && e.detail) || {};
+      WhatsWay.trackPurchase({
+        orderId:     detail.orderId || detail.order_id || '',
+        totalAmount: detail.totalPrice || 0,
+      });
+    });
+
+    // WooCommerce fires wc_order_received event
+    document.addEventListener('wc_order_received', function(e) {
+      var detail = (e && e.detail) || {};
+      WhatsWay.trackPurchase({ orderId: detail.orderId || '', totalAmount: detail.total || 0 });
+    });
+  })();
 
   // Kick off after DOM ready
   if (document.readyState === 'loading') {
