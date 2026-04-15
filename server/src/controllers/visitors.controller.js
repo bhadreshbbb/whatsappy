@@ -4,20 +4,23 @@ export const visitorsController = {
   async getVisitors(req, res, next) {
     try {
       const db = getDb();
-      const { search, page = '1', limit = '20' } = req.query;
+      const { search, page = '1', limit = '20', status, device, hasPhone } = req.query;
       const channelId = req.headers['x-channel-id'] || 'demo';
 
       let results = db.website_visitors.filter(v => v.channel_id === channelId);
-      
+
       if (search) {
         const s = String(search).toLowerCase();
-        results = results.filter(v => 
+        results = results.filter(v =>
           (v.name && v.name.toLowerCase().includes(s)) ||
           (v.phone && v.phone.includes(s)) ||
           (v.email && v.email.toLowerCase().includes(s)) ||
           (v.city && v.city.toLowerCase().includes(s))
         );
       }
+      if (status)   results = results.filter(v => v.status === status);
+      if (device)   results = results.filter(v => v.device_type === device);
+      if (hasPhone === 'true') results = results.filter(v => !!v.phone);
       
       results.sort((a, b) => new Date(b.visited_at).getTime() - new Date(a.visited_at).getTime());
       

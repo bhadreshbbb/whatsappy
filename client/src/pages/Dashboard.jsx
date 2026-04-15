@@ -256,6 +256,34 @@ export default function Dashboard() {
         </div>
       </div>
 
+      {/* Funnel status breakdown */}
+      <div className="card p-5">
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <h2 className="text-sm font-semibold text-white">Visitor Funnel</h2>
+            <p className="text-xs mt-0.5" style={{ color: '#64748b' }}>Real-time status progression (all time)</p>
+          </div>
+        </div>
+        <div className="grid grid-cols-3 md:grid-cols-6 gap-3">
+          {[
+            { key: 'active',             label: 'Active',              color: '#60a5fa', bg: 'rgba(59,130,246,0.1)',   border: 'rgba(59,130,246,0.2)'   },
+            { key: 'product_view',       label: 'Product View',        color: '#a78bfa', bg: 'rgba(139,92,246,0.1)',   border: 'rgba(139,92,246,0.2)'   },
+            { key: 'abandoned_cart',     label: 'Abandoned Cart',      color: '#fb923c', bg: 'rgba(249,115,22,0.1)',   border: 'rgba(249,115,22,0.2)'   },
+            { key: 'abandoned_checkout', label: 'Abandoned Checkout',  color: '#f87171', bg: 'rgba(239,68,68,0.1)',    border: 'rgba(239,68,68,0.2)'    },
+            { key: 'followup_complete',  label: 'Followup Done',       color: '#34d399', bg: 'rgba(52,211,153,0.1)',   border: 'rgba(52,211,153,0.2)'   },
+            { key: 'purchased',          label: 'Purchased',           color: '#4ade80', bg: 'rgba(34,197,94,0.1)',    border: 'rgba(34,197,94,0.2)'    },
+          ].map(s => (
+            <div key={s.key} className="p-3 rounded-xl text-center"
+              style={{ background: s.bg, border: `1px solid ${s.border}` }}>
+              <p className="text-2xl font-bold" style={{ color: s.color }}>
+                {analytics?.funnel?.[s.key] ?? 0}
+              </p>
+              <p className="text-[10px] mt-1 leading-tight" style={{ color: s.color, opacity: 0.8 }}>{s.label}</p>
+            </div>
+          ))}
+        </div>
+      </div>
+
       {/* Automation Engine status */}
       <div className="card p-5">
         <div className="flex items-center gap-3 mb-4">

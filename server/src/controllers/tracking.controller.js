@@ -252,6 +252,35 @@ export const trackingController = {
             db.website_visitors[vCartIdx].cart_started_at = new Date().toISOString();
           }
         }
+        // Always backfill phone/email/name if now available
+        if (phone && !db.website_visitors[vCartIdx].phone) db.website_visitors[vCartIdx].phone = phone;
+        if (email && !db.website_visitors[vCartIdx].email) db.website_visitors[vCartIdx].email = email;
+        if (name  && !db.website_visitors[vCartIdx].name)  db.website_visitors[vCartIdx].name  = name;
+      } else if (eventType !== 'checkout_completed') {
+        // ── CREATE visitor on-the-fly when cart event arrives before trackVisitor ──
+        const newStatus = eventType === 'checkout_started' ? 'abandoned_checkout' : 'abandoned_cart';
+        const now = new Date().toISOString();
+        db.website_visitors.push({
+          id:           (db.website_visitors.length || 0) + 1,
+          channel_id:   channelId || 'demo',
+          session_id:   sessionId,
+          phone:        phone  || null,
+          email:        email  || null,
+          name:         name   || null,
+          status:       newStatus,
+          device_type:  null,
+          page_views:   1,
+          last_product_name:  product_name  || null,
+          last_product_image: product_image || null,
+          last_product_url:   product_url   || null,
+          last_product_price: product_price || null,
+          cart_started_at:       eventType !== 'checkout_started' ? now : null,
+          checkout_started_at:   eventType === 'checkout_started' ? now : null,
+          visited_at:   now,
+          created_at:   now,
+          updated_at:   now,
+        });
+        console.log(`[Visitor] Auto-created on cart event — status=${newStatus} session=${sessionId} phone=${phone||'unknown'}`);
       }
 
       // If user checkout_completed (conversion) mark this and previous as recovered
@@ -344,6 +373,20 @@ export const trackingController = {
     const vIdx = db.website_visitors.findIndex(v => v.channel_id === cid && (v.session_id === sessionId || (phone && v.phone === phone)));
     if (vIdx >= 0) {
       upgradeStatus(db.website_visitors[vIdx], 'purchased');
+    } else {
+      // Create minimal visitor record for the purchase so dashboard shows it
+      const now = new Date().toISOString();
+      db.website_visitors.push({
+        id:        (db.website_visitors.length || 0) + 1,
+        channel_id: cid,
+        session_id: sessionId,
+        phone:     phone || null,
+        status:    'purchased',
+        page_views: 1,
+        visited_at: now,
+        created_at: now,
+        updated_at: now,
+      });
     }
   },
 
@@ -395,6 +438,26 @@ export const trackingController = {
         db.website_visitors[vIdx].last_product_url   = product_url   || db.website_visitors[vIdx].last_product_url;
         db.website_visitors[vIdx].last_product_price = product_price || db.website_visitors[vIdx].last_product_price;
         upgradeStatus(db.website_visitors[vIdx], 'product_view');
+      } else {
+        // ── CREATE visitor on-the-fly when product event arrives before trackVisitor ──
+        const now = new Date().toISOString();
+        db.website_visitors.push({
+          id:           (db.website_visitors.length || 0) + 1,
+          channel_id:   cid,
+          session_id:   sessionId,
+          phone:        visitor?.phone || null,
+          status:       'product_view',
+          device_type:  null,
+          page_views:   1,
+          last_product_name:  product_name  || null,
+          last_product_image: product_image || null,
+          last_product_url:   product_url   || null,
+          last_product_price: product_price || null,
+          visited_at:   now,
+          created_at:   now,
+          updated_at:   now,
+        });
+        console.log(`[Visitor] Auto-created on product view — status=product_view session=${sessionId}`);
       }
 
       db.save();
@@ -483,41 +546,70 @@ export const trackingController = {
       const { channelId, sessionId, name, phone,
               auto_product_name, auto_product_image, auto_product_url, auto_product_price } = req.body;
       const cid = channelId || 'demo';
-      const vIdx = db.website_visitors.findIndex(v => v.channel_id === cid && v.session_id === sessionId);
+      let vIdx = db.website_visitors.findIndex(v => v.channel_id === cid && v.session_id === sessionId);
+      if (vIdx < 0 && phone) {
+        // Try by phone across all sessions for this channel
+        vIdx = db.website_visitors.findIndex(v => v.channel_id === cid && v.phone === phone);
+      }
       if (vIdx >= 0) {
         db.website_visitors[vIdx].name  = name  || db.website_visitors[vIdx].name;
         db.website_visitors[vIdx].phone = phone || db.website_visitors[vIdx].phone;
+        // Backfill session_id if we found visitor by phone but session was different
+        if (!db.website_visitors[vIdx].session_id) db.website_visitors[vIdx].session_id = sessionId;
 
         // If tracker sent auto-captured product (from product page detect), store it
         if (auto_product_name)  db.website_visitors[vIdx].last_product_name  = auto_product_name;
         if (auto_product_image) db.website_visitors[vIdx].last_product_image = auto_product_image;
         if (auto_product_url)   db.website_visitors[vIdx].last_product_url   = auto_product_url;
         if (auto_product_price) db.website_visitors[vIdx].last_product_price = auto_product_price;
+      } else {
+        // ── CREATE visitor on-the-fly when identify arrives before trackVisitor ──
+        const now = new Date().toISOString();
+        const newVisitor = {
+          id:           (db.website_visitors.length || 0) + 1,
+          channel_id:   cid,
+          session_id:   sessionId,
+          phone:        phone || null,
+          name:         name  || null,
+          status:       'active',
+          device_type:  null,
+          page_views:   1,
+          last_product_name:  auto_product_name  || null,
+          last_product_image: auto_product_image || null,
+          last_product_url:   auto_product_url   || null,
+          last_product_price: auto_product_price || null,
+          visited_at:   now,
+          created_at:   now,
+          updated_at:   now,
+        };
+        db.website_visitors.push(newVisitor);
+        vIdx = db.website_visitors.length - 1;
+        console.log(`[Visitor] Auto-created on identify — status=active session=${sessionId} phone=${phone||'unknown'}`);
+      }
 
-        // Link phone to all anonymous events for this session
-        db.cart_events.filter(c => c.session_id === sessionId).forEach(c => {
-          c.name  = name  || c.name;
-          c.phone = phone || c.phone;
-        });
-        db.product_views.filter(v => v.session_id === sessionId).forEach(v => {
-          v.phone = phone || v.phone;
-        });
-        db.save();
+      // Link phone to all anonymous events for this session
+      db.cart_events.filter(c => c.session_id === sessionId).forEach(c => {
+        c.name  = name  || c.name;
+        c.phone = phone || c.phone;
+      });
+      db.product_views.filter(v => v.session_id === sessionId).forEach(v => {
+        v.phone = phone || v.phone;
+      });
+      db.save();
 
-        // Background scrape if auto_product_url provided but image/price missing
-        if (auto_product_url && (!auto_product_image || !auto_product_price)) {
-          scrapeProductUrl(auto_product_url).then(scraped => {
-            if (!scraped.name && !scraped.image) return;
-            const db2 = getDb();
-            const vi  = db2.website_visitors.findIndex(v => v.channel_id === cid && v.session_id === sessionId);
-            if (vi >= 0) {
-              if (!db2.website_visitors[vi].last_product_name  && scraped.name)  db2.website_visitors[vi].last_product_name  = scraped.name;
-              if (!db2.website_visitors[vi].last_product_image && scraped.image) db2.website_visitors[vi].last_product_image = scraped.image;
-              if (!db2.website_visitors[vi].last_product_price && scraped.price) db2.website_visitors[vi].last_product_price = scraped.price;
-              db2.save();
-            }
-          }).catch(() => {});
-        }
+      // Background scrape if auto_product_url provided but image/price missing
+      if (auto_product_url && (!auto_product_image || !auto_product_price)) {
+        scrapeProductUrl(auto_product_url).then(scraped => {
+          if (!scraped.name && !scraped.image) return;
+          const db2 = getDb();
+          const vi  = db2.website_visitors.findIndex(v => v.channel_id === cid && v.session_id === sessionId);
+          if (vi >= 0) {
+            if (!db2.website_visitors[vi].last_product_name  && scraped.name)  db2.website_visitors[vi].last_product_name  = scraped.name;
+            if (!db2.website_visitors[vi].last_product_image && scraped.image) db2.website_visitors[vi].last_product_image = scraped.image;
+            if (!db2.website_visitors[vi].last_product_price && scraped.price) db2.website_visitors[vi].last_product_price = scraped.price;
+            db2.save();
+          }
+        }).catch(() => {});
       }
       res.json({ success: true });
     } catch(e) { next(e); }
@@ -704,7 +796,7 @@ export const trackingController = {
       if (!response.ok) return fallback;
 
       const data = await response.json();
-
+ console.log('bb',data)
       return {
         city:        data.cityName    || null,
         state:       data.regionName  || null,

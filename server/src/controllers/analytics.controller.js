@@ -73,6 +73,16 @@ export const analyticsController = {
       const topCities = Object.entries(cityCount).map(([city,cnt])=>({city,cnt}))
         .sort((a,b)=>b.cnt-a.cnt).slice(0,10);
 
+      // ── Funnel status breakdown (all-time for channel) ──
+      const funnel = {
+        active:              allVisitors.filter(v => v.status === 'active').length,
+        product_view:        allVisitors.filter(v => v.status === 'product_view').length,
+        abandoned_cart:      allVisitors.filter(v => v.status === 'abandoned_cart').length,
+        abandoned_checkout:  allVisitors.filter(v => v.status === 'abandoned_checkout').length,
+        followup_complete:   allVisitors.filter(v => v.status === 'followup_complete').length,
+        purchased:           allVisitors.filter(v => v.status === 'purchased').length,
+      };
+
       res.json({
         visitors:     visitors.length,
         cartEvents:   carts.length,
@@ -82,6 +92,7 @@ export const analyticsController = {
         cartByDay: Object.entries(cartByDayMap).map(([day,carts])=>({day,carts})),
         topCities,
         campaignPerf: campaigns.map(c=>({ name:c.name, total_sent:c.total_sent||0, total_recovered:c.total_recovered||0 })),
+        funnel,
       });
     } catch (error) { next(error); }
   },
