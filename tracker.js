@@ -40,7 +40,7 @@
     data.sessionId = sessionId;
     data.type = type;
     data.channelId = config.channelId || 'demo';
-    fetch('https://whatsappy.onrender.com' + '/api/tracking/' + type, {
+    fetch('https://whatsappy.onrender.com/' + 'api/tracking/' + type, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
