@@ -207,6 +207,7 @@ export const campaignsController = {
           : (campaign.target_language || 'en');
 
         // Fill variables into message text
+        // Start with event-level data, then override with template-stored values
         const variables = {
           name: target.name || 'Customer',
           product_name: target.product_name || '',
@@ -214,7 +215,46 @@ export const campaignsController = {
           total_amount: String(target.total_amount || ''),
           cart_url: target.cart_url || '',
           product_url: target.product_url || '',
+          product_image: target.product_image || '',
         };
+        // Template-stored product data always wins (manual / URL-scraped)
+        if (templateRecord) {
+          if (templateRecord.product_data) {
+            try {
+              const pd = typeof templateRecord.product_data === 'string'
+                ? JSON.parse(templateRecord.product_data)
+                : templateRecord.product_data;
+              if (pd.name  || pd.title) variables.product_name  = pd.name  || pd.title;
+              if (pd.price)             variables.product_price = String(pd.price);
+              if (pd.image)             variables.product_image = pd.image;
+              if (pd.link  || pd.url)   variables.product_url   = pd.link  || pd.url;
+            } catch (_) {}
+          }
+          if (templateRecord.example_values) {
+            try {
+              const ev = typeof templateRecord.example_values === 'string'
+                ? JSON.parse(templateRecord.example_values)
+                : templateRecord.example_values;
+              for (const [k, v] of Object.entries(ev)) {
+                if (v !== undefined && v !== '' && k in variables) variables[k] = v;
+              }
+            } catch (_) {}
+          }
+          if (templateRecord.carousel_cards) {
+            try {
+              const cards = typeof templateRecord.carousel_cards === 'string'
+                ? JSON.parse(templateRecord.carousel_cards)
+                : templateRecord.carousel_cards;
+              if (Array.isArray(cards) && cards.length > 0) {
+                const pd = cards[0].product_data || {};
+                if (pd.title || pd.name) variables.product_name  = pd.title || pd.name;
+                if (pd.price)            variables.product_price = String(pd.price);
+                if (pd.image)            variables.product_image = pd.image;
+                if (pd.link  || pd.url)  variables.product_url   = pd.link  || pd.url;
+              }
+            } catch (_) {}
+          }
+        }
         let resolvedText = baseText;
         for (const [k, v] of Object.entries(variables)) {
           resolvedText = resolvedText.replace(new RegExp(`\\{\\{${k}\\}\\}`, 'g'), v);

@@ -278,8 +278,8 @@ async function autoUploadTemplateImages(channelId, carouselCards, templateName =
         updatedCards[i] = { ...card, image_id: image.id, file_handle: fileHandle, header_media_id: fileHandle };
         console.log(`[AutoUpload] Card ${i + 1}: uploaded → file_handle = ${fileHandle}`);
       } catch (err) {
-        console.error(`[AutoUpload] Card ${i + 1}: upload failed — ${err.message}`);
-        throw new Error(`Failed to upload image for card ${i + 1}: ${err.message}`);
+        console.error(`[AutoUpload] Card ${i + 1}: upload failed — ${err.message}. Continuing without image.`);
+        // Don't throw — other cards should still work; template can still be submitted
       }
       continue;
     }
@@ -422,12 +422,13 @@ export function buildSendMessagePayload(tpl, productConfig, recipientPhone = '{{
       const cardComponents = [];
 
       // Merged product data: product_config > card.product_data (auto-fill fallback)
-      // This ensures price/title/link are always dynamic even before product_config is saved
+      // Spread pc first (gives access to extra fields like header_media_id), then
+      // override with explicit fallback so empty-string pc.title doesn't kill the fallback.
       const pd = {
+        ...pc,
         title: pc.title || card.product_data?.title || '',
         price: pc.price || card.product_data?.price || '',
         link:  pc.link  || card.product_data?.link  || '',
-        ...pc,
       };
 
       // Header image — file_handle (resumable) > media_id > public URL
@@ -514,7 +515,22 @@ export async function getSendPayload(req, res) {
           ? new Date(new Date(tpl.product_config.last_auto_refresh).getTime() + 24 * 3600 * 1000).toISOString()
           : null),
       folder_name:   tpl.product_config?.folder_name || null,
-      products: (tpl.product_config?.cards || []).map(c => ({ title: c.title, price: c.price, link: c.link, image: c._hot_image_url || '' })),
+      products: (tpl.product_config?.cards || []).map((c, i) => ({
+        card: i + 1,
+        title: c.title   || '',
+        price: c.price   || '',
+        link:  c.link    || '',
+        image: c._hot_image_url || '',
+        media_id: c.header_media_id || '',
+        score: c._hot_score || 0,
+        carts: c._hot_carts || 0,
+        views: c._hot_views || 0,
+      })),
+      template_structure: {
+        body:        tpl.body || '',
+        card_count:  tpl.carousel_cards?.length || 0,
+        note:        'Template structure (body text, variables, buttons) is fixed at creation. Only product data in messages refreshes every 24h.',
+      },
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -536,7 +552,7 @@ export async function createTemplate(req, res) {
   try {
     const db = getDb();
     const channelId = req.headers['x-channel-id'] || 'demo';
-    const { name, category, language, header_type, header_text, body, footer, buttons, variable_labels, is_carousel, carousel_cards } = req.body;
+    const { name, category, language, header_type, header_text, body, footer, buttons, variable_labels, is_carousel, carousel_cards, auto_product_mode } = req.body;
 
     // Carousel body (intro text) is optional; standard templates require body
     if (!name) return res.status(400).json({ error: 'Template name is required' });
@@ -559,11 +575,11 @@ export async function createTemplate(req, res) {
       buttons: buttons || [],
       variable_labels: variable_labels || [],
       is_carousel: !!is_carousel,
+      auto_product_mode: !!auto_product_mode,
       carousel_cards: carousel_cards || [],
       meta_status: 'DRAFT',
       meta_template_id: null,
-      // Product config (filled after approval)
-      product_config: null,
+      product_config: null,  // initialized below after image upload
       created_at: new Date().toISOString(),
       submitted_at: null,
     };
@@ -573,6 +589,36 @@ export async function createTemplate(req, res) {
       // ── Step 1: Resolve images (auto-upload if URL provided) ──
       const resolvedCards = is_carousel ? await autoUploadTemplateImages(channelId, carousel_cards, name) : [];
       tpl.carousel_cards = resolvedCards;
+
+      // ── Step 1b: Init product_config from resolved card data (auto-mode) ──
+      // This lets campaigns send immediately without waiting for the 24h cron.
+      if (is_carousel && auto_product_mode && resolvedCards.length > 0) {
+        const channelIdForConfig = channelId;
+        const db2 = getDb();
+        const hotNow = computeHotProducts(db2, channelIdForConfig, resolvedCards.length);
+        tpl.product_config = {
+          cards: resolvedCards.map((c, i) => {
+            const hot = hotNow[i] || null;
+            return {
+              title:           c.product_data?.title  || hot?.name  || '',
+              price:           c.product_data?.price  || hot?.price || '',
+              link:            c.product_data?.link   || hot?.url   || '',
+              image_id:        c.image_id             || '',
+              header_media_id: c.header_media_id      || c.file_handle || '',
+              _hot_image_url:  c.product_data?.image_url || c.selected_fetch_image || hot?.image || '',
+              _hot_score:      hot?.score   ?? 0,
+              _hot_views:      hot?.views   ?? 0,
+              _hot_carts:      hot?.carts   ?? 0,
+              _auto_updated:   new Date().toISOString(),
+            };
+          }),
+          last_auto_refresh: new Date().toISOString(),
+          next_auto_refresh: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+          folder_name:       cleanName,
+        };
+        // Cache the send payload immediately
+        tpl.product_config.send_payload = buildSendMessagePayload(tpl, tpl.product_config, '{{RECIPIENT_PHONE}}');
+      }
 
       // ── Step 2: Build Payload ──
       const components = buildMetaComponents(tpl);

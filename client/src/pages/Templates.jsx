@@ -195,7 +195,18 @@ export default function Templates() {
   function openConfig(tpl) {
     setSelected(tpl);
     setProductConfig(tpl.product_config || (tpl.is_carousel
-      ? { cards: tpl.carousel_cards.map(c => ({ image_id: c.image_id||'', header_media_id: c.header_media_id||'', source: c.source||'manual', title:'', price:'', link:'' })) }
+      ? { cards: tpl.carousel_cards.map(c => ({
+          image_id:        c.image_id         || '',
+          header_media_id: c.header_media_id  || c.file_handle || '',
+          source:          c.source           || 'manual',
+          title:           c.product_data?.title  || '',
+          price:           c.product_data?.price  || '',
+          link:            c.product_data?.link   || '',
+          _hot_image_url:  c.product_data?.image_url || c.selected_fetch_image || '',
+          _hot_score:      c._hot_preview?.score  || 0,
+          _hot_carts:      c._hot_preview?.carts  || 0,
+          _hot_views:      c._hot_preview?.views  || 0,
+        })) }
       : { header_image_id:'', products:[{ title:'', price:'', link:'', image_id:'' }], var_map: extractVars(tpl.body).reduce((a,v) => ({...a,[v]:''}),{}), custom_values:{} }
     ));
     loadGallery();
@@ -220,8 +231,8 @@ export default function Templates() {
         console.log('%cCurrent Products in Message:', 'color:#fb923c');
         d.products.forEach((p, i) => console.log(`  Card ${i + 1}:`, p));
       }
-      if (d.last_refresh) console.log('Last Product Refresh:', d.last_refresh);
-      if (d.next_refresh) console.log('Next 6h Refresh:', d.next_refresh);
+      if (d.last_refresh) console.log('Last Product Refresh (24h cycle):', d.last_refresh);
+      if (d.next_refresh) console.log('Next 24h Refresh scheduled:', d.next_refresh);
       if (d.curl_command) {
         console.log('%c\n── CURL ──────────────────────────────────────', 'color:#64748b');
         console.log(d.curl_command);
@@ -1309,8 +1320,32 @@ function ConfigView({ tpl, config, setConfig, galleries, galleryImages, loadFold
 
   async function loadHotProducts() {
     setHotLoading(true);
-    try { const d = await fetch(`${BASE}/hot-products?limit=8`, {headers:CH()}).then(r=>r.json()); setHotProducts(d.products||[]); }
-    catch(_){} finally { setHotLoading(false); }
+    try {
+      const d = await fetch(`${BASE}/hot-products?limit=10`, {headers:CH()}).then(r=>r.json());
+      const hots = d.products || [];
+      setHotProducts(hots);
+      // Auto-populate cards that have no product data yet (auto_product_mode templates)
+      if (tpl.auto_product_mode && hots.length > 0) {
+        setConfig(prev => {
+          const cards = [...(prev.cards || [])];
+          hots.forEach((hot, i) => {
+            if (i < cards.length && !cards[i].title) {
+              cards[i] = {
+                ...cards[i],
+                title:          hot.name  || '',
+                price:          hot.price || '',
+                link:           hot.url   || '',
+                _hot_image_url: hot.image || '',
+                _hot_score:     hot.score,
+                _hot_carts:     hot.carts,
+                _hot_views:     hot.views,
+              };
+            }
+          });
+          return { ...prev, cards };
+        });
+      }
+    } catch(_){} finally { setHotLoading(false); }
   }
   async function triggerAutoRefresh() {
     setAutoRefreshing(true);
@@ -1940,7 +1975,7 @@ function SendPayloadModal({ data, onClose }) {
           <div className="px-5 py-2.5 border-b border-white/5 bg-yellow-500/5">
             <p className="text-yellow-400 text-xs flex items-center gap-1">
               <AlertCircle size={11}/>
-              {missingImages.length} card{missingImages.length > 1 ? 's' : ''} missing image id/link — run a 6h refresh or assign gallery images to set header_media_id.
+              {missingImages.length} card{missingImages.length > 1 ? 's' : ''} missing image — click "Auto-fill now" in Configure Products or wait for the 24h auto-refresh.
             </p>
           </div>
         )}
@@ -1978,7 +2013,11 @@ function SendPayloadModal({ data, onClose }) {
           )}
           {tab === 'products' && (
             <div className="flex flex-col gap-3">
-              <p className="text-slate-500 text-xs">These are the products currently in each carousel card. Auto-refreshed every 6 hours from trending + abandoned cart data.</p>
+              <div className="bg-blue-500/5 border border-blue-500/20 rounded-xl p-3 text-xs text-blue-300">
+                <p className="font-medium mb-0.5">Auto-product mode — message content only</p>
+                <p className="text-blue-400/70">Template structure (body text, variables, buttons) is fixed at creation and never changes. Only the product data in each card refreshes every 24h from your tracker data.</p>
+                {data.template_structure?.body && <p className="mt-1.5 text-slate-400">Intro: <em className="text-slate-300">"{data.template_structure.body}"</em></p>}
+              </div>
               <div className="flex flex-col gap-2">
                 {(data.products || []).filter(p => p.title).map((p, i) => (
                   <div key={i} className="flex items-center gap-3 bg-white/[0.03] border border-white/5 rounded-xl p-3">
@@ -1987,11 +2026,15 @@ function SendPayloadModal({ data, onClose }) {
                       : <div className="w-12 h-12 bg-white/5 rounded-lg shrink-0 flex items-center justify-center"><Image size={16} className="text-slate-600"/></div>
                     }
                     <div className="flex-1 min-w-0">
-                      <p className="text-white text-sm font-medium truncate">Card {i + 1}: {p.title}</p>
-                      <div className="flex items-center gap-3 mt-0.5">
+                      <p className="text-white text-sm font-medium truncate">Card {p.card || i+1}: {p.title}</p>
+                      <div className="flex items-center gap-3 mt-0.5 flex-wrap">
                         {p.price && <span className="text-green-400 text-xs">{p.price}</span>}
-                        {p.link  && <span className="text-slate-500 text-xs font-mono truncate max-w-[200px]">{p.link}</span>}
+                        {p.carts > 0 && <span className="text-orange-400 text-xs">{p.carts} abandoned</span>}
+                        {p.views > 0 && <span className="text-slate-500 text-xs">{p.views} views</span>}
+                        {p.score > 0 && <span className="text-purple-400 text-xs">score {p.score}</span>}
+                        {p.media_id && <span className="text-emerald-500 text-xs font-mono" title="Media ID ready">✓ image uploaded</span>}
                       </div>
+                      {p.link && <p className="text-slate-600 text-xs font-mono truncate mt-0.5">{p.link}</p>}
                     </div>
                   </div>
                 ))}

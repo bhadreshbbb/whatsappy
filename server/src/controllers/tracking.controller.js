@@ -1,6 +1,101 @@
 import { getDb } from '../services/database.js';
 import { getLanguageFromGeo } from '../utils/geoLanguage.js';
 import { upgradeStatus } from '../utils/statusMachine.js';
+import https from 'https';
+import http from 'http';
+
+/**
+ * Scrape a URL for product details (name, price, image).
+ * Tries Shopify JSON API first, falls back to OpenGraph meta tags.
+ * Returns { name, price, image, url } — all strings, never throws.
+ */
+async function scrapeProductUrl(url) {
+  if (!url || !url.startsWith('http')) return {};
+  const cleanUrl = url.split('?')[0].replace(/\/$/, '');
+
+  // ── Shopify .json API ──────────────────────────────────────────────────────
+  try {
+    const r = await fetch(cleanUrl + '.json', {
+      headers: { 'User-Agent': 'Mozilla/5.0', Accept: 'application/json' },
+      signal: AbortSignal.timeout(6000),
+    });
+    if (r.ok) {
+      const data = await r.json();
+      const p = data.product;
+      if (p && p.title) {
+        const variant   = p.variants?.[0];
+        const priceVal  = variant?.price || '';
+        const currency  = variant?.presentment_prices?.[0]?.price?.currency_code || 'INR';
+        const sym       = currency === 'INR' ? '₹' : (currency === 'USD' ? '$' : currency + ' ');
+        const image     = p.images?.[0]?.src || '';
+        return { name: p.title, price: priceVal ? `${sym}${priceVal}` : '', image, url: cleanUrl };
+      }
+    }
+  } catch (_) {}
+
+  // ── OpenGraph / meta tag scraping ────────────────────────────────────────────
+  try {
+    const html = await fetchHtml(cleanUrl);
+    function gm(props) {
+      for (const prop of [].concat(props)) {
+        const m = html.match(new RegExp(`<meta[^>]+(?:property|name)=["']${prop}["'][^>]*content=["']([^"']+)["']`, 'i'))
+               || html.match(new RegExp(`<meta[^>]+content=["']([^"']+)["'][^>]*(?:property|name)=["']${prop}["']`, 'i'));
+        if (m?.[1]) return m[1].trim();
+      }
+      return '';
+    }
+    // JSON-LD Product schema in HTML
+    const ldMatch = html.match(/<script[^>]+application\/ld\+json[^>]*>([\s\S]*?)<\/script>/i);
+    if (ldMatch) {
+      try {
+        const ld = JSON.parse(ldMatch[1]);
+        const items = ld['@graph'] ? ld['@graph'] : [ld];
+        for (const item of items) {
+          if (item['@type'] === 'Product') {
+            const offer    = Array.isArray(item.offers) ? item.offers[0] : (item.offers || {});
+            const priceVal = offer.price || '';
+            const currency = offer.priceCurrency || 'INR';
+            const sym      = currency === 'INR' ? '₹' : (currency === 'USD' ? '$' : currency + ' ');
+            const img      = Array.isArray(item.image) ? item.image[0] : item.image;
+            const imgUrl   = typeof img === 'string' ? img : (img?.url || '');
+            return {
+              name:  item.name  || '',
+              price: priceVal ? `${sym}${priceVal}` : '',
+              image: imgUrl,
+              url:   item.url   || cleanUrl,
+            };
+          }
+        }
+      } catch (_) {}
+    }
+    const name     = gm(['og:title', 'twitter:title']) || (html.match(/<title[^>]*>([^<]+)<\/title>/i)?.[1] || '').trim();
+    const image    = gm(['og:image', 'twitter:image:src', 'twitter:image']);
+    const priceRaw = gm(['product:price:amount', 'og:price:amount']);
+    const currency = gm(['product:price:currency', 'og:price:currency']) || 'INR';
+    const sym      = currency === 'INR' ? '₹' : (currency === 'USD' ? '$' : currency + ' ');
+    return {
+      name:  name.substring(0, 120),
+      price: priceRaw ? `${sym}${priceRaw}` : '',
+      image,
+      url:   cleanUrl,
+    };
+  } catch (_) {}
+
+  return {};
+}
+
+function fetchHtml(url) {
+  return new Promise((resolve, reject) => {
+    const mod = url.startsWith('https') ? https : http;
+    const req = mod.get(url, { headers: { 'User-Agent': 'Mozilla/5.0', Accept: 'text/html' } }, res => {
+      let data = '';
+      res.on('data', chunk => { data += chunk; if (data.length > 80000) req.destroy(); });
+      res.on('end', () => resolve(data));
+    });
+    req.on('error', reject);
+    req.setTimeout(8000, () => req.destroy());
+  });
+}
 
 /**
  * Advanced Tracking Controller
@@ -93,41 +188,52 @@ export const trackingController = {
     try {
       const db = getDb();
       const { channelId, sessionId, phone, email, name, eventType, cartId, products, totalAmount,
-              currency, product_name, product_image, product_url, cart_url, product_price } = req.body;
-      
-      const existingIdx = db.cart_events.findIndex(c => 
-        c.channel_id === (channelId || 'demo') && 
-        c.session_id === sessionId && 
-        c.event_type === (eventType || 'add_to_cart') && 
+              currency, cart_url } = req.body;
+      let { product_name, product_image, product_url, product_price } = req.body;
+
+      const cid = channelId || 'demo';
+
+      // Auto-fill product fields from first product in array if top-level fields are missing
+      const productsArr = Array.isArray(products) ? products : [];
+      const firstProduct = productsArr[0] || {};
+      if (!product_name  && firstProduct.name)  product_name  = firstProduct.name;
+      if (!product_image && firstProduct.image) product_image = firstProduct.image;
+      if (!product_url   && firstProduct.url)   product_url   = firstProduct.url;
+      if (!product_price && firstProduct.price) product_price = String(firstProduct.price);
+
+      const needsScrape = product_url && (!product_name || !product_image);
+
+      const existingIdx = db.cart_events.findIndex(c =>
+        c.channel_id === cid &&
+        c.session_id === sessionId &&
+        c.event_type === (eventType || 'add_to_cart') &&
         !c.recovered
       );
 
       if (existingIdx >= 0) {
-        db.cart_events[existingIdx].products = JSON.stringify(products || []);
-        db.cart_events[existingIdx].total_amount = totalAmount || 0;
-        db.cart_events[existingIdx].cart_url = cart_url || db.cart_events[existingIdx].cart_url;
-        db.cart_events[existingIdx].product_name = product_name || db.cart_events[existingIdx].product_name;
+        db.cart_events[existingIdx].products      = JSON.stringify(productsArr);
+        db.cart_events[existingIdx].total_amount  = totalAmount || 0;
+        db.cart_events[existingIdx].cart_url      = cart_url     || db.cart_events[existingIdx].cart_url;
+        db.cart_events[existingIdx].product_name  = product_name  || db.cart_events[existingIdx].product_name;
         db.cart_events[existingIdx].product_image = product_image || db.cart_events[existingIdx].product_image;
         db.cart_events[existingIdx].product_price = product_price || db.cart_events[existingIdx].product_price;
-        db.cart_events[existingIdx].product_url = product_url || db.cart_events[existingIdx].product_url;
+        db.cart_events[existingIdx].product_url   = product_url   || db.cart_events[existingIdx].product_url;
       } else {
-        const newEvent = {
+        db.cart_events.push({
           id: (db.cart_events.length || 0) + 1,
-          channel_id: channelId || 'demo',
+          channel_id: cid,
           session_id: sessionId,
           phone, email, name,
-          event_type: eventType || 'add_to_cart',
-          cart_id: cartId,
-          products: JSON.stringify(products || []),
-          total_amount: totalAmount || 0,
-          currency: currency || null,
+          event_type:    eventType   || 'add_to_cart',
+          cart_id:       cartId,
+          products:      JSON.stringify(productsArr),
+          total_amount:  totalAmount || 0,
+          currency:      currency    || null,
           whatsapp_sent: 0,
-          recovered: 0,
-          created_at: new Date().toISOString(),
-          // ── Enrichment for Automation ──
-          product_name, product_image, product_url, cart_url, product_price
-        };
-        db.cart_events.push(newEvent);
+          recovered:     0,
+          created_at:    new Date().toISOString(),
+          product_name, product_image, product_url, cart_url, product_price,
+        });
       }
 
       // ── Update visitor status to abandoned_cart or abandoned_checkout ──
@@ -153,8 +259,50 @@ export const trackingController = {
         this._markRecovered(db, channelId, sessionId, phone);
       }
       db.save();
-
       res.json({ success: true });
+
+      // ── Background scrape: fill missing product fields without blocking ──
+      if (needsScrape) {
+        const cid2 = channelId || 'demo';
+        scrapeProductUrl(product_url).then(scraped => {
+          if (!scraped.name && !scraped.image) return;
+          const db2 = getDb();
+          // Patch every cart event for this session that is missing data
+          db2.cart_events.filter(c => c.channel_id === cid2 && c.session_id === sessionId).forEach(c => {
+            if (!c.product_name  && scraped.name)  c.product_name  = scraped.name;
+            if (!c.product_image && scraped.image) c.product_image = scraped.image;
+            if (!c.product_price && scraped.price) c.product_price = scraped.price;
+            // Also patch items in products JSON array
+            try {
+              const arr = JSON.parse(c.products || '[]');
+              let changed = false;
+              arr.forEach(p => {
+                if (p.url === product_url) {
+                  if (!p.image && scraped.image) { p.image = scraped.image; changed = true; }
+                  if (!p.name  && scraped.name)  { p.name  = scraped.name;  changed = true; }
+                  if (!p.price && scraped.price) { p.price = scraped.price; changed = true; }
+                }
+              });
+              if (changed) c.products = JSON.stringify(arr);
+            } catch (_) {}
+          });
+          // Upsert product catalog
+          const ci = db2.product_catalog.findIndex(p => p.channel_id === cid2 && p.url === product_url);
+          if (ci >= 0) {
+            if (!db2.product_catalog[ci].name  && scraped.name)  db2.product_catalog[ci].name  = scraped.name;
+            if (!db2.product_catalog[ci].image && scraped.image) db2.product_catalog[ci].image = scraped.image;
+            if (!db2.product_catalog[ci].price && scraped.price) db2.product_catalog[ci].price = scraped.price;
+          } else if (scraped.name) {
+            db2.product_catalog.push({
+              id: (db2.product_catalog.length || 0) + 1, channel_id: cid2,
+              name: scraped.name, price: scraped.price || '', image: scraped.image || '',
+              url: product_url, updated_at: new Date().toISOString(),
+            });
+          }
+          db2.save();
+          console.log(`[Scrape] Cart event enriched: "${scraped.name}" ${scraped.price} ${product_url}`);
+        }).catch(() => {});
+      }
     } catch (e) { next(e); }
   },
 
@@ -202,36 +350,46 @@ export const trackingController = {
   async trackProduct(req, res, next) {
     try {
       const db = getDb();
-      const { channelId, sessionId, product, eventType, product_name, product_image, product_url, product_price, currency } = req.body;
+      const { channelId, sessionId, product, eventType, currency } = req.body;
+      let { product_name, product_image, product_url, product_price } = req.body;
       const cid = channelId || 'demo';
+
+      // ── Server-side auto-scrape: if image or name missing but URL provided ──
+      // Respond immediately; scrape runs async and patches the record when done.
+      const needsScrape = product_url && (!product_name || !product_image);
 
       // Find visitor to link phone immediately if available
       const visitor = db.website_visitors.find(v => v.channel_id === cid && v.session_id === sessionId);
 
-      // Deduplicate: Don't track multiple distinct events for exact same product view by same session
+      // Deduplicate: Don't track multiple distinct events for exact same product URL by same session
       const existingIdx = db.product_views.findIndex(v =>
-        v.channel_id === cid && v.session_id === sessionId && v.product_name === product_name
+        v.channel_id === cid && v.session_id === sessionId &&
+        (product_url ? v.product_url === product_url : v.product_name === product_name)
       );
 
-      if (existingIdx < 0) {
-        db.product_views.push({
-          id: (db.product_views.length || 0) + 1,
-          channel_id: cid,
-          session_id: sessionId,
-          phone: visitor?.phone || null,
-          product: JSON.stringify(product || {}),
-          event_type: 'product_viewed',
-          product_name, product_image, product_url, product_price, currency,
-          whatsapp_sent: 0,
-          followup_count: 0,
-          created_at: new Date().toISOString()
-        });
-      }
+      const record = {
+        id: existingIdx >= 0 ? db.product_views[existingIdx].id : (db.product_views.length || 0) + 1,
+        channel_id:     cid,
+        session_id:     sessionId,
+        phone:          visitor?.phone || null,
+        product:        JSON.stringify(product || {}),
+        event_type:     'product_viewed',
+        product_name:   product_name  || '',
+        product_image:  product_image || '',
+        product_url:    product_url   || '',
+        product_price:  product_price || '',
+        currency:       currency      || null,
+        whatsapp_sent:  0,
+        followup_count: 0,
+        created_at:     new Date().toISOString(),
+      };
 
-      // ── STORE PRODUCT DATA ON VISITOR RECORD for dynamic campaign injection ──
+      if (existingIdx < 0) db.product_views.push(record);
+      else Object.assign(db.product_views[existingIdx], record);
+
+      // ── Store on visitor record for campaign variables ──
       const vIdx = db.website_visitors.findIndex(v => v.channel_id === cid && v.session_id === sessionId);
       if (vIdx >= 0) {
-        // Always update to most recently viewed product
         db.website_visitors[vIdx].last_product_name  = product_name  || db.website_visitors[vIdx].last_product_name;
         db.website_visitors[vIdx].last_product_image = product_image || db.website_visitors[vIdx].last_product_image;
         db.website_visitors[vIdx].last_product_url   = product_url   || db.website_visitors[vIdx].last_product_url;
@@ -241,6 +399,45 @@ export const trackingController = {
 
       db.save();
       res.json({ success: true });
+
+      // ── Background scrape: fill missing fields without blocking response ──
+      if (needsScrape) {
+        scrapeProductUrl(product_url).then(scraped => {
+          if (!scraped.name && !scraped.image) return;
+          const db2 = getDb();
+          const idx = db2.product_views.findIndex(v =>
+            v.channel_id === cid && v.session_id === sessionId && v.product_url === product_url
+          );
+          if (idx >= 0) {
+            if (!db2.product_views[idx].product_name  && scraped.name)  db2.product_views[idx].product_name  = scraped.name;
+            if (!db2.product_views[idx].product_image && scraped.image) db2.product_views[idx].product_image = scraped.image;
+            if (!db2.product_views[idx].product_price && scraped.price) db2.product_views[idx].product_price = scraped.price;
+          }
+          // Also patch visitor record
+          const vi = db2.website_visitors.findIndex(v => v.channel_id === cid && v.session_id === sessionId);
+          if (vi >= 0) {
+            if (!db2.website_visitors[vi].last_product_name  && scraped.name)  db2.website_visitors[vi].last_product_name  = scraped.name;
+            if (!db2.website_visitors[vi].last_product_image && scraped.image) db2.website_visitors[vi].last_product_image = scraped.image;
+            if (!db2.website_visitors[vi].last_product_price && scraped.price) db2.website_visitors[vi].last_product_price = scraped.price;
+          }
+          // Patch product catalog too
+          const key = product_url;
+          const ci  = db2.product_catalog.findIndex(p => p.channel_id === cid && p.url === key);
+          if (ci >= 0) {
+            if (!db2.product_catalog[ci].name  && scraped.name)  db2.product_catalog[ci].name  = scraped.name;
+            if (!db2.product_catalog[ci].image && scraped.image) db2.product_catalog[ci].image = scraped.image;
+            if (!db2.product_catalog[ci].price && scraped.price) db2.product_catalog[ci].price = scraped.price;
+          } else if (scraped.name) {
+            db2.product_catalog.push({
+              id: (db2.product_catalog.length || 0) + 1, channel_id: cid,
+              name: scraped.name, price: scraped.price || '', image: scraped.image || '',
+              url: product_url, updated_at: new Date().toISOString(),
+            });
+          }
+          db2.save();
+          console.log(`[Scrape] Product enriched: "${scraped.name}" ${scraped.price} ${product_url}`);
+        }).catch(() => {});
+      }
     } catch (e) { next(e); }
   },
 
@@ -283,21 +480,44 @@ export const trackingController = {
   async trackIdentify(req, res, next) {
     try {
       const db = getDb();
-      const { channelId, sessionId, name, phone } = req.body;
-      const vIdx = db.website_visitors.findIndex(v => v.channel_id === (channelId || 'demo') && v.session_id === sessionId);
+      const { channelId, sessionId, name, phone,
+              auto_product_name, auto_product_image, auto_product_url, auto_product_price } = req.body;
+      const cid = channelId || 'demo';
+      const vIdx = db.website_visitors.findIndex(v => v.channel_id === cid && v.session_id === sessionId);
       if (vIdx >= 0) {
-        db.website_visitors[vIdx].name = name;
-        db.website_visitors[vIdx].phone = phone;
-        // Also update any anonymous cart events if they exist
-        db.cart_events.filter(c => c.session_id === sessionId).forEach(c => {
-           c.name = name; c.phone = phone;
-        });
+        db.website_visitors[vIdx].name  = name  || db.website_visitors[vIdx].name;
+        db.website_visitors[vIdx].phone = phone || db.website_visitors[vIdx].phone;
 
-        // 🔥 LINK PRODUCT VIEWS: ensure anonymouse product views get this phone number
+        // If tracker sent auto-captured product (from product page detect), store it
+        if (auto_product_name)  db.website_visitors[vIdx].last_product_name  = auto_product_name;
+        if (auto_product_image) db.website_visitors[vIdx].last_product_image = auto_product_image;
+        if (auto_product_url)   db.website_visitors[vIdx].last_product_url   = auto_product_url;
+        if (auto_product_price) db.website_visitors[vIdx].last_product_price = auto_product_price;
+
+        // Link phone to all anonymous events for this session
+        db.cart_events.filter(c => c.session_id === sessionId).forEach(c => {
+          c.name  = name  || c.name;
+          c.phone = phone || c.phone;
+        });
         db.product_views.filter(v => v.session_id === sessionId).forEach(v => {
-           v.phone = phone;
+          v.phone = phone || v.phone;
         });
         db.save();
+
+        // Background scrape if auto_product_url provided but image/price missing
+        if (auto_product_url && (!auto_product_image || !auto_product_price)) {
+          scrapeProductUrl(auto_product_url).then(scraped => {
+            if (!scraped.name && !scraped.image) return;
+            const db2 = getDb();
+            const vi  = db2.website_visitors.findIndex(v => v.channel_id === cid && v.session_id === sessionId);
+            if (vi >= 0) {
+              if (!db2.website_visitors[vi].last_product_name  && scraped.name)  db2.website_visitors[vi].last_product_name  = scraped.name;
+              if (!db2.website_visitors[vi].last_product_image && scraped.image) db2.website_visitors[vi].last_product_image = scraped.image;
+              if (!db2.website_visitors[vi].last_product_price && scraped.price) db2.website_visitors[vi].last_product_price = scraped.price;
+              db2.save();
+            }
+          }).catch(() => {});
+        }
       }
       res.json({ success: true });
     } catch(e) { next(e); }

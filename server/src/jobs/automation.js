@@ -9,7 +9,6 @@ import { v4 as uuidv4 } from 'uuid';
 
 let cronInterval;
 const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000;
-let lastAutoProductRefresh = 0; // timestamp (ms) — 0 means never run
 
 /**
  * Universal Automation Engine v3
@@ -55,27 +54,35 @@ export function startAutomation() {
 // - Always rebuilds the send_payload so campaigns get fresh media IDs
 async function refreshAutoProductTemplates() {
   const now = Date.now();
-  if ((now - lastAutoProductRefresh) < TWENTY_FOUR_HOURS_MS) return;
-  lastAutoProductRefresh = now;
 
   const db      = getDb();
   const nowDt   = new Date();
   const channelId = process.env.CHANNEL_ID || 'demo';
 
-  // Only auto-product-mode APPROVED carousel templates
-  const templates = (db.meta_templates || []).filter(t =>
-    t.channel_id === channelId &&
-    t.is_carousel &&
-    t.auto_product_mode &&
-    (t.meta_status === 'APPROVED' || t.meta_status === 'PENDING')
-  );
+  // Only auto-product-mode APPROVED/PENDING carousel templates that are due for refresh
+  const nowIso = new Date(now).toISOString();
+  const templates = (db.meta_templates || []).filter(t => {
+    if (t.channel_id !== channelId) return false;
+    if (!t.is_carousel || !t.auto_product_mode) return false;
+    if (t.meta_status !== 'APPROVED' && t.meta_status !== 'PENDING') return false;
+    // Per-template: skip if next_auto_refresh hasn't arrived yet
+    const nextRefresh = t.product_config?.next_auto_refresh;
+    if (nextRefresh && nowIso < nextRefresh) return false;
+    return true;
+  });
   if (templates.length === 0) return;
 
   // Get enough hot products for the largest carousel (max card count across all templates)
   const maxCards = Math.max(...templates.map(t => t.carousel_cards?.length || 3), 10);
   const hotProducts = computeHotProducts(db, channelId, maxCards);
   if (hotProducts.length === 0) {
-    console.log('[AutoProducts] No hot products found — skipping 24h refresh');
+    // No tracker data yet — still advance the next_auto_refresh so we check again in 24h
+    console.log('[AutoProducts] No hot products found — advancing next_auto_refresh and skipping image update');
+    for (const tpl of templates) {
+      if (!tpl.product_config) tpl.product_config = {};
+      tpl.product_config.next_auto_refresh = new Date(now + TWENTY_FOUR_HOURS_MS).toISOString();
+    }
+    db.save();
     return;
   }
 
@@ -188,7 +195,10 @@ async function refreshAutoProductTemplates() {
 
       const uploaded = cards.filter(c => c.header_media_id).length;
       const changed  = cards.filter(c => c._product_changed).length;
-      console.log(`[AutoProducts] "${tpl.name}" ✓ — ${cardCount} cards, ${uploaded} images ready, ${changed} product(s) refreshed`);
+      console.log(`\n[AutoProducts] ✓ "${tpl.name}" — template structure UNCHANGED, send payload refreshed`);
+      console.log(`  ${cardCount} cards | ${uploaded} images uploaded | ${changed} product(s) swapped`);
+      cards.forEach((c, i) => console.log(`  Card ${i+1}: "${c.title || '—'}"  ${c.price || ''}  [score:${c._hot_score||0}  carts:${c._hot_carts||0}  views:${c._hot_views||0}]`));
+      console.log(`  Next refresh: ${tpl.product_config.next_auto_refresh}\n`);
     } catch (e) {
       console.error(`[AutoProducts] Template "${tpl.name}" (${tpl.id}) error:`, e.message);
     }
@@ -478,11 +488,23 @@ async function sendMultiple(db, cam, events, type) {
         // Build the exact /messages carousel payload with language override
         const sendPayload = buildSendMessagePayload(metaTpl, metaTpl.product_config, evt.phone, metaLangCode);
 
-        console.group(`[Automation] META TEMPLATE SEND → ${evt.phone}`);
-        console.log(`Template: "${metaTpl.name}" · Lang: ${metaLangCode}`);
-        console.log('API: POST https://graph.facebook.com/v25.0/{PHONE_ID}/messages');
-        console.log('Payload:', JSON.stringify(sendPayload, null, 2));
-        console.groupEnd();
+        // ── FULL MESSAGE PAYLOAD LOG ─────────────────────────────────────────
+        const pc = metaTpl.product_config;
+        const cardSummary = (pc?.cards || []).map((c, i) =>
+          `  Card ${i + 1}: "${c.title || '—'}"  ${c.price || ''}  ${c.link || ''}`
+        ).join('\n');
+        console.log('\n╔══════════════════════════════════════════════════════════════╗');
+        console.log(`║  META TEMPLATE SEND  →  ${evt.phone}`);
+        console.log(`║  Template : "${metaTpl.name}"  (${metaTpl.meta_template_id || metaTpl.id})`);
+        console.log(`║  Language : ${metaLangCode}  |  Campaign: "${cam.name}"`);
+        console.log(`║  Last product refresh : ${pc?.last_auto_refresh || 'never'}`);
+        console.log(`║  Next product refresh : ${pc?.next_auto_refresh || 'not scheduled'}`);
+        if (cardSummary) { console.log('║  Products in message:'); console.log(cardSummary); }
+        console.log('╠══════════════════════════════════════════════════════════════╣');
+        console.log('║  POST https://graph.facebook.com/v25.0/{PHONE_NUMBER_ID}/messages');
+        console.log('║  Payload:');
+        console.log(JSON.stringify(sendPayload, null, 2));
+        console.log('╚══════════════════════════════════════════════════════════════╝\n');
 
         const sendResult = await whatsappService.sendTemplateMessage(evt.phone, sendPayload);
 
@@ -557,6 +579,47 @@ async function sendMultiple(db, cam, events, type) {
       } else {
         console.warn(`[Automation] Template ${templateId} has no body text, skipping ${evt.phone}`);
         continue;
+      }
+
+      // ── TEMPLATE-STORED VALUES: manual / URL-scraped templates always win ──────
+      // Override runtime event-level variables with values stored on the template
+      // so every send is consistent with what the user configured at creation time.
+      if (templateRecord.product_data) {
+        try {
+          const pd = typeof templateRecord.product_data === 'string'
+            ? JSON.parse(templateRecord.product_data)
+            : templateRecord.product_data;
+          if (pd.name  || pd.title) variables.product_name  = pd.name  || pd.title;
+          if (pd.price)             variables.product_price = String(pd.price);
+          if (pd.image)             variables.product_image = pd.image;
+          if (pd.link  || pd.url)   variables.product_url   = pd.link  || pd.url;
+        } catch (_) {}
+      }
+      if (templateRecord.example_values) {
+        try {
+          const ev = typeof templateRecord.example_values === 'string'
+            ? JSON.parse(templateRecord.example_values)
+            : templateRecord.example_values;
+          // Named field overrides (product_name, product_price, etc.)
+          for (const [k, v] of Object.entries(ev)) {
+            if (v !== undefined && v !== '' && k in variables) variables[k] = v;
+          }
+        } catch (_) {}
+      }
+      if (templateRecord.carousel_cards) {
+        try {
+          const cards = typeof templateRecord.carousel_cards === 'string'
+            ? JSON.parse(templateRecord.carousel_cards)
+            : templateRecord.carousel_cards;
+          if (Array.isArray(cards) && cards.length > 0) {
+            // Use first card's product_data as the top-level product vars
+            const pd = cards[0].product_data || {};
+            if (pd.title || pd.name) variables.product_name  = pd.title || pd.name;
+            if (pd.price)            variables.product_price = String(pd.price);
+            if (pd.image)            variables.product_image = pd.image;
+            if (pd.link  || pd.url)  variables.product_url   = pd.link  || pd.url;
+          }
+        } catch (_) {}
       }
 
       if (userLang && userLang !== 'en') {
