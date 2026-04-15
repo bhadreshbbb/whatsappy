@@ -111,6 +111,7 @@ export const trackingController = {
               || req.ip
               || req.socket?.remoteAddress
               || '';
+              console.log('bbbbbb'.ip)
       const geo = await this._getGeoData(ip);
 
       // Geo-based language is the source of truth (city/state → native language)
@@ -764,8 +765,8 @@ export const trackingController = {
     } catch (e) { next(e); }
   },
 
-  // ── Private Geo-IP Engine ─────────────────────────────────────────────────
-  async _getGeoData(ip) {
+  // ── Private Geo-IP Engine  ─────────────────────────────────────────────────
+  async _getGeoData(ip) {  console.log('sss'.ip)
     const fallback = { city: 'Unknown', state: 'Unknown', country: 'Unknown', countryCode: '🌐', timezone: 'UTC' };
 
     if (!ip) return fallback;
