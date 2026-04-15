@@ -777,48 +777,65 @@ export const trackingController = {
     } catch (e) { next(e); }
   },
 
-  // ── Private Geo-IP Engine  ─────────────────────────────────────────────────
-  async _getGeoData(ip) {  console.log('sss'.ip)
+  // ── Private Geo-IP Engine ─────────────────────────────────────────────────
+  async _getGeoData(ip) {
     const fallback = { city: 'Unknown', state: 'Unknown', country: 'Unknown', countryCode: '🌐', timezone: 'UTC' };
 
-    // if (!ip) return fallback;
+    if (!ip) {
+      console.log('[Geo] No IP address — returning fallback');
+      return fallback;
+    }
 
     // Strip IPv4-mapped IPv6 prefix (::ffff:1.2.3.4 → 1.2.3.4)
-    // Pure IPv6 (mobile) is kept as-is; pure IPv4 (PC/laptop) is kept as-is
     const cleanIp = ip.replace(/^::ffff:/, '');
+    console.log(`[Geo] Looking up IP: "${cleanIp}" (raw: "${ip}")`);
 
-    // Skip local/private addresses — API won't resolve them
-    // if (
-    //   cleanIp === '127.0.0.1' ||
-    //   cleanIp === '::1' ||
-    //   cleanIp.startsWith('192.168.') ||
-    //   cleanIp.startsWith('10.') ||
-    //   cleanIp.startsWith('172.')
-    // ) {
-    //   return { city: 'Local', state: 'Local', country: 'Local', countryCode: 'XX', timezone: 'UTC' };
-    // }
+    // Skip local/private addresses — freeipapi won't resolve them
+    if (
+      cleanIp === '127.0.0.1' ||
+      cleanIp === '::1' ||
+      cleanIp.startsWith('192.168.') ||
+      cleanIp.startsWith('10.') ||
+      cleanIp.startsWith('172.')
+    ) {
+      console.log('[Geo] Local/private IP — skipping API call');
+      return { city: 'Local', state: 'Local', country: 'Local', countryCode: 'XX', timezone: 'UTC' };
+    }
 
     try {
-      const response = await fetch(`https://api.freeipapi.app/api/v1/lookup?ip=${encodeURIComponent(cleanIp)}`, {
+      const url = `https://api.freeipapi.app/api/v1/lookup?ip=${encodeURIComponent(cleanIp)}`;
+      console.log(`[Geo] Calling: ${url}`);
+
+      const response = await fetch(url, {
         headers: {
-          'Authorization': `Bearer fip_7535f7e54a22a2972f2bdaefc1930c7630fe08720226036ebc2d5db3599fa743`,
+          'Authorization': `Bearer ${process.env.FREEIPAPI_TOKEN || 'fip_7535f7e54a22a2972f2bdaefc1930c7630fe08720226036ebc2d5db3599fa743'}`,
           'Accept': 'application/json'
         }
       });
 
-      // if (!response.ok) return fallback;
+      console.log(`[Geo] HTTP status: ${response.status}`);
+
+      if (!response.ok) {
+        const text = await response.text();
+        console.error(`[Geo] API error ${response.status}:`, text);
+        return fallback;
+      }
 
       const data = await response.json();
- console.log('bb',data)
-      return {
-        city:        data.encodeURIComponent(cleanIp)    || null,
-        state:       data.region  || null,
-        country:     data.country || null,
-        countryCode: data.country_code || null,
-        timezone:    data.timezones    || null,
+      console.log('[Geo] Raw API response:', JSON.stringify(data));
+
+      // freeipapi.app field names: cityName, regionName, countryName, countryCode, timeZone
+      const result = {
+        city:        data.cityName    || null,
+        state:       data.regionName  || null,
+        country:     data.countryName || null,
+        countryCode: data.countryCode || null,
+        timezone:    data.timeZone    || null,
       };
+      console.log('[Geo] Parsed result:', result);
+      return result;
     } catch (e) {
-      console.error('Geo lookup error:', e.message);
+      console.error('[Geo] Lookup error:', e.message);
       return fallback;
     }
   }
