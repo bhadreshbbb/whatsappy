@@ -42,7 +42,8 @@ export const campaignsController = {
       const templateId      = b.template_id      || b.template?.id   || null;
       const templateIds     = b.template_ids     || [];
       const metaTemplateId  = b.meta_template_id || null;   // linked approved Meta carousel template
-      const delayHours      = b.delay_hours      != null ? Number(b.delay_hours) : 1;
+      const delayHours      = b.delay_hours  != null ? Number(b.delay_hours)  : 1;
+      const runTimes        = b.run_times    != null ? Number(b.run_times)    : 1; // 0 = infinite
 
       const id = Date.now(); // use timestamp for unique IDs
       const newCampaign = {
@@ -53,12 +54,13 @@ export const campaignsController = {
         campaign_type: campaignType,
         target_segment: targetSegment,
         target_language: targetLanguage,
-        filters: '{}',
+        filters: b.filters || '{}',
         template_id: templateId,
         template_ids: templateIds,
-        meta_template_id: metaTemplateId,   // NEW — Meta carousel template for product recommendation
+        meta_template_id: metaTemplateId,
         schedule_type: 'delayed',
         delay_hours: delayHours,
+        run_times: runTimes,
         is_active: 1,
         total_sent: 0,
         total_recovered: 0,

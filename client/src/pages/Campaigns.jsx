@@ -5,7 +5,7 @@ import {
   Zap, Clock, CheckCircle, Globe, MessageSquare, ShoppingCart,
   Eye, TrendingDown, Package, Users, Settings, ToggleLeft, Gift, Layout,
   Filter, Sliders, UserCheck, Search, Target, ChevronRight, AlertCircle,
-  Flame, Smartphone, Monitor,
+  Flame, Smartphone, Monitor, Repeat,
 } from "lucide-react";
 import { campaignsApi, templatesApi, analyticsApi } from "../api";
 
@@ -672,6 +672,7 @@ function CustomCampaignModal({ onClose, onCreated }) {
   const [step, setStep]           = useState(1);
   const [name, setName]           = useState('');
   const [delayHrs, setDelay]      = useState(0);
+  const [runTimes, setRunTimes]   = useState(1);   // 0 = infinite
   const [templateId, setTplId]    = useState('');
   const [templates, setTemplates] = useState([]);
   const [tplSearch, setTplSearch] = useState('');
@@ -748,6 +749,7 @@ function CustomCampaignModal({ onClose, onCreated }) {
         template_id:  templateId,
         template_ids: [],
         delay_hours:  Number(delayHrs),
+        run_times:    runTimes,   // 0 = infinite
         is_active:    true,
         filters: JSON.stringify({ logic: 'AND', rules }),
       });
@@ -821,30 +823,68 @@ function CustomCampaignModal({ onClose, onCreated }) {
                   className="input w-full" />
               </div>
 
-              <div className="space-y-1.5">
-                <label className="label flex items-center gap-1.5">
-                  <Clock size={12} className="text-orange-400" /> Send Delay After Trigger
-                </label>
-                <div className="flex items-center gap-4 p-4 rounded-xl"
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+
+                {/* Delay */}
+                <div className="space-y-2 p-4 rounded-xl"
                   style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)" }}>
-                  <input type="range" min="0" max="72" value={delayHrs}
-                    onChange={e => setDelay(e.target.value)} className="flex-1 accent-blue-500" />
-                  <div className="text-right">
-                    <span className="text-2xl font-bold text-blue-400">{delayHrs}</span>
-                    <span className="text-xs text-slate-500 ml-1">hrs</span>
+                  <label className="label flex items-center gap-1.5 mb-1">
+                    <Clock size={12} className="text-orange-400" /> Delay Between Each Run
+                  </label>
+                  <div className="flex items-center gap-3">
+                    <input type="range" min="0" max="72" value={delayHrs}
+                      onChange={e => setDelay(e.target.value)} className="flex-1 accent-orange-400" />
+                    <div className="text-right min-w-[48px]">
+                      <span className="text-xl font-bold text-orange-400">{delayHrs}</span>
+                      <span className="text-xs text-slate-500 ml-1">hrs</span>
+                    </div>
                   </div>
+                  <div className="flex gap-1.5 flex-wrap">
+                    {[0, 1, 2, 6, 12, 24, 48].map(h => (
+                      <button key={h} onClick={() => setDelay(h)}
+                        className="text-[10px] px-2 py-1 rounded-lg transition-all"
+                        style={Number(delayHrs) === h
+                          ? { background: "rgba(251,146,60,0.15)", border: "1px solid rgba(251,146,60,0.35)", color: "#fb923c" }
+                          : { background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)", color: "#475569" }}>
+                        {h === 0 ? 'Instant' : `${h}h`}
+                      </button>
+                    ))}
+                  </div>
+                  <p className="text-[10px]" style={{ color: "#475569" }}>
+                    {Number(delayHrs) === 0
+                      ? 'Campaign runs immediately when triggered.'
+                      : `Each run fires ${delayHrs}h after the previous one.`}
+                  </p>
                 </div>
-                <div className="flex gap-2 flex-wrap">
-                  {[0, 1, 2, 6, 12, 24, 48].map(h => (
-                    <button key={h} onClick={() => setDelay(h)}
-                      className="text-[10px] px-2 py-1 rounded-lg transition-all"
-                      style={Number(delayHrs) === h
-                        ? { background: "rgba(59,130,246,0.15)", border: "1px solid rgba(59,130,246,0.3)", color: "#60a5fa" }
-                        : { background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)", color: "#475569" }}>
-                      {h === 0 ? 'Instant' : `${h}h`}
-                    </button>
-                  ))}
+
+                {/* Run times */}
+                <div className="space-y-2 p-4 rounded-xl"
+                  style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)" }}>
+                  <label className="label flex items-center gap-1.5 mb-1">
+                    <Repeat size={12} className="text-purple-400" /> How Many Times to Run
+                  </label>
+                  <div className="grid grid-cols-4 gap-1.5">
+                    {[1, 2, 3, 4, 5, 6, 0].map(n => (
+                      <button key={n} onClick={() => setRunTimes(n)}
+                        className="py-2.5 rounded-xl text-xs font-bold transition-all"
+                        style={runTimes === n
+                          ? { background: n === 0 ? "rgba(168,85,247,0.2)" : "rgba(59,130,246,0.2)",
+                              border: `1px solid ${n === 0 ? "rgba(168,85,247,0.4)" : "rgba(59,130,246,0.4)"}`,
+                              color: n === 0 ? "#c084fc" : "#60a5fa" }
+                          : { background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)", color: "#475569" }}>
+                        {n === 0 ? '∞' : n}
+                      </button>
+                    ))}
+                  </div>
+                  <p className="text-[10px]" style={{ color: "#475569" }}>
+                    {runTimes === 0
+                      ? 'Runs forever — repeats every ' + (Number(delayHrs) === 0 ? 'immediately' : `${delayHrs}h`) + ' indefinitely.'
+                      : runTimes === 1
+                      ? 'Sends once to each matched contact.'
+                      : `Sends ${runTimes} times to each contact, ${Number(delayHrs) === 0 ? 'back-to-back' : `${delayHrs}h apart`}.`}
+                  </p>
                 </div>
+
               </div>
 
               <div className="space-y-2">
@@ -1044,9 +1084,9 @@ function CustomCampaignModal({ onClose, onCreated }) {
                 </div>
                 <div className="mt-4 grid grid-cols-3 gap-3">
                   {[
-                    { label: 'Template',  value: activeTpl?.name || '—',                              color: "#4ade80" },
-                    { label: 'Delay',     value: Number(delayHrs) === 0 ? 'Instant' : `${delayHrs}h`, color: "#fb923c" },
-                    { label: 'Filters',   value: `${activeFilterCount} filter${activeFilterCount !== 1 ? 's' : ''} set`, color: "#c084fc" },
+                    { label: 'Template',  value: activeTpl?.name || '—',                                             color: "#4ade80" },
+                    { label: 'Delay',     value: Number(delayHrs) === 0 ? 'Instant' : `${delayHrs}h between runs`,    color: "#fb923c" },
+                    { label: 'Runs',      value: runTimes === 0 ? '∞ Infinite' : `${runTimes}×`,                      color: "#c084fc" },
                   ].map(s => (
                     <div key={s.label} className="p-3 rounded-xl text-center"
                       style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)" }}>
@@ -1231,9 +1271,17 @@ export default function Campaigns() {
                 {isCustom ? '🎯' : type.icon}
               </div>
               <h3 className="font-bold text-white mb-1">{c.name}</h3>
-              <p className="text-[10px] text-slate-500 mb-3 uppercase tracking-widest">
-                {isCustom ? 'Custom Audience' : type.targetSegment.replace('_',' ')} Target
-              </p>
+              <div className="flex items-center gap-2 mb-3">
+                <p className="text-[10px] text-slate-500 uppercase tracking-widest">
+                  {isCustom ? 'Custom Audience' : type.targetSegment.replace('_',' ')} Target
+                </p>
+                {isCustom && (
+                  <span className="text-[9px] px-1.5 py-0.5 rounded font-bold"
+                    style={{ background: "rgba(168,85,247,0.1)", border: "1px solid rgba(168,85,247,0.2)", color: "#c084fc" }}>
+                    {c.run_times === 0 ? '∞ runs' : `${c.run_times || 1}× · ${c.delay_hours || 0}h`}
+                  </span>
+                )}
+              </div>
               {isCustom && filters?.rules?.length > 0 && (
                 <div className="flex flex-wrap gap-1 mb-4">
                   {filters.rules.slice(0, 3).map((r, i) => (
