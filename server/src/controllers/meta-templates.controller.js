@@ -204,16 +204,19 @@ function buildMetaComponents(tpl) {
 
 /**
  * Automatically downloads and uploads images from external URLs to Meta
- * and creates Gallery records for them.
+ * and creates Gallery records inside a folder named after the template.
+ * templateName: the template's display name — used as the gallery folder name.
  */
-async function autoUploadTemplateImages(channelId, carouselCards) {
+async function autoUploadTemplateImages(channelId, carouselCards, templateName = 'Template Assets') {
   const db = getDb();
-  let folder = (db.gallery_folders || []).find(f => f.channel_id === channelId && f.name === 'Template Assets');
+  const folderName = (templateName || 'Template Assets').replace(/[^a-z0-9_\- ]/gi, '_').trim();
+  if (!db.gallery_folders) db.gallery_folders = [];
 
+  let folder = db.gallery_folders.find(f => f.channel_id === channelId && f.name === folderName);
   if (!folder) {
-    folder = { id: uuidv4(), channel_id: channelId, name: 'Template Assets', created_at: new Date().toISOString() };
-    if (!db.gallery_folders) db.gallery_folders = [];
+    folder = { id: uuidv4(), channel_id: channelId, name: folderName, created_at: new Date().toISOString() };
     db.gallery_folders.push(folder);
+    console.log(`[AutoUpload] Created gallery folder "${folderName}"`);
   }
 
   const updatedCards = [...carouselCards];
@@ -312,7 +315,7 @@ export async function previewPayload(req, res) {
 
     // ── Resolve images if dry-running carousel ──
     if (is_carousel) {
-      tpl.carousel_cards = await autoUploadTemplateImages(channelId, carousel_cards);
+      tpl.carousel_cards = await autoUploadTemplateImages(channelId, carousel_cards, name || 'preview');
     }
 
     const components = buildMetaComponents(tpl);
@@ -506,9 +509,11 @@ export async function getSendPayload(req, res) {
       auth_header: authDisplay,
       curl_command: curlCommand,
       last_refresh:  tpl.product_config?.last_auto_refresh || null,
-      next_refresh:  tpl.product_config?.last_auto_refresh
-        ? new Date(new Date(tpl.product_config.last_auto_refresh).getTime() + 6 * 3600 * 1000).toISOString()
-        : null,
+      next_refresh:  tpl.product_config?.next_auto_refresh
+        || (tpl.product_config?.last_auto_refresh
+          ? new Date(new Date(tpl.product_config.last_auto_refresh).getTime() + 24 * 3600 * 1000).toISOString()
+          : null),
+      folder_name:   tpl.product_config?.folder_name || null,
       products: (tpl.product_config?.cards || []).map(c => ({ title: c.title, price: c.price, link: c.link, image: c._hot_image_url || '' })),
     });
   } catch (err) {
@@ -566,7 +571,7 @@ export async function createTemplate(req, res) {
     const creds = getCreds(channelId);
     if (creds) {
       // ── Step 1: Resolve images (auto-upload if URL provided) ──
-      const resolvedCards = is_carousel ? await autoUploadTemplateImages(channelId, carousel_cards) : [];
+      const resolvedCards = is_carousel ? await autoUploadTemplateImages(channelId, carousel_cards, name) : [];
       tpl.carousel_cards = resolvedCards;
 
       // ── Step 2: Build Payload ──
@@ -749,46 +754,98 @@ export function getHotProducts(req, res) {
   }
 }
 
-// ── Refresh auto-products for a template ──────────────────────────────────────
+// ── Manual refresh: same logic as the 24h cron but triggered on demand ───────
 export async function refreshAutoProducts(req, res) {
   try {
     const db = getDb();
     const channelId = req.headers['x-channel-id'] || 'demo';
     const { id } = req.params;
+    const nowDt = new Date();
 
     const tpl = (db.meta_templates || []).find(t => t.id === id && t.channel_id === channelId);
     if (!tpl) return res.status(404).json({ error: 'Template not found' });
     if (!tpl.is_carousel) return res.status(400).json({ error: 'Only carousel templates support auto-products' });
 
-    const hotProducts = computeHotProducts(db, channelId, tpl.auto_product_count || tpl.carousel_cards?.length || 3);
+    const cardCount  = tpl.carousel_cards?.length || 3;
+    const hotProducts = computeHotProducts(db, channelId, cardCount);
 
-    // Build cards config from hot products
-    const existingCards = (tpl.product_config?.cards) || tpl.carousel_cards.map(() => ({}));
-    const cards = tpl.carousel_cards.map((card, i) => {
-      const hot = hotProducts[i];
-      const existing = existingCards[i] || {};
-      if (!hot) return existing;
-      return {
-        ...existing,
-        title: hot.name,
-        price: hot.price,
-        link: hot.url,
-        // Only update image_id if card is in auto mode and no manual image set
-        image_id: (card.source === 'auto' || !existing.image_id) ? (existing.image_id || '') : existing.image_id,
-        _hot_image_url: hot.image,
-        _hot_score: hot.score,
-        _hot_views: hot.views,
-        _hot_carts: hot.carts,
-      };
-    });
+    // ── Per-template gallery folder ───────────────────────────────────────────
+    const folderName = (tpl.name || 'auto_products').replace(/[^a-z0-9_\- ]/gi, '_').trim();
+    if (!db.gallery_folders) db.gallery_folders = [];
+    if (!db.gallery_images)  db.gallery_images  = [];
+
+    let folder = db.gallery_folders.find(f => f.channel_id === channelId && f.name === folderName);
+    if (!folder) {
+      folder = { id: uuidv4(), channel_id: channelId, name: folderName, created_at: nowDt.toISOString() };
+      db.gallery_folders.push(folder);
+    }
+
+    const existingCards = tpl.product_config?.cards || tpl.carousel_cards.map(() => ({}));
+
+    const cards = await Promise.all(
+      tpl.carousel_cards.map(async (card, i) => {
+        const hot      = hotProducts[i % hotProducts.length];
+        const existing = existingCards[i] || {};
+        if (!hot) return existing;
+
+        const newImageUrl  = hot.image || '';
+        const prevImageUrl = existing._hot_image_url || '';
+        const productChanged = newImageUrl && newImageUrl !== prevImageUrl;
+        const needsUpload    = newImageUrl && (productChanged || !existing.header_media_id);
+
+        let header_media_id = existing.header_media_id || '';
+        let image_id        = existing.image_id || '';
+
+        if (needsUpload) {
+          const cached = db.gallery_images.find(
+            img => img.source_url === newImageUrl && img.channel_id === channelId && !productChanged
+          );
+          if (cached) {
+            header_media_id = cached.file_handle || cached.media_id || '';
+            image_id        = cached.id;
+          } else {
+            try {
+              const { buffer, mimeType } = await whatsappService.downloadImage(newImageUrl);
+              const filename = `${folderName}_card${i + 1}_${nowDt.getTime()}.jpg`;
+              const fileHandle = await whatsappService.uploadMediaResumable(buffer, filename, mimeType);
+              const imgRecord = {
+                id: uuidv4(), folder_id: folder.id, channel_id: channelId,
+                filename, mime_type: mimeType, size: buffer.length,
+                file_handle: fileHandle, source_url: newImageUrl,
+                created_at: nowDt.toISOString(), template_name: tpl.name, card_index: i,
+              };
+              db.gallery_images.push(imgRecord);
+              header_media_id = fileHandle;
+              image_id        = imgRecord.id;
+              console.log(`[RefreshAutoProducts] "${tpl.name}" card ${i + 1}: uploaded → ${fileHandle}`);
+            } catch (imgErr) {
+              console.error(`[RefreshAutoProducts] card ${i + 1} upload failed:`, imgErr.message);
+            }
+          }
+        }
+
+        return {
+          title: hot.name  || existing.title || '',
+          price: hot.price || existing.price || '',
+          link:  hot.url   || existing.link  || '',
+          image_id, header_media_id,
+          _hot_image_url: newImageUrl,
+          _hot_score: hot.score, _hot_views: hot.views, _hot_carts: hot.carts,
+          _auto_updated: nowDt.toISOString(),
+        };
+      })
+    );
 
     if (!tpl.product_config) tpl.product_config = {};
-    tpl.product_config.cards = cards;
-    tpl.product_config.last_auto_refresh = new Date().toISOString();
-    tpl.product_config.auto_products = hotProducts;
-    db.save();
+    tpl.product_config.cards             = cards;
+    tpl.product_config.last_auto_refresh = nowDt.toISOString();
+    tpl.product_config.next_auto_refresh = new Date(Date.now() + 24 * 3600 * 1000).toISOString();
+    tpl.product_config.auto_products     = hotProducts;
+    tpl.product_config.folder_name       = folderName;
+    tpl.product_config.send_payload      = buildSendMessagePayload(tpl, tpl.product_config, '{{RECIPIENT_PHONE}}');
 
-    res.json({ template: tpl, hot_products: hotProducts });
+    db.save();
+    res.json({ template: tpl, hot_products: hotProducts, folder: folderName, cards_updated: cards.length });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

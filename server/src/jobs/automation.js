@@ -8,7 +8,7 @@ import { computeHotProducts, buildSendMessagePayload, LANG_MAP } from '../contro
 import { v4 as uuidv4 } from 'uuid';
 
 let cronInterval;
-const SIX_HOURS_MS = 6 * 60 * 60 * 1000;
+const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000;
 let lastAutoProductRefresh = 0; // timestamp (ms) — 0 means never run
 
 /**
@@ -49,123 +49,153 @@ export function startAutomation() {
   console.log('Automation engine active - monitoring tracker events');
 }
 
-// ── Every-6-hour refresh: update product_config.cards for auto-mode templates ──
+// ── Every-24-hour refresh: update product_config.cards for auto-mode templates ──
+// - Gallery folder is named after each template (auto-created if missing)
+// - If a hot product's image URL changed since last cycle, re-download + re-upload to Meta
+// - Always rebuilds the send_payload so campaigns get fresh media IDs
 async function refreshAutoProductTemplates() {
   const now = Date.now();
-  if ((now - lastAutoProductRefresh) < SIX_HOURS_MS) return;
+  if ((now - lastAutoProductRefresh) < TWENTY_FOUR_HOURS_MS) return;
   lastAutoProductRefresh = now;
 
-  const db    = getDb();
-  const nowDt = new Date();
+  const db      = getDb();
+  const nowDt   = new Date();
   const channelId = process.env.CHANNEL_ID || 'demo';
 
-  // Only refresh APPROVED auto-product carousel templates
+  // Only auto-product-mode APPROVED carousel templates
   const templates = (db.meta_templates || []).filter(t =>
     t.channel_id === channelId &&
     t.is_carousel &&
     t.auto_product_mode &&
     (t.meta_status === 'APPROVED' || t.meta_status === 'PENDING')
   );
-
   if (templates.length === 0) return;
 
-  const hotProducts = computeHotProducts(db, channelId, 10);
+  // Get enough hot products for the largest carousel (max card count across all templates)
+  const maxCards = Math.max(...templates.map(t => t.carousel_cards?.length || 3), 10);
+  const hotProducts = computeHotProducts(db, channelId, maxCards);
   if (hotProducts.length === 0) {
-    console.log('[AutoProducts] No hot products found yet — skipping refresh');
+    console.log('[AutoProducts] No hot products found — skipping 24h refresh');
     return;
   }
 
-  console.log(`[AutoProducts] 6-hour refresh — ${hotProducts.length} hot products, ${templates.length} template(s)`);
-
-  // ── Ensure "Template Assets" gallery folder exists ────────────────────────
-  let folder = (db.gallery_folders || []).find(f => f.channel_id === channelId && f.name === 'Template Assets');
-  if (!folder) {
-    folder = { id: uuidv4(), channel_id: channelId, name: 'Template Assets', created_at: nowDt.toISOString() };
-    if (!db.gallery_folders) db.gallery_folders = [];
-    db.gallery_folders.push(folder);
-  }
+  console.log(`[AutoProducts] 24h refresh — ${hotProducts.length} hot products, ${templates.length} template(s)`);
+  if (!db.gallery_folders) db.gallery_folders = [];
+  if (!db.gallery_images)  db.gallery_images  = [];
 
   for (const tpl of templates) {
     try {
       const cardCount     = tpl.carousel_cards?.length || 3;
       const existingCards = tpl.product_config?.cards || tpl.carousel_cards.map(() => ({}));
 
-      // Build updated cards with latest hot products
+      // ── Per-template gallery folder (named after template) ─────────────────
+      const folderName = (tpl.name || 'auto_products').replace(/[^a-z0-9_\- ]/gi, '_').trim();
+      let folder = db.gallery_folders.find(f => f.channel_id === channelId && f.name === folderName);
+      if (!folder) {
+        folder = { id: uuidv4(), channel_id: channelId, name: folderName, created_at: nowDt.toISOString() };
+        db.gallery_folders.push(folder);
+        console.log(`[AutoProducts] Created gallery folder "${folderName}" for template "${tpl.name}"`);
+      }
+
+      // Build updated cards — exactly as many as the template has carousel cards
       const cards = await Promise.all(
         tpl.carousel_cards.map(async (card, i) => {
+          // Rotate through hot products if there are fewer hot than cards
           const hot      = hotProducts[i % hotProducts.length];
           const existing = existingCards[i] || {};
 
-          // ── Auto-upload product image to Meta + Gallery if not already done ─
-          let header_media_id = existing.header_media_id || card.header_media_id || '';
-          let image_id        = existing.image_id || card.image_id || '';
-          const imageUrl      = hot.image || '';
+          const newImageUrl = hot.image || '';
+          const prevImageUrl = existing._hot_image_url || '';
 
-          if (imageUrl && !header_media_id) {
-            // Check if this image was already uploaded
-            const alreadyUploaded = (db.gallery_images || []).find(
-              img => img.source_url === imageUrl && img.channel_id === channelId
+          // Re-upload image if:
+          //  (a) product image URL changed since last cycle, OR
+          //  (b) no media ID stored yet
+          const productChanged = newImageUrl && newImageUrl !== prevImageUrl;
+          const needsUpload    = newImageUrl && (productChanged || !existing.header_media_id);
+
+          let header_media_id = existing.header_media_id || '';
+          let image_id        = existing.image_id || '';
+
+          if (needsUpload) {
+            // Check gallery cache first (same URL already uploaded this cycle)
+            const cached = db.gallery_images.find(
+              img => img.source_url === newImageUrl && img.channel_id === channelId
             );
-            if (alreadyUploaded) {
-              header_media_id = alreadyUploaded.media_id || '';
-              image_id        = alreadyUploaded.id;
+            if (cached && !productChanged) {
+              header_media_id = cached.file_handle || cached.media_id || '';
+              image_id        = cached.id;
+              console.log(`[AutoProducts] "${tpl.name}" card ${i + 1}: reuse cached → ${header_media_id}`);
             } else {
+              // Download and upload fresh image to Meta Graph API
               try {
-                const { buffer, mimeType } = await whatsappService.downloadImage(imageUrl);
-                const filename = `auto_${nowDt.getTime()}_card${i}.jpg`;
-                const mediaId  = await whatsappService.uploadMedia(buffer, filename, mimeType);
+                const { buffer, mimeType } = await whatsappService.downloadImage(newImageUrl);
+                const filename = `${folderName}_card${i + 1}_${nowDt.getTime()}.jpg`;
+
+                // Use resumable upload → returns file_handle suitable for template creation AND send
+                const fileHandle = await whatsappService.uploadMediaResumable(buffer, filename, mimeType);
 
                 const imgRecord = {
-                  id: uuidv4(), folder_id: folder.id, channel_id: channelId,
-                  filename, mime_type: mimeType, size: buffer.length,
-                  media_id: mediaId, source_url: imageUrl,
-                  created_at: nowDt.toISOString(),
+                  id:          uuidv4(),
+                  folder_id:   folder.id,
+                  channel_id:  channelId,
+                  filename,
+                  mime_type:   mimeType,
+                  size:        buffer.length,
+                  file_handle: fileHandle,
+                  source_url:  newImageUrl,
+                  created_at:  nowDt.toISOString(),
+                  template_name: tpl.name,
+                  card_index:  i,
                 };
-                if (!db.gallery_images) db.gallery_images = [];
                 db.gallery_images.push(imgRecord);
 
-                header_media_id = mediaId;
+                header_media_id = fileHandle;
                 image_id        = imgRecord.id;
-                console.log(`[AutoProducts] Uploaded image for "${tpl.name}" card ${i + 1}: ${mediaId}`);
+                console.log(`[AutoProducts] "${tpl.name}" card ${i + 1}: ${productChanged ? 're-uploaded new product' : 'first upload'} → ${fileHandle}`);
               } catch (imgErr) {
-                console.error(`[AutoProducts] Image upload failed for card ${i + 1}:`, imgErr.message);
+                console.error(`[AutoProducts] "${tpl.name}" card ${i + 1} image upload failed:`, imgErr.message);
+                // Keep existing IDs if upload fails — don't break the whole refresh
               }
             }
           }
 
           return {
-            ...existing,
             title:           hot.name   || existing.title  || '',
             price:           hot.price  || existing.price  || '',
             link:            hot.url    || existing.link   || '',
             image_id,
             header_media_id,
-            _hot_image_url:  hot.image  || '',
+            _hot_image_url:  newImageUrl,
             _hot_score:      hot.score,
             _hot_views:      hot.views,
             _hot_carts:      hot.carts,
             _auto_updated:   nowDt.toISOString(),
+            _product_changed: productChanged,
           };
         })
       );
 
       if (!tpl.product_config) tpl.product_config = {};
-      tpl.product_config.cards              = cards;
-      tpl.product_config.last_auto_refresh  = nowDt.toISOString();
-      tpl.product_config.next_auto_refresh  = new Date(now + SIX_HOURS_MS).toISOString();
-      tpl.product_config.auto_products      = hotProducts.slice(0, cardCount);
+      tpl.product_config.cards             = cards;
+      tpl.product_config.last_auto_refresh = nowDt.toISOString();
+      tpl.product_config.next_auto_refresh = new Date(now + TWENTY_FOUR_HOURS_MS).toISOString();
+      tpl.product_config.auto_products     = hotProducts.slice(0, cardCount);
+      tpl.product_config.folder_name       = folderName;
 
-      // Cache the send-message payload for the campaign to use directly
+      // Always rebuild the cached send payload with latest media IDs
+      // Campaigns read this cached payload at send time so they always use fresh products
       tpl.product_config.send_payload = buildSendMessagePayload(tpl, tpl.product_config, '{{RECIPIENT_PHONE}}');
 
-      console.log(`[AutoProducts] "${tpl.name}" — ${cards.length} cards, ${cards.filter(c=>c.header_media_id).length} images uploaded`);
+      const uploaded = cards.filter(c => c.header_media_id).length;
+      const changed  = cards.filter(c => c._product_changed).length;
+      console.log(`[AutoProducts] "${tpl.name}" ✓ — ${cardCount} cards, ${uploaded} images ready, ${changed} product(s) refreshed`);
     } catch (e) {
-      console.error(`[AutoProducts] Template ${tpl.id} error:`, e.message);
+      console.error(`[AutoProducts] Template "${tpl.name}" (${tpl.id}) error:`, e.message);
     }
   }
 
   db.save();
-  console.log(`[AutoProducts] 6h refresh complete — next at ${new Date(now + SIX_HOURS_MS).toLocaleTimeString()}`);
+  console.log(`[AutoProducts] 24h refresh done — next at ${new Date(now + TWENTY_FOUR_HOURS_MS).toLocaleTimeString()}`);
 }
 
 async function runAutomation() {
