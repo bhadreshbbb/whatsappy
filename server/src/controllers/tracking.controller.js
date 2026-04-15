@@ -781,7 +781,7 @@ export const trackingController = {
   async _getGeoData(ip) {  console.log('sss'.ip)
     const fallback = { city: 'Unknown', state: 'Unknown', country: 'Unknown', countryCode: '🌐', timezone: 'UTC' };
 
-    if (!ip) return fallback;
+    // if (!ip) return fallback;
 
     // Strip IPv4-mapped IPv6 prefix (::ffff:1.2.3.4 → 1.2.3.4)
     // Pure IPv6 (mobile) is kept as-is; pure IPv4 (PC/laptop) is kept as-is
