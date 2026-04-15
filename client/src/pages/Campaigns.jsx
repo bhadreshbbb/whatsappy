@@ -638,145 +638,32 @@ function CreateModal({ onClose, onCreated }) {
 
 // ─── Custom Campaign Builder ──────────────────────────────────────────────────
 
-const FILTER_FIELDS = [
-  { id: 'status',           label: 'Status',           type: 'select',
-    options: [
-      { value: 'active',         label: 'Active Visitor'   },
-      { value: 'product_view',   label: 'Product View'     },
-      { value: 'abandoned_cart', label: 'Abandoned Cart'   },
-      { value: 'purchased',      label: 'Purchased'        },
-    ]
-  },
-  { id: 'city',             label: 'City',             type: 'text'   },
-  { id: 'device',           label: 'Device',           type: 'select',
-    options: [
-      { value: 'mobile',  label: 'Mobile'  },
-      { value: 'desktop', label: 'Desktop' },
-      { value: 'tablet',  label: 'Tablet'  },
-    ]
-  },
-  { id: 'language',         label: 'Language',         type: 'select',
-    options: LANGUAGES.map(l => ({ value: l.code, label: l.label }))
-  },
-  { id: 'power_score',      label: 'Power Score',      type: 'number' },
-  { id: 'engagement_score', label: 'Engagement Score', type: 'number' },
-  { id: 'cart_events',      label: 'Cart Events',      type: 'number' },
-  { id: 'page_views',       label: 'Page Views',       type: 'number' },
-  { id: 'total_time_sec',   label: 'Time on Site (s)', type: 'number' },
-];
-
-const NUMBER_OPS = [
-  { value: 'gte', label: '≥ at least' },
-  { value: 'lte', label: '≤ at most'  },
-  { value: 'eq',  label: '= exactly'  },
-];
-
-function applyRules(contacts, rules, logic) {
-  const validRules = rules.filter(r => r.value !== '' && r.value !== undefined);
-  if (!validRules.length) return contacts;
+function applyFilters(contacts, f) {
   return contacts.filter(c => {
-    const results = validRules.map(r => {
-      const cv = c[r.field];
-      if (r.op === 'eq')       return String(cv ?? '').toLowerCase() === String(r.value).toLowerCase();
-      if (r.op === 'contains') return String(cv ?? '').toLowerCase().includes(String(r.value).toLowerCase());
-      if (r.op === 'gte')      return Number(cv ?? 0) >= Number(r.value);
-      if (r.op === 'lte')      return Number(cv ?? 0) <= Number(r.value);
-      return true;
-    });
-    return logic === 'AND' ? results.every(Boolean) : results.some(Boolean);
+    if (f.status  && c.status  !== f.status)  return false;
+    if (f.city    && !(c.city  || '').toLowerCase().includes(f.city.toLowerCase())) return false;
+    if (f.device  && c.device  !== f.device)  return false;
+    if (f.lang    && c.language !== f.lang)   return false;
+    if (f.score   && Number(c.power_score      || 0) < Number(f.score))   return false;
+    if (f.carts   && Number(c.cart_events      || 0) < Number(f.carts))   return false;
+    if (f.pages   && Number(c.page_views       || 0) < Number(f.pages))   return false;
+    if (f.engage  && Number(c.engagement_score || 0) < Number(f.engage))  return false;
+    return true;
   });
 }
 
-function defaultRule() {
-  return { id: Date.now(), field: 'status', op: 'eq', value: 'abandoned_cart' };
-}
-
-function RuleRow({ rule, contacts, onUpdate, onRemove, isLast, logic }) {
-  const field = FILTER_FIELDS.find(f => f.id === rule.field) || FILTER_FIELDS[0];
-  const matchCount = useMemo(() => {
-    const c = contacts.filter(ct => {
-      const cv = ct[rule.field];
-      if (rule.op === 'eq')  return String(cv ?? '').toLowerCase() === String(rule.value).toLowerCase();
-      if (rule.op === 'contains') return String(cv ?? '').toLowerCase().includes(String(rule.value).toLowerCase());
-      if (rule.op === 'gte') return Number(cv ?? 0) >= Number(rule.value);
-      if (rule.op === 'lte') return Number(cv ?? 0) <= Number(rule.value);
-      return false;
-    });
-    return c.length;
-  }, [contacts, rule]);
-
+function FilterCard({ label, icon: Icon, children, active }) {
   return (
-    <div className="relative">
-      <div className="flex items-center gap-2 p-3 rounded-xl"
-        style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)" }}>
-        {/* Field */}
-        <select value={rule.field}
-          onChange={e => {
-            const nf = FILTER_FIELDS.find(f => f.id === e.target.value);
-            onUpdate({ ...rule, field: e.target.value, op: nf?.type === 'number' ? 'gte' : 'eq', value: '' });
-          }}
-          className="input text-xs py-1.5 flex-1"
-          style={{ minWidth: 130 }}>
-          {FILTER_FIELDS.map(f => <option key={f.id} value={f.id}>{f.label}</option>)}
-        </select>
-
-        {/* Operator */}
-        {field.type === 'number' ? (
-          <select value={rule.op} onChange={e => onUpdate({ ...rule, op: e.target.value })}
-            className="input text-xs py-1.5" style={{ minWidth: 110 }}>
-            {NUMBER_OPS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-          </select>
-        ) : field.type === 'text' ? (
-          <select value={rule.op} onChange={e => onUpdate({ ...rule, op: e.target.value })}
-            className="input text-xs py-1.5" style={{ minWidth: 110 }}>
-            <option value="eq">= equals</option>
-            <option value="contains">contains</option>
-          </select>
-        ) : (
-          <span className="text-xs px-2" style={{ color: "#64748b" }}>is</span>
-        )}
-
-        {/* Value */}
-        {field.type === 'select' ? (
-          <select value={rule.value} onChange={e => onUpdate({ ...rule, value: e.target.value })}
-            className="input text-xs py-1.5 flex-1">
-            <option value="">Select…</option>
-            {field.options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-          </select>
-        ) : field.type === 'number' ? (
-          <input type="number" value={rule.value} onChange={e => onUpdate({ ...rule, value: e.target.value })}
-            placeholder="0" className="input text-xs py-1.5 w-20 text-center" />
-        ) : (
-          <input type="text" value={rule.value} onChange={e => onUpdate({ ...rule, value: e.target.value })}
-            placeholder="type…" className="input text-xs py-1.5 flex-1" />
-        )}
-
-        {/* Match pill */}
-        {rule.value !== '' && (
-          <span className="text-[10px] px-2 py-0.5 rounded-full font-semibold whitespace-nowrap"
-            style={{ background: matchCount > 0 ? "rgba(34,197,94,0.1)" : "rgba(100,116,139,0.1)",
-                     color: matchCount > 0 ? "#4ade80" : "#64748b" }}>
-            {matchCount}
-          </span>
-        )}
-
-        <button onClick={onRemove} className="p-1 rounded-lg transition-colors ml-1"
-          style={{ color: "#475569" }}
-          onMouseEnter={e => e.currentTarget.style.color = "#f87171"}
-          onMouseLeave={e => e.currentTarget.style.color = "#475569"}>
-          <X size={13} />
-        </button>
-      </div>
-      {/* Logic connector */}
-      {!isLast && (
-        <div className="flex justify-center my-1">
-          <span className="text-[10px] font-bold px-2 py-0.5 rounded"
-            style={{ background: logic === 'AND' ? "rgba(59,130,246,0.15)" : "rgba(168,85,247,0.15)",
-                     color: logic === 'AND' ? "#60a5fa" : "#c084fc" }}>
-            {logic}
-          </span>
-        </div>
-      )}
+    <div className="p-3 rounded-xl space-y-1.5 transition-all"
+      style={{
+        background: active ? "rgba(59,130,246,0.07)" : "rgba(255,255,255,0.02)",
+        border: `1px solid ${active ? "rgba(59,130,246,0.25)" : "rgba(255,255,255,0.06)"}`,
+      }}>
+      <label className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider"
+        style={{ color: active ? "#60a5fa" : "#64748b" }}>
+        {Icon && <Icon size={10} />} {label}
+      </label>
+      {children}
     </div>
   );
 }
@@ -788,12 +675,20 @@ function CustomCampaignModal({ onClose, onCreated }) {
   const [templateId, setTplId]    = useState('');
   const [templates, setTemplates] = useState([]);
   const [tplSearch, setTplSearch] = useState('');
-  const [logic, setLogic]         = useState('AND');
-  const [rules, setRules]         = useState([defaultRule()]);
   const [contacts, setContacts]   = useState([]);
   const [ctLoading, setCtLoading] = useState(false);
   const [saving, setSaving]       = useState(false);
   const [err, setErr]             = useState('');
+
+  // Audience filters — all are AND, just pick values
+  const [fStatus, setFStatus] = useState('');
+  const [fCity,   setFCity]   = useState('');
+  const [fDevice, setFDevice] = useState('');
+  const [fLang,   setFLang]   = useState('');
+  const [fScore,  setFScore]  = useState('');
+  const [fCarts,  setFCarts]  = useState('');
+  const [fPages,  setFPages]  = useState('');
+  const [fEngage, setFEngage] = useState('');
 
   useEffect(() => {
     templatesApi.list().then(setTemplates).catch(() => {});
@@ -803,7 +698,10 @@ function CustomCampaignModal({ onClose, onCreated }) {
     }).catch(() => {}).finally(() => setCtLoading(false));
   }, []);
 
-  const matched = useMemo(() => applyRules(contacts, rules, logic), [contacts, rules, logic]);
+  const filters = { status: fStatus, city: fCity, device: fDevice, lang: fLang,
+                    score: fScore, carts: fCarts, pages: fPages, engage: fEngage };
+  const matched = useMemo(() => applyFilters(contacts, filters),
+    [contacts, fStatus, fCity, fDevice, fLang, fScore, fCarts, fPages, fEngage]);
 
   const activeTpl = templates.find(t => String(t.id) === String(templateId));
   const filteredTpls = useMemo(() =>
@@ -811,9 +709,11 @@ function CustomCampaignModal({ onClose, onCreated }) {
       (t.name || '').toLowerCase().includes(tplSearch.toLowerCase())
     ), [templates, tplSearch]);
 
-  const addRule  = () => setRules(r => [...r, defaultRule()]);
-  const removeRule = id => setRules(r => r.filter(x => x.id !== id));
-  const updateRule = (id, val) => setRules(r => r.map(x => x.id === id ? { ...x, ...val } : x));
+  const activeFilterCount = Object.values(filters).filter(Boolean).length;
+
+  // All cities from contacts for datalist suggestions
+  const allCities = useMemo(() =>
+    [...new Set(contacts.map(c => c.city).filter(Boolean))].sort(), [contacts]);
 
   const handleNext = () => {
     setErr('');
@@ -822,7 +722,7 @@ function CustomCampaignModal({ onClose, onCreated }) {
       if (!templateId)  { setErr('Please select a message template.'); return; }
       setStep(2);
     } else if (step === 2) {
-      if (matched.length === 0) { setErr('No contacts match these filters. Adjust your rules.'); return; }
+      if (matched.length === 0) { setErr('No contacts match these filters. Adjust your selection.'); return; }
       setStep(3);
     }
   };
@@ -830,16 +730,26 @@ function CustomCampaignModal({ onClose, onCreated }) {
   const handleCreate = async () => {
     setSaving(true);
     try {
+      const rules = [
+        fStatus && { field: 'status',           op: 'eq',       value: fStatus },
+        fCity   && { field: 'city',              op: 'contains', value: fCity   },
+        fDevice && { field: 'device',            op: 'eq',       value: fDevice },
+        fLang   && { field: 'language',          op: 'eq',       value: fLang   },
+        fScore  && { field: 'power_score',       op: 'gte',      value: fScore  },
+        fCarts  && { field: 'cart_events',       op: 'gte',      value: fCarts  },
+        fPages  && { field: 'page_views',        op: 'gte',      value: fPages  },
+        fEngage && { field: 'engagement_score',  op: 'gte',      value: fEngage },
+      ].filter(Boolean);
       await campaignsApi.create({
         name: name.trim(),
         campaign_type:  'custom',
         target_segment: 'custom',
-        target_language: 'en',
+        target_language: fLang || 'en',
         template_id:  templateId,
         template_ids: [],
         delay_hours:  Number(delayHrs),
         is_active:    true,
-        filters: JSON.stringify({ logic, rules: rules.map(({ id: _id, ...r }) => r) }),
+        filters: JSON.stringify({ logic: 'AND', rules }),
       });
       onCreated(); onClose();
     } catch (_) {
@@ -970,77 +880,126 @@ function CustomCampaignModal({ onClose, onCreated }) {
             </div>
           )}
 
-          {/* ══ STEP 2: Audience Builder ══ */}
+          {/* ══ STEP 2: Audience Filters ══ */}
           {step === 2 && (
             <div className="space-y-5">
-              {/* Summary bar */}
+
+              {/* Live count bar */}
               <div className="flex items-center justify-between p-4 rounded-2xl"
                 style={{ background: "rgba(59,130,246,0.06)", border: "1px solid rgba(59,130,246,0.15)" }}>
                 <div className="flex items-center gap-3">
                   <Users size={20} className="text-blue-400" />
                   <div>
                     <p className="text-sm font-bold text-white">
-                      {ctLoading ? '…' : matched.length} contacts matched
+                      {ctLoading ? 'Loading…' : <><span style={{ color: "#60a5fa" }}>{matched.length}</span> contacts selected</>}
                     </p>
                     <p className="text-[10px]" style={{ color: "#64748b" }}>
-                      out of {contacts.length} total · filters update live
+                      {contacts.length} total · set filters below to narrow audience
                     </p>
                   </div>
                 </div>
-                {/* AND / OR toggle */}
-                <div className="flex items-center gap-1 p-1 rounded-xl"
-                  style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)" }}>
-                  <span className="text-[10px] text-slate-500 px-1">Logic:</span>
-                  {['AND', 'OR'].map(l => (
-                    <button key={l} onClick={() => setLogic(l)}
-                      className="px-3 py-1 rounded-lg text-[11px] font-bold uppercase tracking-wider transition-all"
-                      style={logic === l
-                        ? { background: l === 'AND' ? "rgba(59,130,246,0.3)" : "rgba(168,85,247,0.3)",
-                            color: l === 'AND' ? "#60a5fa" : "#c084fc" }
-                        : { color: "#475569" }}>
-                      {l}
-                    </button>
-                  ))}
-                </div>
+                {activeFilterCount > 0 && (
+                  <button onClick={() => { setFStatus(''); setFCity(''); setFDevice(''); setFLang(''); setFScore(''); setFCarts(''); setFPages(''); setFEngage(''); }}
+                    className="text-xs flex items-center gap-1 px-3 py-1.5 rounded-lg transition-colors"
+                    style={{ background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)", color: "#f87171" }}>
+                    <X size={10} /> Clear all
+                  </button>
+                )}
               </div>
 
-              {/* Logic help */}
-              <p className="text-[10px] px-1" style={{ color: "#475569" }}>
-                {logic === 'AND'
-                  ? 'AND — contact must match ALL rules below.'
-                  : 'OR — contact must match ANY one rule below.'}
-              </p>
+              {/* Filter grid */}
+              <datalist id="city-list">
+                {allCities.map(c => <option key={c} value={c} />)}
+              </datalist>
 
-              {/* Rules */}
-              <div className="space-y-1">
-                {rules.map((r, i) => (
-                  <RuleRow key={r.id} rule={r} contacts={contacts}
-                    logic={logic} isLast={i === rules.length - 1}
-                    onUpdate={upd => updateRule(r.id, upd)}
-                    onRemove={() => removeRule(r.id)} />
-                ))}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+
+                <FilterCard label="Status" icon={UserCheck} active={!!fStatus}>
+                  <select value={fStatus} onChange={e => setFStatus(e.target.value)} className="input w-full text-sm py-2">
+                    <option value="">All contacts</option>
+                    <option value="active">Active Visitor</option>
+                    <option value="product_view">Product View</option>
+                    <option value="abandoned_cart">Abandoned Cart</option>
+                    <option value="purchased">Purchased</option>
+                  </select>
+                </FilterCard>
+
+                <FilterCard label="City" icon={Globe} active={!!fCity}>
+                  <input value={fCity} onChange={e => setFCity(e.target.value)}
+                    list="city-list" placeholder="Type or pick a city…"
+                    className="input w-full text-sm py-2" />
+                </FilterCard>
+
+                <FilterCard label="Device" icon={Smartphone} active={!!fDevice}>
+                  <select value={fDevice} onChange={e => setFDevice(e.target.value)} className="input w-full text-sm py-2">
+                    <option value="">All devices</option>
+                    <option value="mobile">📱 Mobile</option>
+                    <option value="desktop">🖥 Desktop</option>
+                    <option value="tablet">📲 Tablet</option>
+                  </select>
+                </FilterCard>
+
+                <FilterCard label="Language" icon={Globe} active={!!fLang}>
+                  <select value={fLang} onChange={e => setFLang(e.target.value)} className="input w-full text-sm py-2">
+                    <option value="">All languages</option>
+                    {LANGUAGES.map(l => <option key={l.code} value={l.code}>{l.flag} {l.label}</option>)}
+                  </select>
+                </FilterCard>
+
+                <FilterCard label="Power Score — minimum" icon={Flame} active={!!fScore}>
+                  <select value={fScore} onChange={e => setFScore(e.target.value)} className="input w-full text-sm py-2">
+                    <option value="">Any score</option>
+                    <option value="20">20+ (Low intent)</option>
+                    <option value="40">40+ (Medium)</option>
+                    <option value="60">60+ (High intent)</option>
+                    <option value="80">80+ (Hot 🔥)</option>
+                  </select>
+                </FilterCard>
+
+                <FilterCard label="Cart Events — minimum" icon={ShoppingCart} active={!!fCarts}>
+                  <select value={fCarts} onChange={e => setFCarts(e.target.value)} className="input w-full text-sm py-2">
+                    <option value="">Any</option>
+                    <option value="1">1+ cart event</option>
+                    <option value="2">2+ cart events</option>
+                    <option value="3">3+ cart events</option>
+                    <option value="5">5+ cart events</option>
+                  </select>
+                </FilterCard>
+
+                <FilterCard label="Page Views — minimum" icon={Eye} active={!!fPages}>
+                  <select value={fPages} onChange={e => setFPages(e.target.value)} className="input w-full text-sm py-2">
+                    <option value="">Any</option>
+                    <option value="2">2+ pages</option>
+                    <option value="5">5+ pages</option>
+                    <option value="10">10+ pages</option>
+                    <option value="20">20+ pages</option>
+                  </select>
+                </FilterCard>
+
+                <FilterCard label="Engagement Score — minimum" icon={Zap} active={!!fEngage}>
+                  <select value={fEngage} onChange={e => setFEngage(e.target.value)} className="input w-full text-sm py-2">
+                    <option value="">Any</option>
+                    <option value="30">30+ (Mild)</option>
+                    <option value="50">50+ (Good)</option>
+                    <option value="70">70+ (High)</option>
+                    <option value="85">85+ (Very high)</option>
+                  </select>
+                </FilterCard>
+
               </div>
 
-              <button onClick={addRule}
-                className="w-full py-2 rounded-xl text-xs font-medium transition-all flex items-center justify-center gap-1.5"
-                style={{ background: "rgba(255,255,255,0.02)", border: "1px dashed rgba(255,255,255,0.1)", color: "#64748b" }}
-                onMouseEnter={e => { e.currentTarget.style.borderColor = "rgba(59,130,246,0.3)"; e.currentTarget.style.color = "#60a5fa"; }}
-                onMouseLeave={e => { e.currentTarget.style.borderColor = "rgba(255,255,255,0.1)"; e.currentTarget.style.color = "#64748b"; }}>
-                <Plus size={12} /> Add Filter Rule
-              </button>
-
-              {/* Mini preview of matched contacts */}
+              {/* Contact preview */}
               {matched.length > 0 && (
                 <div className="rounded-xl overflow-hidden"
                   style={{ border: "1px solid rgba(255,255,255,0.06)" }}>
                   <div className="px-3 py-2 text-[10px] font-semibold uppercase tracking-wider flex items-center gap-1.5"
                     style={{ background: "rgba(255,255,255,0.03)", color: "#64748b" }}>
-                    <Eye size={10} /> Preview — top {Math.min(matched.length, 8)} contacts
+                    <Eye size={10} /> Preview — {Math.min(matched.length, 6)} of {matched.length} contacts
                   </div>
-                  {matched.slice(0, 8).map((c, i) => {
+                  {matched.slice(0, 6).map((c, i) => {
                     const ss = STATUS_COLOR[c.status] || STATUS_COLOR.active;
                     return (
-                      <div key={i} className="flex items-center gap-3 px-3 py-2 text-xs transition-colors"
+                      <div key={i} className="flex items-center gap-3 px-3 py-2.5 text-xs transition-colors"
                         style={{ borderTop: "1px solid rgba(255,255,255,0.04)" }}
                         onMouseEnter={e => e.currentTarget.style.background = "rgba(255,255,255,0.02)"}
                         onMouseLeave={e => e.currentTarget.style.background = ""}>
@@ -1052,14 +1011,14 @@ function CustomCampaignModal({ onClose, onCreated }) {
                           style={{ background: ss.bg, border: `1px solid ${ss.border}`, color: ss.color }}>
                           {(c.status || 'active').replace(/_/g, ' ')}
                         </span>
-                        <span className="text-[10px] font-mono" style={{ color: "#64748b" }}>{c.city || '—'}</span>
+                        <span className="text-[10px]" style={{ color: "#64748b" }}>{c.city || '—'}</span>
                         <span className="text-[10px]" style={{ color: "#475569" }}>{c.device || '—'}</span>
                       </div>
                     );
                   })}
-                  {matched.length > 8 && (
+                  {matched.length > 6 && (
                     <div className="px-3 py-2 text-[10px] text-center" style={{ color: "#475569" }}>
-                      +{matched.length - 8} more contacts will receive this campaign
+                      +{matched.length - 6} more contacts will receive this campaign
                     </div>
                   )}
                 </div>
@@ -1085,9 +1044,9 @@ function CustomCampaignModal({ onClose, onCreated }) {
                 </div>
                 <div className="mt-4 grid grid-cols-3 gap-3">
                   {[
-                    { label: 'Template',  value: activeTpl?.name || '—',                       color: "#4ade80"  },
-                    { label: 'Delay',     value: Number(delayHrs) === 0 ? 'Instant' : `${delayHrs}h`, color: "#fb923c"  },
-                    { label: 'Logic',     value: `${rules.length} rules · ${logic}`,             color: "#c084fc"  },
+                    { label: 'Template',  value: activeTpl?.name || '—',                              color: "#4ade80" },
+                    { label: 'Delay',     value: Number(delayHrs) === 0 ? 'Instant' : `${delayHrs}h`, color: "#fb923c" },
+                    { label: 'Filters',   value: `${activeFilterCount} filter${activeFilterCount !== 1 ? 's' : ''} set`, color: "#c084fc" },
                   ].map(s => (
                     <div key={s.label} className="p-3 rounded-xl text-center"
                       style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)" }}>
@@ -1099,31 +1058,30 @@ function CustomCampaignModal({ onClose, onCreated }) {
               </div>
 
               {/* Active filter summary */}
-              <div className="space-y-1.5">
-                <p className="text-[10px] uppercase tracking-widest font-bold" style={{ color: "#64748b" }}>
-                  Active Filters ({rules.length})
-                </p>
-                {rules.map((r, i) => {
-                  const ff = FILTER_FIELDS.find(f => f.id === r.field);
-                  const opLabel = r.op === 'eq' ? 'is' : r.op === 'contains' ? 'contains' : r.op === 'gte' ? '≥' : '≤';
-                  const valLabel = ff?.options ? (ff.options.find(o => o.value === r.value)?.label || r.value) : r.value;
-                  return (
-                    <div key={r.id} className="flex items-center gap-2 text-xs px-3 py-2 rounded-lg"
-                      style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.05)" }}>
-                      {i > 0 && (
-                        <span className="text-[9px] font-bold px-1.5 py-0.5 rounded"
-                          style={{ background: logic === 'AND' ? "rgba(59,130,246,0.15)" : "rgba(168,85,247,0.15)",
-                                   color: logic === 'AND' ? "#60a5fa" : "#c084fc" }}>
-                          {logic}
-                        </span>
-                      )}
-                      <span style={{ color: "#94a3b8" }}>{ff?.label}</span>
-                      <span style={{ color: "#475569" }}>{opLabel}</span>
-                      <span className="font-semibold text-white">{valLabel || '—'}</span>
-                    </div>
-                  );
-                })}
-              </div>
+              {activeFilterCount > 0 && (
+                <div className="space-y-1.5">
+                  <p className="text-[10px] uppercase tracking-widest font-bold" style={{ color: "#64748b" }}>
+                    Selected Filters
+                  </p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {[
+                      fStatus  && { label: 'Status',      value: fStatus.replace(/_/g, ' ')  },
+                      fCity    && { label: 'City',         value: fCity                       },
+                      fDevice  && { label: 'Device',       value: fDevice                     },
+                      fLang    && { label: 'Language',     value: LANGUAGES.find(l=>l.code===fLang)?.label || fLang },
+                      fScore   && { label: 'Power Score',  value: `${fScore}+`                },
+                      fCarts   && { label: 'Cart Events',  value: `${fCarts}+`                },
+                      fPages   && { label: 'Page Views',   value: `${fPages}+`                },
+                      fEngage  && { label: 'Engagement',   value: `${fEngage}+`               },
+                    ].filter(Boolean).map((f, i) => (
+                      <span key={i} className="flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-full font-medium"
+                        style={{ background: "rgba(59,130,246,0.1)", border: "1px solid rgba(59,130,246,0.2)", color: "#60a5fa" }}>
+                        {f.label}: <span className="text-white">{f.value}</span>
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               {/* Full contact list */}
               <div>
