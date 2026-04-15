@@ -35,7 +35,7 @@
   }
 
   // ── Post helper ──────────────────────────────────────────────────────────────
-  function track(type, data) {
+  function track(type, data, onResponse) {
     data = data || {};
     data.sessionId = sessionId;
     data.type = type;
@@ -45,6 +45,10 @@
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
       keepalive: true
+    }).then(function(r) {
+      return r.json();
+    }).then(function(resp) {
+      if (onResponse) onResponse(resp);
     }).catch(function() {});
   }
 
@@ -330,6 +334,19 @@
       page_type:        pageType,
       // Send auto-captured listing products for catalog sync
       shopify_carousel: listingProducts.length > 0 ? JSON.stringify(listingProducts) : undefined,
+    }, function(resp) {
+      // ── Browser console: show IP detection + geo result ─────────────────────
+      var d = (resp && resp.debug) || {};
+      console.groupCollapsed('%c[WhatsWay] Visitor tracked', 'color:#25D366;font-weight:bold');
+      console.log('%cSession ID  %c' + (d.session  || sessionId), 'color:#64748b', 'color:#e2e8f0');
+      console.log('%cIP Address  %c' + (d.ip       || '— not detected'), 'color:#64748b', d.ip ? 'color:#4ade80' : 'color:#f87171');
+      console.log('%cCity        %c' + (d.city     || '—'), 'color:#64748b', 'color:#e2e8f0');
+      console.log('%cState       %c' + (d.state    || '—'), 'color:#64748b', 'color:#e2e8f0');
+      console.log('%cCountry     %c' + (d.country  || '—'), 'color:#64748b', 'color:#e2e8f0');
+      console.log('%cTimezone    %c' + (d.timezone || '—'), 'color:#64748b', 'color:#e2e8f0');
+      console.log('%cLanguage    %c' + (d.language || '—'), 'color:#64748b', 'color:#e2e8f0');
+      console.log('%cfreeipapi response:', 'color:#64748b', d);
+      console.groupEnd();
     });
 
     // Auto-track product view if on a product page and product data found

@@ -111,7 +111,7 @@ export const trackingController = {
               || req.ip
               || req.socket?.remoteAddress
               || '';
-              console.log('bbbbbb'.ip)
+              console.log('bbbbbb',ip)
       const geo = await this._getGeoData(ip);
 
       // Geo-based language is the source of truth (city/state → native language)
@@ -164,7 +164,19 @@ export const trackingController = {
       }
 
       db.save();
-      res.json({ success: true });
+      // Return IP + geo so the tracker can console.log it in the browser
+      res.json({
+        success: true,
+        debug: {
+          ip:       ip   || null,
+          city:     geo.city    || null,
+          state:    geo.state   || null,
+          country:  geo.country || null,
+          timezone: geo.timezone|| null,
+          language: resolvedLanguage,
+          session:  sessionId,
+        }
+      });
     } catch (e) { next(e); }
   },
 
