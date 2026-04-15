@@ -775,15 +775,15 @@ export const trackingController = {
     const cleanIp = ip.replace(/^::ffff:/, '');
 
     // Skip local/private addresses — API won't resolve them
-    if (
-      cleanIp === '127.0.0.1' ||
-      cleanIp === '::1' ||
-      cleanIp.startsWith('192.168.') ||
-      cleanIp.startsWith('10.') ||
-      cleanIp.startsWith('172.')
-    ) {
-      return { city: 'Local', state: 'Local', country: 'Local', countryCode: 'XX', timezone: 'UTC' };
-    }
+    // if (
+    //   cleanIp === '127.0.0.1' ||
+    //   cleanIp === '::1' ||
+    //   cleanIp.startsWith('192.168.') ||
+    //   cleanIp.startsWith('10.') ||
+    //   cleanIp.startsWith('172.')
+    // ) {
+    //   return { city: 'Local', state: 'Local', country: 'Local', countryCode: 'XX', timezone: 'UTC' };
+    // }
 
     try {
       const response = await fetch(`https://api.freeipapi.app/api/v1/lookup?ip=${encodeURIComponent(cleanIp)}`, {
