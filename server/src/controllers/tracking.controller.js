@@ -806,7 +806,7 @@ export const trackingController = {
         }
       });
 
-      if (!response.ok) return fallback;
+      // if (!response.ok) return fallback;
 
       const data = await response.json();
  console.log('bb',data)
