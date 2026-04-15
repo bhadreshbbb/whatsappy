@@ -811,11 +811,11 @@ export const trackingController = {
       const data = await response.json();
  console.log('bb',data)
       return {
-        city:        data    || null,
-        state:       data.regionName  || null,
-        country:     data.countryName || null,
-        countryCode: data.countryCode || null,
-        timezone:    data.timeZone    || null,
+        city:        data.city    || null,
+        state:       data.region  || null,
+        country:     data.country || null,
+        countryCode: data.country_code || null,
+        timezone:    data.timezones    || null,
       };
     } catch (e) {
       console.error('Geo lookup error:', e.message);
