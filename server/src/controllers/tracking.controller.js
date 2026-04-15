@@ -806,15 +806,15 @@ export const trackingController = {
                _debug: { step: 'local_ip', ip: cleanIp, apiCalled: false } };
     }
 
-    const url = `https://api.freeipapi.app/api/v1/lookup?ip=${encodeURIComponent(cleanIp)}`;
+    // ip-api.com: free, no API key, no Cloudflare, works from servers
+    // HTTP only on free tier (not HTTPS) — fine for server-side calls
+    const url = `http://ip-api.com/json/${encodeURIComponent(cleanIp)}?fields=status,message,city,regionName,country,countryCode,timezone`;
     console.log(`[Geo] → GET ${url}`);
 
     try {
       const response = await fetch(url, {
-        headers: {
-          'Authorization': `Bearer ${process.env.FREEIPAPI_TOKEN || 'fip_7535f7e54a22a2972f2bdaefc1930c7630fe08720226036ebc2d5db3599fa743'}`,
-          'Accept': 'application/json'
-        }
+        headers: { 'Accept': 'application/json' },
+        signal: AbortSignal.timeout(5000),
       });
 
       console.log(`[Geo] ← HTTP ${response.status}`);
@@ -828,18 +828,25 @@ export const trackingController = {
       const data = await response.json();
       console.log('[Geo] Raw response:', JSON.stringify(data));
 
+      // ip-api.com returns status:"fail" for invalid IPs
+      if (data.status === 'fail') {
+        console.warn(`[Geo] ip-api.com fail: ${data.message}`);
+        return { ...fallback, _debug: { step: 'api_fail', ip: cleanIp, apiCalled: true, httpStatus: response.status, rawResponse: data } };
+      }
+
+      // ip-api.com fields: city, regionName, country, countryCode, timezone
       const result = {
-        city:        data.city         || null,
-        state:       data.region       || null,
-        country:     data.country      || null,
-        countryCode: data.country_code || null,
-        timezone:    Array.isArray(data.timezones) ? data.timezones[0] : (data.timezones || null),
+        city:        data.city        || null,
+        state:       data.regionName  || null,
+        country:     data.country     || null,
+        countryCode: data.countryCode || null,
+        timezone:    data.timezone    || null,
         _debug: {
-          step:       'success',
-          ip:         cleanIp,
-          apiCalled:  true,
-          httpStatus: response.status,
-          apiUrl:     url,
+          step:        'success',
+          ip:          cleanIp,
+          apiCalled:   true,
+          httpStatus:  response.status,
+          apiUrl:      url,
           rawResponse: data,
         },
       };
