@@ -335,17 +335,28 @@
       // Send auto-captured listing products for catalog sync
       shopify_carousel: listingProducts.length > 0 ? JSON.stringify(listingProducts) : undefined,
     }, function(resp) {
-      // ── Browser console: show IP detection + geo result ─────────────────────
+      // ── Browser console: full geo flow log ──────────────────────────────────
       var d = (resp && resp.debug) || {};
-      console.groupCollapsed('%c[WhatsWay] Visitor tracked', 'color:#25D366;font-weight:bold');
-      console.log('%cSession ID  %c' + (d.session  || sessionId), 'color:#64748b', 'color:#e2e8f0');
-      console.log('%cIP Address  %c' + (d.ip       || '— not detected'), 'color:#64748b', d.ip ? 'color:#4ade80' : 'color:#f87171');
-      console.log('%cCity        %c' + (d.city     || '—'), 'color:#64748b', 'color:#e2e8f0');
-      console.log('%cState       %c' + (d.state    || '—'), 'color:#64748b', 'color:#e2e8f0');
-      console.log('%cCountry     %c' + (d.country  || '—'), 'color:#64748b', 'color:#e2e8f0');
-      console.log('%cTimezone    %c' + (d.timezone || '—'), 'color:#64748b', 'color:#e2e8f0');
-      console.log('%cLanguage    %c' + (d.language || '—'), 'color:#64748b', 'color:#e2e8f0');
-      console.log('%cfreeipapi response:', 'color:#64748b', d);
+      var ok = d.city && d.city !== 'Unknown';
+      console.groupCollapsed(
+        '%c[WhatsWay] Visitor tracked  ' + (ok ? '✓ Geo OK' : '⚠ Geo Unknown'),
+        'color:' + (ok ? '#4ade80' : '#fb923c') + ';font-weight:bold'
+      );
+      console.log('%cSession ID    %c' + (d.session   || sessionId),          'color:#64748b', 'color:#e2e8f0');
+      console.log('%cIP Address    %c' + (d.ip        || '— not detected'),   'color:#64748b', d.ip  ? 'color:#4ade80' : 'color:#f87171');
+      console.log('%cCity          %c' + (d.city      || '—'),                'color:#64748b', ok    ? 'color:#4ade80' : 'color:#f87171');
+      console.log('%cState         %c' + (d.state     || '—'),                'color:#64748b', 'color:#e2e8f0');
+      console.log('%cCountry       %c' + (d.country   || '—'),                'color:#64748b', 'color:#e2e8f0');
+      console.log('%cTimezone      %c' + (d.timezone  || '—'),                'color:#64748b', 'color:#e2e8f0');
+      console.log('%cLanguage      %c' + (d.language  || '—'),                'color:#64748b', 'color:#e2e8f0');
+      console.log('%cGeo API step  %c' + (d.geoApiStep || '—'),               'color:#64748b', 'color:#94a3b8');
+      console.log('%cHTTP status   %c' + (d.geoHttpStatus || '—'),            'color:#64748b', d.geoHttpStatus === 200 ? 'color:#4ade80' : 'color:#f87171');
+      if (d.geoError) {
+        console.error('%cGeo API error %c' + d.geoError,                      'color:#64748b', 'color:#f87171');
+      }
+      if (d.geoRawResponse) {
+        console.log('%cfreeipapi raw response:', 'color:#64748b', d.geoRawResponse);
+      }
       console.groupEnd();
     });
 
