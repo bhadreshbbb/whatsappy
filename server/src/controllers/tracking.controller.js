@@ -106,7 +106,15 @@ export const trackingController = {
   async trackVisitor(req, res, next) {
     try {
       const db = getDb();
-      const { channelId, sessionId, url, deviceType, language, pageViews, pageTitle, screen_res, timezone: tz, shopify_carousel } = req.body;
+      const { channelId, sessionId, url, language, pageViews, pageTitle, screen_res, timezone: tz, shopify_carousel } = req.body;
+      // Device type: use client-sent value, fall back to server-side UA detection
+      const _clientDevice = req.body.deviceType;
+      const _ua = (req.headers['user-agent'] || '').toLowerCase();
+      const _serverDevice = /tablet|ipad|playbook|silk/i.test(_ua) ? 'tablet'
+                          : /mobile|iphone|android|iemobile|blackberry|opera mini|opera mobi|windows phone/i.test(_ua) ? 'mobile'
+                          : 'desktop';
+      const deviceType = _clientDevice || _serverDevice;
+      console.log(`[Device] client="${_clientDevice || '—'}" ua-detected="${_serverDevice}" → using="${deviceType}"`);
       // ── IP extraction: check all proxy headers in priority order ────────────
       // Cloudflare (most reliable on Render) → standard proxy → socket
       const _cfIp    = req.headers['cf-connecting-ip']?.trim();
@@ -911,8 +919,9 @@ export const trackingController = {
     }
 
     // ip-api.com: free, no API key, no Cloudflare, works from servers
-    // HTTP only on free tier (not HTTPS) — fine for server-side calls
-    const url = `http://ip-api.com/json/${encodeURIComponent(cleanIp)}?fields=status,message,city,regionName,country,countryCode,timezone`;
+    // IPv6 MUST be passed raw in the path — encodeURIComponent breaks colons
+    // e.g. 2601:647::1 → must stay as-is, NOT 2601%3A647%3A%3A1
+    const url = `http://ip-api.com/json/${cleanIp}?fields=status,message,city,regionName,country,countryCode,timezone`;
     console.log(`[Geo] → GET ${url}`);
 
     try {
