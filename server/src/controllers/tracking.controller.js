@@ -801,7 +801,7 @@ export const trackingController = {
     try {
       const response = await fetch(`https://api.freeipapi.app/api/v1/lookup?ip=${encodeURIComponent(cleanIp)}`, {
         headers: {
-          'Authorization': `Bearer ${process.env.FREEIPAPI_TOKEN}`,
+          'Authorization': `Bearer fip_7535f7e54a22a2972f2bdaefc1930c7630fe08720226036ebc2d5db3599fa743`,
           'Accept': 'application/json'
         }
       });
