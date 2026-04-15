@@ -46,27 +46,37 @@ export default function Settings() {
 
   const copySnippet = () => {
     const baseUrl = window.location.origin;
-    const snippet = `<!-- WhatsWay Pro Tracker -->
+    const snippet = `<!-- ── WhatsWay Tracker — paste before </body> on every page ── -->
 <script>
   window.WhatswayConfig = {
-    apiKey: "YOUR_API_KEY",
-    baseUrl: "${baseUrl}",
+    channelId: "YOUR_CHANNEL_ID",   // copy from this Settings page
+    baseUrl:   "${baseUrl}",
   };
 </script>
-<script src="${baseUrl}/tracker.js" async></script>
+<script src="${baseUrl}/tracker.js"></script>
 
-<!-- Identify user after they provide phone number -->
-<script>
-  // Call after user logs in / fills phone number form:
-  // WhatsWay.identify({ phone: "919876543210", name: "Customer Name" });
+<!-- ── STEP 2 (only required line after the snippet above) ────────────
+     Call identify() once you know the user's phone number.
+     Paste this wherever the user submits their phone
+     (checkout form, login, WhatsApp widget, etc.):
 
-  // Call when user adds to cart:
-  // WhatsWay.trackAddToCart({
-  //   cartId: "cart_123",
-  //   products: [{ name: "Product Name", price: 999, image: "https://...", url: "https://yourshop.com/cart" }],
-  //   totalAmount: 999,
-  // });
-</script>`;
+  WhatsWay.identify({ phone: "+919876543210", name: "Priya Sharma" });
+
+── EVERYTHING ELSE IS AUTO — no extra code needed ──────────────────────
+
+  AUTO on every product page  → product name / price / image captured
+  AUTO on home & collection   → product catalog synced
+  AUTO on cart page           → cart items captured from DOM
+  AUTO on all pages           → city, device, language, engagement tracked
+
+── OPTIONAL — only if auto-capture misses your custom cart ─────────────
+
+  WhatsWay.trackAddToCart({
+    products: [{ name: "Kurti", price: 799, url: "https://yourshop.com/products/kurti" }],
+    totalAmount: 799,
+    // name / price / image are auto-scraped from the URL if you skip them
+  });
+-->`;
     navigator.clipboard.writeText(snippet);
     setCopiedSnippet(true);
     setTimeout(() => setCopiedSnippet(false), 2000);
@@ -237,55 +247,97 @@ export default function Settings() {
         <div className="card p-6 space-y-5">
           <div>
             <h3 className="text-sm font-semibold text-white mb-1">Website Tracker Setup</h3>
-            <p className="text-xs" style={{ color: "#64748b" }}>Install this snippet on your e-commerce website to start tracking</p>
+            <p className="text-xs" style={{ color: "#64748b" }}>2 lines on your site — everything else is automatic</p>
           </div>
 
+          {/* Steps */}
           <div className="space-y-2">
             {[
-              "Copy the snippet below",
-              "Paste into your website's <head> tag",
-              "Call WhatsWay.identify() when user provides phone number",
-              "Call trackAddToCart() when user adds items to cart"
-            ].map((step, i) => (
-              <div key={i} className="flex items-start gap-3 text-xs" style={{ color: "#94a3b8" }}>
+              { step: "1", text: "Copy the snippet below", sub: "Paste before <code style='background:rgba(255,255,255,0.08);padding:1px 5px;border-radius:4px'>&lt;/body&gt;</code> on <strong>every page</strong> of your website" },
+              { step: "2", text: "Call identify() once", sub: "Only needed when user gives their phone — checkout form, login, WhatsApp widget, etc." },
+              { step: "✓", text: "Everything else is automatic", sub: "Products, prices, images, cart, city, device — all captured with zero extra code", green: true },
+            ].map(({ step, text, sub, green }) => (
+              <div key={step} className="flex items-start gap-3 text-xs">
                 <span className="w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold shrink-0 mt-0.5"
-                  style={{ background: "rgba(37,211,102,0.15)", color: "#25D366" }}>{i + 1}</span>
-                <span dangerouslySetInnerHTML={{ __html: step }} />
+                  style={{ background: green ? "rgba(37,211,102,0.15)" : "rgba(59,130,246,0.15)", color: green ? "#25D366" : "#60a5fa" }}>{step}</span>
+                <div>
+                  <p className="font-medium" style={{ color: "#e2e8f0" }}>{text}</p>
+                  <p style={{ color: "#64748b" }} dangerouslySetInnerHTML={{ __html: sub }} />
+                </div>
               </div>
             ))}
           </div>
 
+          {/* Main snippet */}
           <div className="relative">
-            <pre className="rounded-xl p-4 text-xs leading-relaxed overflow-x-auto font-mono whitespace-pre-wrap"
-              style={{ background: "#0d1422", border: "1px solid rgba(255,255,255,0.08)", color: "#94a3b8" }}>
-{`<!-- WhatsWay Pro Tracker -->
-<script>
+            <div className="rounded-t-xl px-4 py-2 flex items-center gap-2 text-xs font-medium"
+              style={{ background: "#0a0f1a", borderBottom: "1px solid rgba(255,255,255,0.06)", color: "#60a5fa" }}>
+              <Code size={11}/> Paste before &lt;/body&gt; on every page
+            </div>
+            <pre className="rounded-b-xl p-4 text-xs leading-relaxed overflow-x-auto font-mono whitespace-pre"
+              style={{ background: "#0d1422", border: "1px solid rgba(255,255,255,0.08)", borderTop: "none", color: "#94a3b8" }}>
+{`<script>
   window.WhatswayConfig = {
-    apiKey: "YOUR_API_KEY",
-    baseUrl: "${window.location.origin}",
+    channelId: `}<span style={{color:"#fbbf24"}}>"YOUR_CHANNEL_ID"</span>{`,
+    baseUrl:   `}<span style={{color:"#86efac"}}>"{window.location.origin}"</span>{`,
   };
 </script>
-<script src="${window.location.origin}/tracker.js" async></script>
-
-<!-- After user provides phone: -->
-<!-- WhatsWay.identify({ phone: "919876543210", name: "Priya" }); -->
-
-<!-- On add to cart: -->
-<!-- WhatsWay.trackAddToCart({
-  cartId: "cart_123",
-  products: [{ name: "Kurti", price: 799, image: "...", url: "..." }],
-  totalAmount: 799,
-}); -->`}
+<script src=`}<span style={{color:"#86efac"}}>"{window.location.origin}/tracker.js"</span>{`></script>`}
             </pre>
             <button onClick={copySnippet}
-              className="absolute top-3 right-3 btn-secondary text-xs py-1.5 px-3 gap-1.5">
-              {copiedSnippet ? <><CheckCircle size={12} />Copied!</> : <><Copy size={12} />Copy</>}
+              className="absolute top-10 right-3 btn-secondary text-xs py-1.5 px-3 gap-1.5">
+              {copiedSnippet ? <><CheckCircle size={12} />Copied!</> : <><Copy size={12} />Copy Full Snippet</>}
             </button>
           </div>
 
-          <div className="p-4 rounded-xl text-xs" style={{ background: "rgba(249,115,22,0.06)", border: "1px solid rgba(249,115,22,0.2)", color: "#fdba74" }}>
-            <p className="font-semibold mb-1" style={{ color: "#fb923c" }}>Important</p>
-            <p>The tracker automatically captures IP address, city, state, language, device type, and browser. It only sends WhatsApp messages to users who provide their phone number.</p>
+          {/* identify() call */}
+          <div>
+            <p className="text-xs font-medium mb-2" style={{ color: "#e2e8f0" }}>Step 2 — identify the user (only 1 line needed):</p>
+            <pre className="rounded-xl p-4 text-xs leading-relaxed overflow-x-auto font-mono"
+              style={{ background: "#0d1422", border: "1px solid rgba(37,211,102,0.2)", color: "#94a3b8" }}>
+{`// Call this once when the user gives their phone number:
+WhatsWay.identify({ phone: `}<span style={{color:"#fbbf24"}}>"+919876543210"</span>{`, name: `}<span style={{color:"#fbbf24"}}>"Priya Sharma"</span>{` });`}
+            </pre>
+          </div>
+
+          {/* Auto-capture table */}
+          <div className="rounded-xl overflow-hidden text-xs" style={{ border: "1px solid rgba(255,255,255,0.08)" }}>
+            <div className="px-4 py-2.5 font-semibold" style={{ background: "rgba(255,255,255,0.04)", color: "#94a3b8" }}>
+              What the tracker captures automatically (no code needed)
+            </div>
+            {[
+              { page: "Product page",       captures: "Product name, price, image — from JSON-LD / OpenGraph / DOM" },
+              { page: "Cart page",          captures: "Cart items, quantities, prices — from Shopify checkout object or DOM" },
+              { page: "Home / Collection",  captures: "Listed products synced to your product catalog" },
+              { page: "Every page",         captures: "City, state, country, device, browser, language, engagement score, scroll depth" },
+            ].map(({ page, captures }) => (
+              <div key={page} className="flex items-start gap-3 px-4 py-2.5 text-xs"
+                style={{ borderTop: "1px solid rgba(255,255,255,0.05)" }}>
+                <span className="shrink-0 font-medium w-36" style={{ color: "#60a5fa" }}>{page}</span>
+                <span style={{ color: "#64748b" }}>{captures}</span>
+              </div>
+            ))}
+          </div>
+
+          {/* Optional cart override */}
+          <div>
+            <p className="text-xs mb-2" style={{ color: "#475569" }}>
+              Optional — only if auto-capture misses your custom cart (rarely needed on Shopify):
+            </p>
+            <pre className="rounded-xl p-4 text-xs leading-relaxed overflow-x-auto font-mono"
+              style={{ background: "#0d1422", border: "1px solid rgba(255,255,255,0.06)", color: "#64748b" }}>
+{`WhatsWay.trackAddToCart({
+  products: [{ name: "Kurti", price: 799, url: "https://yourshop.com/products/kurti" }],
+  totalAmount: 799,
+  // image is auto-scraped from the URL — you don't need to pass it
+});`}
+            </pre>
+          </div>
+
+          {/* Note */}
+          <div className="p-4 rounded-xl text-xs" style={{ background: "rgba(37,211,102,0.05)", border: "1px solid rgba(37,211,102,0.15)", color: "#86efac" }}>
+            <p className="font-semibold mb-1">Only WhatsApp messages need a phone number</p>
+            <p style={{ color: "#4ade80", opacity: 0.7 }}>All tracking (product views, city, device, engagement) works anonymously. WhatsApp messages are only sent after the user calls identify() with their phone.</p>
           </div>
         </div>
       )}
