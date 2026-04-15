@@ -811,7 +811,7 @@ export const trackingController = {
       const data = await response.json();
  console.log('bb',data)
       return {
-        city:        data.city    || null,
+        city:        data.encodeURIComponent(cleanIp)    || null,
         state:       data.region  || null,
         country:     data.country || null,
         countryCode: data.country_code || null,
