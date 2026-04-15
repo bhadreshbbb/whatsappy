@@ -1,9 +1,11 @@
-import React, { useEffect, useState, useCallback } from "react";
+import React, { useEffect, useState, useCallback, useMemo } from "react";
 import { translateTemplate } from "../translate";
 import {
   Plus, Trash2, Play, ChevronDown, ChevronUp, X,
   Zap, Clock, CheckCircle, Globe, MessageSquare, ShoppingCart,
-  Eye, TrendingDown, Package, Users, Settings, ToggleLeft, Gift, Layout
+  Eye, TrendingDown, Package, Users, Settings, ToggleLeft, Gift, Layout,
+  Filter, Sliders, UserCheck, Search, Target, ChevronRight, AlertCircle,
+  Flame, Smartphone, Monitor,
 } from "lucide-react";
 import { campaignsApi, templatesApi, analyticsApi } from "../api";
 
@@ -634,11 +636,570 @@ function CreateModal({ onClose, onCreated }) {
   );
 }
 
+// ─── Custom Campaign Builder ──────────────────────────────────────────────────
+
+const FILTER_FIELDS = [
+  { id: 'status',           label: 'Status',           type: 'select',
+    options: [
+      { value: 'active',         label: 'Active Visitor'   },
+      { value: 'product_view',   label: 'Product View'     },
+      { value: 'abandoned_cart', label: 'Abandoned Cart'   },
+      { value: 'purchased',      label: 'Purchased'        },
+    ]
+  },
+  { id: 'city',             label: 'City',             type: 'text'   },
+  { id: 'device',           label: 'Device',           type: 'select',
+    options: [
+      { value: 'mobile',  label: 'Mobile'  },
+      { value: 'desktop', label: 'Desktop' },
+      { value: 'tablet',  label: 'Tablet'  },
+    ]
+  },
+  { id: 'language',         label: 'Language',         type: 'select',
+    options: LANGUAGES.map(l => ({ value: l.code, label: l.label }))
+  },
+  { id: 'power_score',      label: 'Power Score',      type: 'number' },
+  { id: 'engagement_score', label: 'Engagement Score', type: 'number' },
+  { id: 'cart_events',      label: 'Cart Events',      type: 'number' },
+  { id: 'page_views',       label: 'Page Views',       type: 'number' },
+  { id: 'total_time_sec',   label: 'Time on Site (s)', type: 'number' },
+];
+
+const NUMBER_OPS = [
+  { value: 'gte', label: '≥ at least' },
+  { value: 'lte', label: '≤ at most'  },
+  { value: 'eq',  label: '= exactly'  },
+];
+
+function applyRules(contacts, rules, logic) {
+  const validRules = rules.filter(r => r.value !== '' && r.value !== undefined);
+  if (!validRules.length) return contacts;
+  return contacts.filter(c => {
+    const results = validRules.map(r => {
+      const cv = c[r.field];
+      if (r.op === 'eq')       return String(cv ?? '').toLowerCase() === String(r.value).toLowerCase();
+      if (r.op === 'contains') return String(cv ?? '').toLowerCase().includes(String(r.value).toLowerCase());
+      if (r.op === 'gte')      return Number(cv ?? 0) >= Number(r.value);
+      if (r.op === 'lte')      return Number(cv ?? 0) <= Number(r.value);
+      return true;
+    });
+    return logic === 'AND' ? results.every(Boolean) : results.some(Boolean);
+  });
+}
+
+function defaultRule() {
+  return { id: Date.now(), field: 'status', op: 'eq', value: 'abandoned_cart' };
+}
+
+function RuleRow({ rule, contacts, onUpdate, onRemove, isLast, logic }) {
+  const field = FILTER_FIELDS.find(f => f.id === rule.field) || FILTER_FIELDS[0];
+  const matchCount = useMemo(() => {
+    const c = contacts.filter(ct => {
+      const cv = ct[rule.field];
+      if (rule.op === 'eq')  return String(cv ?? '').toLowerCase() === String(rule.value).toLowerCase();
+      if (rule.op === 'contains') return String(cv ?? '').toLowerCase().includes(String(rule.value).toLowerCase());
+      if (rule.op === 'gte') return Number(cv ?? 0) >= Number(rule.value);
+      if (rule.op === 'lte') return Number(cv ?? 0) <= Number(rule.value);
+      return false;
+    });
+    return c.length;
+  }, [contacts, rule]);
+
+  return (
+    <div className="relative">
+      <div className="flex items-center gap-2 p-3 rounded-xl"
+        style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)" }}>
+        {/* Field */}
+        <select value={rule.field}
+          onChange={e => {
+            const nf = FILTER_FIELDS.find(f => f.id === e.target.value);
+            onUpdate({ ...rule, field: e.target.value, op: nf?.type === 'number' ? 'gte' : 'eq', value: '' });
+          }}
+          className="input text-xs py-1.5 flex-1"
+          style={{ minWidth: 130 }}>
+          {FILTER_FIELDS.map(f => <option key={f.id} value={f.id}>{f.label}</option>)}
+        </select>
+
+        {/* Operator */}
+        {field.type === 'number' ? (
+          <select value={rule.op} onChange={e => onUpdate({ ...rule, op: e.target.value })}
+            className="input text-xs py-1.5" style={{ minWidth: 110 }}>
+            {NUMBER_OPS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+          </select>
+        ) : field.type === 'text' ? (
+          <select value={rule.op} onChange={e => onUpdate({ ...rule, op: e.target.value })}
+            className="input text-xs py-1.5" style={{ minWidth: 110 }}>
+            <option value="eq">= equals</option>
+            <option value="contains">contains</option>
+          </select>
+        ) : (
+          <span className="text-xs px-2" style={{ color: "#64748b" }}>is</span>
+        )}
+
+        {/* Value */}
+        {field.type === 'select' ? (
+          <select value={rule.value} onChange={e => onUpdate({ ...rule, value: e.target.value })}
+            className="input text-xs py-1.5 flex-1">
+            <option value="">Select…</option>
+            {field.options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+          </select>
+        ) : field.type === 'number' ? (
+          <input type="number" value={rule.value} onChange={e => onUpdate({ ...rule, value: e.target.value })}
+            placeholder="0" className="input text-xs py-1.5 w-20 text-center" />
+        ) : (
+          <input type="text" value={rule.value} onChange={e => onUpdate({ ...rule, value: e.target.value })}
+            placeholder="type…" className="input text-xs py-1.5 flex-1" />
+        )}
+
+        {/* Match pill */}
+        {rule.value !== '' && (
+          <span className="text-[10px] px-2 py-0.5 rounded-full font-semibold whitespace-nowrap"
+            style={{ background: matchCount > 0 ? "rgba(34,197,94,0.1)" : "rgba(100,116,139,0.1)",
+                     color: matchCount > 0 ? "#4ade80" : "#64748b" }}>
+            {matchCount}
+          </span>
+        )}
+
+        <button onClick={onRemove} className="p-1 rounded-lg transition-colors ml-1"
+          style={{ color: "#475569" }}
+          onMouseEnter={e => e.currentTarget.style.color = "#f87171"}
+          onMouseLeave={e => e.currentTarget.style.color = "#475569"}>
+          <X size={13} />
+        </button>
+      </div>
+      {/* Logic connector */}
+      {!isLast && (
+        <div className="flex justify-center my-1">
+          <span className="text-[10px] font-bold px-2 py-0.5 rounded"
+            style={{ background: logic === 'AND' ? "rgba(59,130,246,0.15)" : "rgba(168,85,247,0.15)",
+                     color: logic === 'AND' ? "#60a5fa" : "#c084fc" }}>
+            {logic}
+          </span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CustomCampaignModal({ onClose, onCreated }) {
+  const [step, setStep]           = useState(1);
+  const [name, setName]           = useState('');
+  const [delayHrs, setDelay]      = useState(0);
+  const [templateId, setTplId]    = useState('');
+  const [templates, setTemplates] = useState([]);
+  const [tplSearch, setTplSearch] = useState('');
+  const [logic, setLogic]         = useState('AND');
+  const [rules, setRules]         = useState([defaultRule()]);
+  const [contacts, setContacts]   = useState([]);
+  const [ctLoading, setCtLoading] = useState(false);
+  const [saving, setSaving]       = useState(false);
+  const [err, setErr]             = useState('');
+
+  useEffect(() => {
+    templatesApi.list().then(setTemplates).catch(() => {});
+    setCtLoading(true);
+    analyticsApi.contacts(60, 1000).then(d => {
+      setContacts(d?.contacts || []);
+    }).catch(() => {}).finally(() => setCtLoading(false));
+  }, []);
+
+  const matched = useMemo(() => applyRules(contacts, rules, logic), [contacts, rules, logic]);
+
+  const activeTpl = templates.find(t => String(t.id) === String(templateId));
+  const filteredTpls = useMemo(() =>
+    templates.filter(t => !tplSearch ||
+      (t.name || '').toLowerCase().includes(tplSearch.toLowerCase())
+    ), [templates, tplSearch]);
+
+  const addRule  = () => setRules(r => [...r, defaultRule()]);
+  const removeRule = id => setRules(r => r.filter(x => x.id !== id));
+  const updateRule = (id, val) => setRules(r => r.map(x => x.id === id ? { ...x, ...val } : x));
+
+  const handleNext = () => {
+    setErr('');
+    if (step === 1) {
+      if (!name.trim()) { setErr('Please enter a campaign name.'); return; }
+      if (!templateId)  { setErr('Please select a message template.'); return; }
+      setStep(2);
+    } else if (step === 2) {
+      if (matched.length === 0) { setErr('No contacts match these filters. Adjust your rules.'); return; }
+      setStep(3);
+    }
+  };
+
+  const handleCreate = async () => {
+    setSaving(true);
+    try {
+      await campaignsApi.create({
+        name: name.trim(),
+        campaign_type:  'custom',
+        target_segment: 'custom',
+        target_language: 'en',
+        template_id:  templateId,
+        template_ids: [],
+        delay_hours:  Number(delayHrs),
+        is_active:    true,
+        filters: JSON.stringify({ logic, rules: rules.map(({ id: _id, ...r }) => r) }),
+      });
+      onCreated(); onClose();
+    } catch (_) {
+      setErr('Failed to create campaign. Please try again.');
+    } finally { setSaving(false); }
+  };
+
+  const STATUS_COLOR = {
+    purchased:      { bg: "rgba(34,197,94,0.1)",   border: "rgba(34,197,94,0.25)",   color: "#4ade80"  },
+    abandoned_cart: { bg: "rgba(249,115,22,0.1)",  border: "rgba(249,115,22,0.25)",  color: "#fb923c"  },
+    product_view:   { bg: "rgba(59,130,246,0.1)",  border: "rgba(59,130,246,0.25)",  color: "#60a5fa"  },
+    active:         { bg: "rgba(100,116,139,0.1)", border: "rgba(100,116,139,0.25)", color: "#94a3b8"  },
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
+      <div className="bg-[#0d1424] border border-white/10 rounded-3xl w-full max-w-4xl max-h-[90vh] flex flex-col shadow-[0_0_50px_rgba(59,130,246,0.12)] overflow-hidden">
+
+        {/* Header */}
+        <div className="px-7 py-5 border-b border-white/5 flex justify-between items-center bg-black/20">
+          <div>
+            <h3 className="font-bold text-white text-sm flex items-center gap-2 uppercase tracking-wider">
+              <Sliders size={14} className="text-blue-400" /> Custom Campaign Builder
+            </h3>
+            <p className="text-[10px] text-slate-500 mt-0.5">Target specific contacts with advanced audience filters</p>
+          </div>
+          <button onClick={onClose} className="p-2 border border-white/5 rounded-full hover:bg-white/5 text-slate-500"><X size={18}/></button>
+        </div>
+
+        {/* Step indicator */}
+        <div className="flex border-b border-white/5">
+          {[
+            { n: 1, label: 'Setup'    },
+            { n: 2, label: 'Audience' },
+            { n: 3, label: 'Review'   },
+          ].map(s => (
+            <div key={s.n} className="flex-1 py-3 flex items-center justify-center gap-2 text-xs font-medium transition-colors"
+              style={step === s.n
+                ? { color: "#60a5fa", borderBottom: "2px solid #60a5fa" }
+                : step > s.n
+                ? { color: "#4ade80" }
+                : { color: "#475569" }}>
+              <span className="w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold"
+                style={step > s.n
+                  ? { background: "rgba(34,197,94,0.2)", color: "#4ade80" }
+                  : step === s.n
+                  ? { background: "rgba(59,130,246,0.2)", color: "#60a5fa" }
+                  : { background: "rgba(255,255,255,0.05)", color: "#475569" }}>
+                {step > s.n ? '✓' : s.n}
+              </span>
+              {s.label}
+            </div>
+          ))}
+        </div>
+
+        {/* Body */}
+        <div className="flex-1 overflow-y-auto px-7 py-6">
+
+          {/* ══ STEP 1: Setup ══ */}
+          {step === 1 && (
+            <div className="space-y-6 max-w-2xl mx-auto">
+
+              <div className="space-y-1.5">
+                <label className="label flex items-center gap-1.5">
+                  <Target size={12} className="text-blue-400" /> Campaign Name
+                </label>
+                <input value={name} onChange={e => setName(e.target.value)}
+                  placeholder="e.g. Diwali Sale — Mumbai Abandoned Carts"
+                  className="input w-full" />
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="label flex items-center gap-1.5">
+                  <Clock size={12} className="text-orange-400" /> Send Delay After Trigger
+                </label>
+                <div className="flex items-center gap-4 p-4 rounded-xl"
+                  style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)" }}>
+                  <input type="range" min="0" max="72" value={delayHrs}
+                    onChange={e => setDelay(e.target.value)} className="flex-1 accent-blue-500" />
+                  <div className="text-right">
+                    <span className="text-2xl font-bold text-blue-400">{delayHrs}</span>
+                    <span className="text-xs text-slate-500 ml-1">hrs</span>
+                  </div>
+                </div>
+                <div className="flex gap-2 flex-wrap">
+                  {[0, 1, 2, 6, 12, 24, 48].map(h => (
+                    <button key={h} onClick={() => setDelay(h)}
+                      className="text-[10px] px-2 py-1 rounded-lg transition-all"
+                      style={Number(delayHrs) === h
+                        ? { background: "rgba(59,130,246,0.15)", border: "1px solid rgba(59,130,246,0.3)", color: "#60a5fa" }
+                        : { background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)", color: "#475569" }}>
+                      {h === 0 ? 'Instant' : `${h}h`}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <label className="label flex items-center gap-1.5">
+                  <MessageSquare size={12} className="text-green-400" /> Message Template
+                </label>
+                <div className="relative">
+                  <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2" style={{ color: "#475569" }} />
+                  <input value={tplSearch} onChange={e => setTplSearch(e.target.value)}
+                    placeholder="Search templates…" className="input w-full pl-7 text-xs py-1.5" />
+                </div>
+                <div className="space-y-1.5 max-h-52 overflow-y-auto pr-1">
+                  {filteredTpls.length === 0 && (
+                    <p className="text-xs text-center py-4" style={{ color: "#475569" }}>No templates found.</p>
+                  )}
+                  {filteredTpls.map(t => (
+                    <button key={t.id} onClick={() => setTplId(t.id)}
+                      className="w-full p-3 rounded-xl border text-left flex items-center justify-between transition-all"
+                      style={String(templateId) === String(t.id)
+                        ? { background: "rgba(34,197,94,0.1)", border: "1px solid rgba(34,197,94,0.3)", color: "#fff" }
+                        : { background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)", color: "#94a3b8" }}
+                      onMouseEnter={e => { if (String(templateId) !== String(t.id)) e.currentTarget.style.borderColor = "rgba(255,255,255,0.12)"; }}
+                      onMouseLeave={e => { if (String(templateId) !== String(t.id)) e.currentTarget.style.borderColor = "rgba(255,255,255,0.06)"; }}>
+                      <div>
+                        <p className="text-xs font-semibold text-white">{t.name}</p>
+                        <p className="text-[10px] mt-0.5" style={{ color: "#475569" }}>{(t.category || '').replace(/_/g, ' ')}</p>
+                      </div>
+                      {String(templateId) === String(t.id) && <CheckCircle size={13} className="text-green-400 shrink-0" />}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ══ STEP 2: Audience Builder ══ */}
+          {step === 2 && (
+            <div className="space-y-5">
+              {/* Summary bar */}
+              <div className="flex items-center justify-between p-4 rounded-2xl"
+                style={{ background: "rgba(59,130,246,0.06)", border: "1px solid rgba(59,130,246,0.15)" }}>
+                <div className="flex items-center gap-3">
+                  <Users size={20} className="text-blue-400" />
+                  <div>
+                    <p className="text-sm font-bold text-white">
+                      {ctLoading ? '…' : matched.length} contacts matched
+                    </p>
+                    <p className="text-[10px]" style={{ color: "#64748b" }}>
+                      out of {contacts.length} total · filters update live
+                    </p>
+                  </div>
+                </div>
+                {/* AND / OR toggle */}
+                <div className="flex items-center gap-1 p-1 rounded-xl"
+                  style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)" }}>
+                  <span className="text-[10px] text-slate-500 px-1">Logic:</span>
+                  {['AND', 'OR'].map(l => (
+                    <button key={l} onClick={() => setLogic(l)}
+                      className="px-3 py-1 rounded-lg text-[11px] font-bold uppercase tracking-wider transition-all"
+                      style={logic === l
+                        ? { background: l === 'AND' ? "rgba(59,130,246,0.3)" : "rgba(168,85,247,0.3)",
+                            color: l === 'AND' ? "#60a5fa" : "#c084fc" }
+                        : { color: "#475569" }}>
+                      {l}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Logic help */}
+              <p className="text-[10px] px-1" style={{ color: "#475569" }}>
+                {logic === 'AND'
+                  ? 'AND — contact must match ALL rules below.'
+                  : 'OR — contact must match ANY one rule below.'}
+              </p>
+
+              {/* Rules */}
+              <div className="space-y-1">
+                {rules.map((r, i) => (
+                  <RuleRow key={r.id} rule={r} contacts={contacts}
+                    logic={logic} isLast={i === rules.length - 1}
+                    onUpdate={upd => updateRule(r.id, upd)}
+                    onRemove={() => removeRule(r.id)} />
+                ))}
+              </div>
+
+              <button onClick={addRule}
+                className="w-full py-2 rounded-xl text-xs font-medium transition-all flex items-center justify-center gap-1.5"
+                style={{ background: "rgba(255,255,255,0.02)", border: "1px dashed rgba(255,255,255,0.1)", color: "#64748b" }}
+                onMouseEnter={e => { e.currentTarget.style.borderColor = "rgba(59,130,246,0.3)"; e.currentTarget.style.color = "#60a5fa"; }}
+                onMouseLeave={e => { e.currentTarget.style.borderColor = "rgba(255,255,255,0.1)"; e.currentTarget.style.color = "#64748b"; }}>
+                <Plus size={12} /> Add Filter Rule
+              </button>
+
+              {/* Mini preview of matched contacts */}
+              {matched.length > 0 && (
+                <div className="rounded-xl overflow-hidden"
+                  style={{ border: "1px solid rgba(255,255,255,0.06)" }}>
+                  <div className="px-3 py-2 text-[10px] font-semibold uppercase tracking-wider flex items-center gap-1.5"
+                    style={{ background: "rgba(255,255,255,0.03)", color: "#64748b" }}>
+                    <Eye size={10} /> Preview — top {Math.min(matched.length, 8)} contacts
+                  </div>
+                  {matched.slice(0, 8).map((c, i) => {
+                    const ss = STATUS_COLOR[c.status] || STATUS_COLOR.active;
+                    return (
+                      <div key={i} className="flex items-center gap-3 px-3 py-2 text-xs transition-colors"
+                        style={{ borderTop: "1px solid rgba(255,255,255,0.04)" }}
+                        onMouseEnter={e => e.currentTarget.style.background = "rgba(255,255,255,0.02)"}
+                        onMouseLeave={e => e.currentTarget.style.background = ""}>
+                        <div className="flex-1 min-w-0">
+                          <span className="font-medium text-white">{c.name || '—'}</span>
+                          <span className="ml-2 font-mono text-[10px]" style={{ color: "#4ade80" }}>{c.phone}</span>
+                        </div>
+                        <span className="text-[10px] px-1.5 py-0.5 rounded font-medium whitespace-nowrap"
+                          style={{ background: ss.bg, border: `1px solid ${ss.border}`, color: ss.color }}>
+                          {(c.status || 'active').replace(/_/g, ' ')}
+                        </span>
+                        <span className="text-[10px] font-mono" style={{ color: "#64748b" }}>{c.city || '—'}</span>
+                        <span className="text-[10px]" style={{ color: "#475569" }}>{c.device || '—'}</span>
+                      </div>
+                    );
+                  })}
+                  {matched.length > 8 && (
+                    <div className="px-3 py-2 text-[10px] text-center" style={{ color: "#475569" }}>
+                      +{matched.length - 8} more contacts will receive this campaign
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ══ STEP 3: Review & Launch ══ */}
+          {step === 3 && (
+            <div className="space-y-5 max-w-2xl mx-auto">
+              {/* Campaign card */}
+              <div className="p-5 rounded-2xl"
+                style={{ background: "rgba(59,130,246,0.05)", border: "1px solid rgba(59,130,246,0.15)" }}>
+                <div className="flex items-start justify-between">
+                  <div>
+                    <p className="text-[10px] uppercase tracking-widest font-bold mb-1" style={{ color: "#64748b" }}>Custom Campaign</p>
+                    <h3 className="text-lg font-bold text-white">{name}</h3>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-2xl font-bold text-blue-400">{matched.length}</p>
+                    <p className="text-[10px]" style={{ color: "#475569" }}>contacts targeted</p>
+                  </div>
+                </div>
+                <div className="mt-4 grid grid-cols-3 gap-3">
+                  {[
+                    { label: 'Template',  value: activeTpl?.name || '—',                       color: "#4ade80"  },
+                    { label: 'Delay',     value: Number(delayHrs) === 0 ? 'Instant' : `${delayHrs}h`, color: "#fb923c"  },
+                    { label: 'Logic',     value: `${rules.length} rules · ${logic}`,             color: "#c084fc"  },
+                  ].map(s => (
+                    <div key={s.label} className="p-3 rounded-xl text-center"
+                      style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)" }}>
+                      <p className="text-[10px] mb-1" style={{ color: "#64748b" }}>{s.label}</p>
+                      <p className="text-xs font-semibold truncate" style={{ color: s.color }} title={s.value}>{s.value}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Active filter summary */}
+              <div className="space-y-1.5">
+                <p className="text-[10px] uppercase tracking-widest font-bold" style={{ color: "#64748b" }}>
+                  Active Filters ({rules.length})
+                </p>
+                {rules.map((r, i) => {
+                  const ff = FILTER_FIELDS.find(f => f.id === r.field);
+                  const opLabel = r.op === 'eq' ? 'is' : r.op === 'contains' ? 'contains' : r.op === 'gte' ? '≥' : '≤';
+                  const valLabel = ff?.options ? (ff.options.find(o => o.value === r.value)?.label || r.value) : r.value;
+                  return (
+                    <div key={r.id} className="flex items-center gap-2 text-xs px-3 py-2 rounded-lg"
+                      style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.05)" }}>
+                      {i > 0 && (
+                        <span className="text-[9px] font-bold px-1.5 py-0.5 rounded"
+                          style={{ background: logic === 'AND' ? "rgba(59,130,246,0.15)" : "rgba(168,85,247,0.15)",
+                                   color: logic === 'AND' ? "#60a5fa" : "#c084fc" }}>
+                          {logic}
+                        </span>
+                      )}
+                      <span style={{ color: "#94a3b8" }}>{ff?.label}</span>
+                      <span style={{ color: "#475569" }}>{opLabel}</span>
+                      <span className="font-semibold text-white">{valLabel || '—'}</span>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Full contact list */}
+              <div>
+                <p className="text-[10px] uppercase tracking-widest font-bold mb-2" style={{ color: "#64748b" }}>
+                  All {matched.length} Matched Contacts
+                </p>
+                <div className="rounded-xl overflow-hidden"
+                  style={{ border: "1px solid rgba(255,255,255,0.06)", maxHeight: 260, overflowY: "auto" }}>
+                  {matched.map((c, i) => {
+                    const ss = STATUS_COLOR[c.status] || STATUS_COLOR.active;
+                    return (
+                      <div key={i} className="flex items-center gap-3 px-3 py-2 text-xs"
+                        style={{ borderTop: i > 0 ? "1px solid rgba(255,255,255,0.04)" : "none" }}
+                        onMouseEnter={e => e.currentTarget.style.background = "rgba(255,255,255,0.02)"}
+                        onMouseLeave={e => e.currentTarget.style.background = ""}>
+                        <div className="flex-1 min-w-0">
+                          <span className="font-medium text-white">{c.name || '—'}</span>
+                          <span className="ml-2 font-mono text-[10px]" style={{ color: "#4ade80" }}>{c.phone}</span>
+                        </div>
+                        <span className="text-[10px] px-1.5 py-0.5 rounded font-medium"
+                          style={{ background: ss.bg, border: `1px solid ${ss.border}`, color: ss.color }}>
+                          {(c.status || 'active').replace(/_/g, ' ')}
+                        </span>
+                        <span className="text-[10px]" style={{ color: "#64748b" }}>{c.city || '—'}</span>
+                        <span className="text-[10px]" style={{ color: "#475569" }}>{c.device || '—'}</span>
+                        <span className="text-[10px] font-mono" style={{ color: c.cart_events > 0 ? "#fb923c" : "#475569" }}>
+                          {c.cart_events > 0 ? `${c.cart_events} carts` : ''}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="px-7 py-4 border-t border-white/5 bg-black/20 space-y-3">
+          {err && (
+            <div className="flex items-center gap-2 p-3 rounded-xl text-xs"
+              style={{ background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)", color: "#f87171" }}>
+              <AlertCircle size={13} /> {err}
+            </div>
+          )}
+          <div className="flex items-center justify-between gap-3">
+            <button onClick={onClose} className="btn-secondary">Cancel</button>
+            <div className="flex items-center gap-2">
+              {step > 1 && (
+                <button onClick={() => { setErr(''); setStep(s => s - 1); }} className="btn-secondary">
+                  ← Back
+                </button>
+              )}
+              {step < 3 ? (
+                <button onClick={handleNext} className="btn-primary px-8">
+                  Next <ChevronRight size={14} />
+                </button>
+              ) : (
+                <button onClick={handleCreate} disabled={saving} className="btn-primary px-10 text-base">
+                  {saving ? 'Launching…' : '🚀 Launch Campaign'}
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Main Campaigns Page ──────────────────────────────────────────────────────
 export default function Campaigns() {
   const [campaigns, setCampaigns] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
+  const [showCustom, setShowCustom] = useState(false);
 
   const load = async () => {
     const c = await campaignsApi.list();
@@ -655,9 +1216,18 @@ export default function Campaigns() {
            <h2 className="text-2xl font-bold text-white tracking-tight">Automation Engine</h2>
            <p className="text-xs text-slate-500 mt-1">Cross-channel retargeting with auto-conversion tracking</p>
         </div>
-        <button onClick={() => setShowModal(true)} className="btn-primary px-8 shadow-[0_0_20px_rgba(34,197,94,0.2)]">
-          <Plus size={18}/> New Flow
-        </button>
+        <div className="flex items-center gap-2">
+          <button onClick={() => setShowCustom(true)}
+            className="flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold transition-all"
+            style={{ background: "rgba(59,130,246,0.1)", border: "1px solid rgba(59,130,246,0.3)", color: "#60a5fa" }}
+            onMouseEnter={e => e.currentTarget.style.background = "rgba(59,130,246,0.18)"}
+            onMouseLeave={e => e.currentTarget.style.background = "rgba(59,130,246,0.1)"}>
+            <Sliders size={15} /> Custom Campaign
+          </button>
+          <button onClick={() => setShowModal(true)} className="btn-primary px-6 shadow-[0_0_20px_rgba(34,197,94,0.2)]">
+            <Plus size={16}/> New Flow
+          </button>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -677,20 +1247,50 @@ export default function Campaigns() {
         )}
 
         {campaigns.map(c => {
+          const isCustom = c.campaign_type === 'custom';
           const type = CAMPAIGN_TYPES.find(t=>t.id===c.campaign_type) || CAMPAIGN_TYPES[0];
           const rate = c.total_sent > 0 ? ((c.total_recovered/c.total_sent)*100).toFixed(1) : "0.0";
+          let filters = null;
+          try { filters = c.filters ? JSON.parse(c.filters) : null; } catch (_) {}
           return (
-            <div key={c.id} className="card p-6 border-white/5 relative bg-white/[0.01] group/card">
+            <div key={c.id} className="card p-6 border-white/5 relative bg-white/[0.01] group/card"
+              style={isCustom ? { borderColor: "rgba(59,130,246,0.15)" } : {}}>
               <div className="absolute top-4 right-4 flex items-center gap-2">
-                <span className="py-1 px-2 bg-green-500/10 text-green-400 border border-green-500/20 text-[9px] font-bold rounded-full uppercase tracking-tighter animate-pulse">Running</span>
+                {isCustom
+                  ? <span className="py-1 px-2 text-[9px] font-bold rounded-full uppercase tracking-tighter border"
+                      style={{ background: "rgba(59,130,246,0.1)", color: "#60a5fa", borderColor: "rgba(59,130,246,0.25)" }}>Custom</span>
+                  : <span className="py-1 px-2 bg-green-500/10 text-green-400 border border-green-500/20 text-[9px] font-bold rounded-full uppercase tracking-tighter animate-pulse">Running</span>
+                }
                 <button
                   onClick={async () => { if(confirm('Delete this campaign?')){ await campaignsApi.delete(c.id); load(); } }}
                   className="p-1.5 bg-red-500/10 text-red-400 border border-red-500/20 rounded-lg opacity-0 group-hover/card:opacity-100 transition-opacity hover:bg-red-500/20"
                 ><Trash2 size={13}/></button>
               </div>
-              <div className="w-12 h-12 rounded-2xl bg-white/5 flex items-center justify-center text-3xl mb-4 border border-white/5">{type.icon}</div>
+              <div className="w-12 h-12 rounded-2xl flex items-center justify-center text-3xl mb-4 border"
+                style={isCustom
+                  ? { background: "rgba(59,130,246,0.08)", borderColor: "rgba(59,130,246,0.2)" }
+                  : { background: "rgba(255,255,255,0.05)", borderColor: "rgba(255,255,255,0.08)" }}>
+                {isCustom ? '🎯' : type.icon}
+              </div>
               <h3 className="font-bold text-white mb-1">{c.name}</h3>
-              <p className="text-[10px] text-slate-500 mb-6 uppercase tracking-widest">{type.targetSegment.replace('_',' ')} Target</p>
+              <p className="text-[10px] text-slate-500 mb-3 uppercase tracking-widest">
+                {isCustom ? 'Custom Audience' : type.targetSegment.replace('_',' ')} Target
+              </p>
+              {isCustom && filters?.rules?.length > 0 && (
+                <div className="flex flex-wrap gap-1 mb-4">
+                  {filters.rules.slice(0, 3).map((r, i) => (
+                    <span key={i} className="text-[9px] px-1.5 py-0.5 rounded font-medium"
+                      style={{ background: "rgba(59,130,246,0.1)", border: "1px solid rgba(59,130,246,0.15)", color: "#60a5fa" }}>
+                      {r.field.replace(/_/g, ' ')} {r.op === 'gte' ? '≥' : r.op === 'lte' ? '≤' : '='} {r.value}
+                    </span>
+                  ))}
+                  {filters.rules.length > 3 && (
+                    <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ color: "#475569" }}>
+                      +{filters.rules.length - 3} more
+                    </span>
+                  )}
+                </div>
+              )}
               
               <div className="grid grid-cols-2 gap-4 mb-6">
                  <div>
@@ -729,7 +1329,8 @@ export default function Campaigns() {
         })}
       </div>
 
-      {showModal && <CreateModal onClose={() => setShowModal(false)} onCreated={load} />}
+      {showModal  && <CreateModal         onClose={() => setShowModal(false)}  onCreated={load} />}
+      {showCustom && <CustomCampaignModal onClose={() => setShowCustom(false)} onCreated={load} />}
     </div>
   );
 }

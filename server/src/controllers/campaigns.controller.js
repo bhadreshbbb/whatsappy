@@ -134,8 +134,30 @@ export const campaignsController = {
       let targetEvents = [];
       const seg = campaign.target_segment || 'all';
 
-      // Advanced User Filtering Engine
-      if (campaign.campaign_type === 'abandoned_cart') {
+      // ── Custom campaign: apply stored filter rules ──────────────────────────
+      if (campaign.campaign_type === 'custom') {
+        let filterDef = { logic: 'AND', rules: [] };
+        try { filterDef = JSON.parse(campaign.filters || '{}'); } catch (_) {}
+        const { logic = 'AND', rules = [] } = filterDef;
+
+        const applyRule = (visitor, rule) => {
+          const cv = visitor[rule.field];
+          if (rule.op === 'eq')       return String(cv ?? '').toLowerCase() === String(rule.value ?? '').toLowerCase();
+          if (rule.op === 'contains') return String(cv ?? '').toLowerCase().includes(String(rule.value ?? '').toLowerCase());
+          if (rule.op === 'gte')      return Number(cv ?? 0) >= Number(rule.value ?? 0);
+          if (rule.op === 'lte')      return Number(cv ?? 0) <= Number(rule.value ?? 0);
+          return true;
+        };
+
+        targetEvents = db.website_visitors.filter(v => {
+          if (v.channel_id !== channelId || !v.phone) return false;
+          if (!rules.length) return true;
+          const results = rules.map(r => applyRule(v, r));
+          return logic === 'AND' ? results.every(Boolean) : results.some(Boolean);
+        });
+
+      // Advanced User Filtering Engine (existing types)
+      } else if (campaign.campaign_type === 'abandoned_cart') {
         targetEvents = db.cart_events.filter(c => c.channel_id === channelId && !c.recovered && c.phone);
       } else if (campaign.campaign_type === 'product_view') {
         targetEvents = db.product_views.filter(v => v.channel_id === channelId && v.phone);
