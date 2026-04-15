@@ -164,17 +164,23 @@ export const trackingController = {
       }
 
       db.save();
-      // Return IP + geo so the tracker can console.log it in the browser
+      // Return full geo debug payload so browser console can show everything
       res.json({
         success: true,
         debug: {
-          ip:       ip   || null,
-          city:     geo.city    || null,
-          state:    geo.state   || null,
-          country:  geo.country || null,
-          timezone: geo.timezone|| null,
-          language: resolvedLanguage,
-          session:  sessionId,
+          ip:          ip            || null,
+          city:        geo.city      || null,
+          state:       geo.state     || null,
+          country:     geo.country   || null,
+          timezone:    geo.timezone  || null,
+          language:    resolvedLanguage,
+          session:     sessionId,
+          geoApiStep:  geo._debug?.step       || null,
+          geoApiCalled: geo._debug?.apiCalled ?? null,
+          geoHttpStatus: geo._debug?.httpStatus || null,
+          geoApiUrl:   geo._debug?.apiUrl      || null,
+          geoRawResponse: geo._debug?.rawResponse || null,
+          geoError:    geo._debug?.error || geo._debug?.errorBody || null,
         }
       });
     } catch (e) { next(e); }
@@ -778,34 +784,32 @@ export const trackingController = {
   },
 
   // ── Private Geo-IP Engine ─────────────────────────────────────────────────
+  // Returns { city, state, country, countryCode, timezone, _debug }
+  // _debug carries the full raw API response + status so the frontend can log it.
   async _getGeoData(ip) {
     const fallback = { city: 'Unknown', state: 'Unknown', country: 'Unknown', countryCode: '🌐', timezone: 'UTC' };
 
     if (!ip) {
-      console.log('[Geo] No IP address — returning fallback');
-      return fallback;
+      console.log('[Geo] No IP — skipping lookup');
+      return { ...fallback, _debug: { step: 'no_ip', ip: null, apiCalled: false } };
     }
 
-    // Strip IPv4-mapped IPv6 prefix (::ffff:1.2.3.4 → 1.2.3.4)
     const cleanIp = ip.replace(/^::ffff:/, '');
-    console.log(`[Geo] Looking up IP: "${cleanIp}" (raw: "${ip}")`);
+    console.log(`[Geo] IP: "${cleanIp}" (raw: "${ip}")`);
 
-    // Skip local/private addresses — freeipapi won't resolve them
     if (
-      cleanIp === '127.0.0.1' ||
-      cleanIp === '::1' ||
-      cleanIp.startsWith('192.168.') ||
-      cleanIp.startsWith('10.') ||
-      cleanIp.startsWith('172.')
+      cleanIp === '127.0.0.1' || cleanIp === '::1' ||
+      cleanIp.startsWith('192.168.') || cleanIp.startsWith('10.') || cleanIp.startsWith('172.')
     ) {
-      console.log('[Geo] Local/private IP — skipping API call');
-      return { city: 'Local', state: 'Local', country: 'Local', countryCode: 'XX', timezone: 'UTC' };
+      console.log('[Geo] Local IP — skipping API');
+      return { city: 'Local', state: 'Local', country: 'Local', countryCode: 'XX', timezone: 'UTC',
+               _debug: { step: 'local_ip', ip: cleanIp, apiCalled: false } };
     }
+
+    const url = `https://api.freeipapi.app/api/v1/lookup?ip=${encodeURIComponent(cleanIp)}`;
+    console.log(`[Geo] → GET ${url}`);
 
     try {
-      const url = `https://api.freeipapi.app/api/v1/lookup?ip=${encodeURIComponent(cleanIp)}`;
-      console.log(`[Geo] Calling: ${url}`);
-
       const response = await fetch(url, {
         headers: {
           'Authorization': `Bearer ${process.env.FREEIPAPI_TOKEN || 'fip_7535f7e54a22a2972f2bdaefc1930c7630fe08720226036ebc2d5db3599fa743'}`,
@@ -813,30 +817,37 @@ export const trackingController = {
         }
       });
 
-      console.log(`[Geo] HTTP status: ${response.status}`);
+      console.log(`[Geo] ← HTTP ${response.status}`);
 
       if (!response.ok) {
-        const text = await response.text();
-        console.error(`[Geo] API error ${response.status}:`, text);
-        return fallback;
+        const errText = await response.text();
+        console.error(`[Geo] API error ${response.status}:`, errText);
+        return { ...fallback, _debug: { step: 'api_error', ip: cleanIp, apiCalled: true, httpStatus: response.status, errorBody: errText } };
       }
 
       const data = await response.json();
-      console.log('[Geo] Raw API response:', JSON.stringify(data));
+      console.log('[Geo] Raw response:', JSON.stringify(data));
 
-      // freeipapi.app field names: cityName, regionName, countryName, countryCode, timeZone
       const result = {
-        city:        data.cityName    || null,
-        state:       data.regionName  || null,
-        country:     data.countryName || null,
-        countryCode: data.countryCode || null,
-        timezone:    data.timeZone    || null,
+        city:        data.city         || null,
+        state:       data.region       || null,
+        country:     data.country      || null,
+        countryCode: data.country_code || null,
+        timezone:    Array.isArray(data.timezones) ? data.timezones[0] : (data.timezones || null),
+        _debug: {
+          step:       'success',
+          ip:         cleanIp,
+          apiCalled:  true,
+          httpStatus: response.status,
+          apiUrl:     url,
+          rawResponse: data,
+        },
       };
-      console.log('[Geo] Parsed result:', result);
+      console.log('[Geo] Parsed:', { city: result.city, state: result.state, country: result.country, timezone: result.timezone });
       return result;
     } catch (e) {
-      console.error('[Geo] Lookup error:', e.message);
-      return fallback;
+      console.error('[Geo] Fetch error:', e.message);
+      return { ...fallback, _debug: { step: 'fetch_error', ip: cleanIp, apiCalled: true, error: e.message } };
     }
   }
 };
