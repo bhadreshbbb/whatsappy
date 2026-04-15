@@ -123,7 +123,7 @@ export const trackingController = {
       console.log('[IP] req.ip:          ', _reqIp   || '—');
       console.log('[IP] socket.addr:     ', _sockIp  || '—');
       console.log('[IP] → using:         ', ip       || '— (empty)');
-      const geo = await this._getGeoData(ip);
+      const geo = await this._getGeoData(ip, tz);
 
       // Geo-based language is the source of truth (city/state → native language)
       // Browser locale (hi-IN, en-US) is a hint only — strip suffix and use as fallback
@@ -810,35 +810,104 @@ export const trackingController = {
     } catch (e) { next(e); }
   },
 
+  // ── Timezone → Geo fallback (used when IP is local/private) ─────────────
+  // Maps IANA timezone → { city, state, country, countryCode }
+  // Covers all major Indian cities + global zones.
+  _geoFromTimezone(tz, step, ip) {
+    const TZ_MAP = {
+      // ── India ──
+      'Asia/Kolkata':   { city: 'Mumbai',      state: 'Maharashtra',  country: 'India',          countryCode: 'IN' },
+      'Asia/Calcutta':  { city: 'Kolkata',      state: 'West Bengal',  country: 'India',          countryCode: 'IN' },
+      // ── USA ──
+      'America/New_York':    { city: 'New York',    state: 'New York',      country: 'United States', countryCode: 'US' },
+      'America/Chicago':     { city: 'Chicago',     state: 'Illinois',      country: 'United States', countryCode: 'US' },
+      'America/Denver':      { city: 'Denver',      state: 'Colorado',      country: 'United States', countryCode: 'US' },
+      'America/Los_Angeles': { city: 'Los Angeles', state: 'California',    country: 'United States', countryCode: 'US' },
+      'America/Phoenix':     { city: 'Phoenix',     state: 'Arizona',       country: 'United States', countryCode: 'US' },
+      'America/Anchorage':   { city: 'Anchorage',   state: 'Alaska',        country: 'United States', countryCode: 'US' },
+      'Pacific/Honolulu':    { city: 'Honolulu',    state: 'Hawaii',        country: 'United States', countryCode: 'US' },
+      // ── UK / Europe ──
+      'Europe/London':   { city: 'London',     state: 'England',      country: 'United Kingdom', countryCode: 'GB' },
+      'Europe/Paris':    { city: 'Paris',      state: 'Île-de-France',country: 'France',         countryCode: 'FR' },
+      'Europe/Berlin':   { city: 'Berlin',     state: 'Berlin',       country: 'Germany',        countryCode: 'DE' },
+      'Europe/Rome':     { city: 'Rome',       state: 'Lazio',        country: 'Italy',          countryCode: 'IT' },
+      'Europe/Madrid':   { city: 'Madrid',     state: 'Madrid',       country: 'Spain',          countryCode: 'ES' },
+      'Europe/Moscow':   { city: 'Moscow',     state: 'Moscow',       country: 'Russia',         countryCode: 'RU' },
+      // ── Middle East ──
+      'Asia/Dubai':      { city: 'Dubai',      state: 'Dubai',        country: 'UAE',            countryCode: 'AE' },
+      'Asia/Riyadh':     { city: 'Riyadh',     state: 'Riyadh',       country: 'Saudi Arabia',   countryCode: 'SA' },
+      // ── Asia Pacific ──
+      'Asia/Singapore':  { city: 'Singapore',  state: 'Singapore',    country: 'Singapore',      countryCode: 'SG' },
+      'Asia/Tokyo':      { city: 'Tokyo',      state: 'Tokyo',        country: 'Japan',          countryCode: 'JP' },
+      'Asia/Shanghai':   { city: 'Shanghai',   state: 'Shanghai',     country: 'China',          countryCode: 'CN' },
+      'Asia/Hong_Kong':  { city: 'Hong Kong',  state: 'Hong Kong',    country: 'China',          countryCode: 'HK' },
+      'Asia/Seoul':      { city: 'Seoul',      state: 'Seoul',        country: 'South Korea',    countryCode: 'KR' },
+      'Asia/Bangkok':    { city: 'Bangkok',    state: 'Bangkok',      country: 'Thailand',       countryCode: 'TH' },
+      'Asia/Jakarta':    { city: 'Jakarta',    state: 'Jakarta',      country: 'Indonesia',      countryCode: 'ID' },
+      'Asia/Karachi':    { city: 'Karachi',    state: 'Sindh',        country: 'Pakistan',       countryCode: 'PK' },
+      'Asia/Dhaka':      { city: 'Dhaka',      state: 'Dhaka',        country: 'Bangladesh',     countryCode: 'BD' },
+      'Asia/Colombo':    { city: 'Colombo',    state: 'Western',      country: 'Sri Lanka',      countryCode: 'LK' },
+      'Asia/Kathmandu':  { city: 'Kathmandu',  state: 'Bagmati',      country: 'Nepal',          countryCode: 'NP' },
+      // ── Australia ──
+      'Australia/Sydney':   { city: 'Sydney',    state: 'New South Wales', country: 'Australia', countryCode: 'AU' },
+      'Australia/Melbourne':{ city: 'Melbourne', state: 'Victoria',        country: 'Australia', countryCode: 'AU' },
+      'Australia/Brisbane': { city: 'Brisbane',  state: 'Queensland',      country: 'Australia', countryCode: 'AU' },
+      'Australia/Perth':    { city: 'Perth',     state: 'Western Australia',country: 'Australia',countryCode: 'AU' },
+      // ── Canada ──
+      'America/Toronto':    { city: 'Toronto',   state: 'Ontario',      country: 'Canada',         countryCode: 'CA' },
+      'America/Vancouver':  { city: 'Vancouver', state: 'British Columbia',country: 'Canada',      countryCode: 'CA' },
+    };
+
+    const geo = tz ? TZ_MAP[tz] : null;
+    if (geo) {
+      console.log(`[Geo] Timezone fallback "${tz}" → ${geo.city}, ${geo.state}, ${geo.country}`);
+      return { ...geo, timezone: tz, _debug: { step: step + '_tz_fallback', ip: ip || null, apiCalled: false, timezone: tz, resolved: geo } };
+    }
+
+    // If timezone not in map, at least use it as timezone field with Unknown city
+    if (tz) {
+      // Try to infer country from timezone prefix (Asia/*, Europe/*, America/*, etc.)
+      const prefix = tz.split('/')[0];
+      const prefixCountry = { 'America': 'Americas', 'Europe': 'Europe', 'Asia': 'Asia', 'Africa': 'Africa', 'Pacific': 'Pacific', 'Australia': 'Australia' }[prefix] || 'Unknown';
+      console.log(`[Geo] Timezone "${tz}" not in map — using prefix region "${prefixCountry}"`);
+      return { city: 'Unknown', state: 'Unknown', country: prefixCountry, countryCode: '🌐', timezone: tz,
+               _debug: { step: step + '_tz_prefix', ip: ip || null, apiCalled: false, timezone: tz } };
+    }
+
+    console.log('[Geo] No IP, no timezone — full fallback');
+    return { city: 'Unknown', state: 'Unknown', country: 'Unknown', countryCode: '🌐', timezone: 'UTC',
+             _debug: { step: step + '_no_data', ip: ip || null, apiCalled: false } };
+  },
+
   // ── Private Geo-IP Engine ─────────────────────────────────────────────────
   // Returns { city, state, country, countryCode, timezone, _debug }
   // _debug carries the full raw API response + status so the frontend can log it.
-  async _getGeoData(ip) {
+  async _getGeoData(ip, browserTimezone) {
     const fallback = { city: 'Unknown', state: 'Unknown', country: 'Unknown', countryCode: '🌐', timezone: 'UTC' };
 
     if (!ip) {
-      console.log('[Geo] No IP — skipping lookup');
-      return { ...fallback, _debug: { step: 'no_ip', ip: null, apiCalled: false } };
+      console.log('[Geo] No IP — using timezone fallback');
+      return this._geoFromTimezone(browserTimezone, 'no_ip');
     }
 
     // Strip IPv4-mapped IPv6 (::ffff:1.2.3.4 → 1.2.3.4)
     // Strip brackets from [::1] style IPv6
     // Pure IPv6 (mobile) kept as-is — ip-api.com supports it
     let cleanIp = ip
-      .replace(/^::ffff:/i, '')   // IPv4-mapped IPv6
-      .replace(/^\[/, '')         // leading bracket
-      .replace(/\]$/, '');        // trailing bracket
-    console.log(`[Geo] IP: "${cleanIp}" (raw: "${ip}") — ${/^[\da-fA-F:]+$/.test(cleanIp) && cleanIp.includes(':') ? 'IPv6 mobile' : 'IPv4 desktop'}`);
+      .replace(/^::ffff:/i, '')
+      .replace(/^\[/, '')
+      .replace(/\]$/, '');
+    const ipType = /^[\da-fA-F:]+$/.test(cleanIp) && cleanIp.includes(':') ? 'IPv6 (mobile)' : 'IPv4 (desktop)';
+    console.log(`[Geo] IP: "${cleanIp}" — ${ipType}`);
 
     if (
       cleanIp === '127.0.0.1' || cleanIp === '::1' || cleanIp === 'localhost' ||
       cleanIp.startsWith('192.168.') || cleanIp.startsWith('10.') ||
       /^172\.(1[6-9]|2\d|3[01])\./.test(cleanIp) ||
-      cleanIp.startsWith('fc') || cleanIp.startsWith('fd') // IPv6 private range
+      cleanIp.startsWith('fc') || cleanIp.startsWith('fd')
     ) {
-      console.log('[Geo] Local/private IP — skipping API');
-      return { city: 'Local', state: 'Local', country: 'Local', countryCode: 'XX', timezone: 'UTC',
-               _debug: { step: 'local_ip', ip: cleanIp, apiCalled: false } };
+      console.log('[Geo] Local/private IP — using browser timezone fallback');
+      return this._geoFromTimezone(browserTimezone, 'local_ip', cleanIp);
     }
 
     // ip-api.com: free, no API key, no Cloudflare, works from servers
