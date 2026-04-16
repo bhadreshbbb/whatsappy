@@ -4,7 +4,8 @@
       "Bash(npm run:*)",
       "Bash(curl -s http://localhost:3005/health)",
       "Bash(curl -s https://api.ipify.org)",
-      "Bash(curl -s https://ifconfig.me)"
+      "Bash(curl -s https://ifconfig.me)",
+      "Bash(curl -s \"http://ip-api.com/json/49.36.90.84?fields=status,message,city,regionName,country,countryCode,timezone\")"
     ]
   }
 }

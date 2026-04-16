@@ -8,7 +8,11 @@ import { computeHotProducts, buildSendMessagePayload, scrapeProductData, LANG_MA
 import { v4 as uuidv4 } from 'uuid';
 
 let cronInterval;
+let productDetectionInterval;
+let productRefreshInterval;
 const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000;
+const SIX_HOURS_MS = 6 * 60 * 60 * 1000;
+const TWENTY_SIX_HOURS_MS = 26 * 60 * 60 * 1000;
 
 /**
  * Universal Automation Engine v3
@@ -41,11 +45,31 @@ const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000;
 
 export function startAutomation() {
   console.log('Starting automation engine...');
+  
+  // Main automation loop - runs every minute for message sending
   cronInterval = setInterval(() => {
     runAutomation().catch(err => console.error('[Automation] Error:', err));
     refreshAutoProductTemplates().catch(err => console.error('[AutoProducts] Error:', err));
   }, 60 * 1000);
-  console.log('Automation engine active - monitoring tracker events');
+  
+  // Product detection - runs every 6 hours to detect and scrape top products
+  productDetectionInterval = setInterval(() => {
+    autoDetectAndScrapeProducts().catch(err => console.error('[ProductDetect] Error:', err));
+  }, SIX_HOURS_MS);
+  
+  // Run immediately on start
+  autoDetectAndScrapeProducts().catch(err => console.error('[ProductDetect] Initial error:', err));
+  
+  // Product recommendation refresh - runs every 26 hours for new product recommendations
+  productRefreshInterval = setInterval(() => {
+    refreshProductRecommendations().catch(err => console.error('[ProductRefresh] Error:', err));
+  }, TWENTY_SIX_HOURS_MS);
+  
+  console.log('Automation engine active:');
+  console.log('  - Message sending: Every minute');
+  console.log('  - Product detection: Every 6 hours');
+  console.log('  - Product refresh: Every 26 hours');
+  console.log('  - Template refresh: Every 24 hours');
 }
 
 // ── Every-24-hour refresh: update product_config.cards for auto-mode templates ──
@@ -212,7 +236,9 @@ async function refreshAutoProductTemplates() {
 
       const uploaded = cards.filter(c => c.header_media_id).length;
       const changed  = cards.filter(c => c._product_changed).length;
-      console.log(`\n[AutoProducts] ✓ "${tpl.name}" — template structure UNCHANGED, send payload refreshed`);
+      console.log(`\n[AutoProducts] ✓ "${tpl.name}"`);
+      console.log(`  🔒 Template structure: UNCHANGED (approved by Meta)`);
+      console.log(`  📝 Message content: UPDATED`);
       console.log(`  ${cardCount} cards | ${uploaded} images uploaded | ${changed} product(s) swapped`);
       cards.forEach((c, i) => console.log(`  Card ${i+1}: "${c.title || '—'}"  ${c.price || ''}  [score:${c._hot_score||0}  carts:${c._hot_carts||0}  views:${c._hot_views||0}]`));
       console.log(`  Next refresh: ${tpl.product_config.next_auto_refresh}\n`);
@@ -786,4 +812,285 @@ function buildProductList(productsJson) {
     const arr = JSON.parse(productsJson || '[]');
     return arr.map(p => `• ${p.name} — ₹${(p.price || 0).toLocaleString()}`).join('\n');
   } catch (_) { return ''; }
+}
+
+// ── AUTO-DETECT AND SCRAPE TOP PRODUCTS FROM ANALYTICS ────────────────────────
+// Runs every 6 hours to:
+//  1. Analyze page_views and cart_events to find top 5 trending products
+//  2. Scrape product pages for latest data (title, price, main image)
+//  3. Download and upload images to Meta (storing in gallery with media_id)
+//  4. Update product_catalog with fresh data
+//
+// This ensures templates always have the latest trending products with valid images
+async function autoDetectAndScrapeProducts() {
+  const db = getDb();
+  const channelId = process.env.CHANNEL_ID || 'demo';
+  const nowDt = new Date();
+  
+  console.log('\n╔════════════════════════════════════════════════════════════════╗');
+  console.log('║  AUTO-DETECT TOP PRODUCTS FROM TRAFFIC ANALYTICS              ║');
+  console.log('╚════════════════════════════════════════════════════════════════╝\n');
+  
+  // Get top 5 products from analytics (last 7 days)
+  const topProducts = computeHotProducts(db, channelId, 5);
+  
+  if (topProducts.length === 0) {
+    console.log('[ProductDetect] No products found in analytics data yet');
+    return;
+  }
+  
+  console.log(`[ProductDetect] Found ${topProducts.length} trending products:`);
+  topProducts.forEach((p, i) => {
+    console.log(`  ${i + 1}. "${p.name}" - ${p.price} (score: ${p.score}, views: ${p.views}, carts: ${p.carts})`);
+  });
+  
+  // Initialize gallery structures
+  if (!db.gallery_folders) db.gallery_folders = [];
+  if (!db.gallery_images) db.gallery_images = [];
+  
+  // Get or create auto-products gallery folder
+  const folderName = 'auto_products_trending';
+  let folder = db.gallery_folders.find(f => f.channel_id === channelId && f.name === folderName);
+  if (!folder) {
+    folder = {
+      id: uuidv4(),
+      channel_id: channelId,
+      name: folderName,
+      created_at: nowDt.toISOString()
+    };
+    db.gallery_folders.push(folder);
+    console.log(`[ProductDetect] Created gallery folder "${folderName}"`);
+  }
+  
+  console.log('\n[ProductDetect] Starting product scraping and image upload...');
+  
+  // Process each product: scrape data and upload main image
+  for (let i = 0; i < topProducts.length; i++) {
+    const product = topProducts[i];
+    
+    try {
+      console.log(`\n[ProductDetect] Processing product ${i + 1}/${topProducts.length}: "${product.name}"`);
+      
+      // Skip if no URL
+      if (!product.url) {
+        console.log(`  ⚠ Skipping - no product URL`);
+        continue;
+      }
+      
+      // Scrape fresh product data
+      console.log(`  → Scraping ${product.url}`);
+      const scraped = await scrapeProductData(product.url);
+      
+      if (!scraped.title && !scraped.image_url) {
+        console.log(`  ⚠ Scrape failed - no data returned`);
+        continue;
+      }
+      
+      const productTitle = scraped.title || product.name;
+      const productPrice = scraped.price || product.price;
+      const productImage = scraped.image_url || product.image;
+      
+      console.log(`  ✓ Scraped: "${productTitle}" - ${productPrice}`);
+      console.log(`  Image: ${productImage ? 'Found' : 'Missing'}`);
+      
+      // Update product_catalog with fresh data
+      const catalogIdx = db.product_catalog.findIndex(
+        p => p.channel_id === channelId && p.url === product.url
+      );
+      
+      if (catalogIdx >= 0) {
+        db.product_catalog[catalogIdx].name = productTitle;
+        db.product_catalog[catalogIdx].price = productPrice;
+        db.product_catalog[catalogIdx].image = productImage;
+        db.product_catalog[catalogIdx].updated_at = nowDt.toISOString();
+        db.product_catalog[catalogIdx].auto_detected = true;
+        db.product_catalog[catalogIdx].traffic_score = product.score;
+        console.log(`  ✓ Updated product catalog`);
+      } else {
+        db.product_catalog.push({
+          id: (db.product_catalog.length || 0) + 1,
+          channel_id: channelId,
+          name: productTitle,
+          price: productPrice,
+          image: productImage,
+          url: product.url,
+          auto_detected: true,
+          traffic_score: product.score,
+          created_at: nowDt.toISOString(),
+          updated_at: nowDt.toISOString()
+        });
+        console.log(`  ✓ Added to product catalog`);
+      }
+      
+      // Download and upload image to Meta if we have an image URL
+      if (productImage) {
+        console.log(`  → Downloading image...`);
+        
+        try {
+          // Check if image already exists in gallery for this product
+          const existingImage = db.gallery_images.find(
+            img => img.source_url === productImage && img.channel_id === channelId
+          );
+          
+          if (existingImage) {
+            console.log(`  ✓ Image already in gallery (media_id: ${existingImage.media_id})`);
+            continue;
+          }
+          
+          // Download image
+          const { buffer, mimeType } = await whatsappService.downloadImage(productImage);
+          console.log(`  ✓ Downloaded (${buffer.length} bytes, ${mimeType})`);
+          
+          // Upload to Meta and get media_id
+          console.log(`  → Uploading to Meta...`);
+          const mediaId = await whatsappService.uploadMedia(
+            buffer,
+            `auto_product_${i + 1}_${Date.now()}.jpg`,
+            mimeType
+          );
+          
+          console.log(`  ✓ Uploaded to Meta (media_id: ${mediaId})`);
+          
+          // Save to gallery
+          const imageRecord = {
+            id: uuidv4(),
+            folder_id: folder.id,
+            channel_id: channelId,
+            filename: `${productTitle.substring(0, 50)}_${mediaId}`,
+            mime_type: mimeType,
+            size: buffer.length,
+            media_id: mediaId,
+            source_url: productImage,
+            product_name: productTitle,
+            product_url: product.url,
+            auto_detected: true,
+            traffic_score: product.score,
+            created_at: nowDt.toISOString()
+          };
+          
+          db.gallery_images.push(imageRecord);
+          console.log(`  ✓ Saved to gallery`);
+          
+        } catch (imgErr) {
+          console.error(`  ✗ Image upload failed: ${imgErr.message}`);
+        }
+      }
+      
+    } catch (err) {
+      console.error(`  ✗ Product processing failed: ${err.message}`);
+    }
+  }
+  
+  db.save();
+  
+  console.log('\n[ProductDetect] Auto-detect complete!');
+  console.log(`  - Products processed: ${topProducts.length}`);
+  console.log(`  - Gallery images: ${db.gallery_images.filter(i => i.auto_detected).length}`);
+  console.log(`  - Next run: ${new Date(Date.now() + SIX_HOURS_MS).toLocaleString()}`);
+  console.log('╚════════════════════════════════════════════════════════════════╝\n');
+}
+
+// ── REFRESH PRODUCT RECOMMENDATIONS ────────────────────────────────────────────
+// Runs every 26 hours to:
+//  1. Re-analyze traffic to find NEW trending products
+//  2. Update auto-mode templates with fresh product recommendations
+//  3. Ensure campaigns always send the latest trending items
+async function refreshProductRecommendations() {
+  const db = getDb();
+  const channelId = process.env.CHANNEL_ID || 'demo';
+  const nowDt = new Date();
+  
+  console.log('\n╔════════════════════════════════════════════════════════════════╗');
+  console.log('║  26-HOUR PRODUCT RECOMMENDATION REFRESH                       ║');
+  console.log('╚════════════════════════════════════════════════════════════════╝\n');
+  
+  // Get fresh top products based on last 7 days traffic
+  const hotProducts = computeHotProducts(db, channelId, 10);
+  
+  if (hotProducts.length === 0) {
+    console.log('[ProductRefresh] No products found - skipping refresh');
+    return;
+  }
+  
+  console.log(`[ProductRefresh] Found ${hotProducts.length} products to recommend`);
+  
+  // Find all auto-product-mode templates
+  const autoTemplates = (db.meta_templates || []).filter(t =>
+    t.channel_id === channelId &&
+    t.is_carousel &&
+    t.auto_product_mode &&
+    (t.meta_status === 'APPROVED' || t.meta_status === 'PENDING')
+  );
+  
+  if (autoTemplates.length === 0) {
+    console.log('[ProductRefresh] No auto-product templates found');
+    return;
+  }
+  
+  console.log(`[ProductRefresh] Updating ${autoTemplates.length} template(s)...`);
+  
+  for (const tpl of autoTemplates) {
+    try {
+      console.log(`\n  Template: "${tpl.name}"`);
+      
+      const cardCount = tpl.carousel_cards?.length || 3;
+      const selectedProducts = hotProducts.slice(0, cardCount);
+      
+      // ⚠️ CRITICAL: Template structure NEVER changes
+      // We ONLY update the product_config.cards data that fills the variables
+      // The template body, buttons, and structure remain unchanged
+      
+      if (!tpl.product_config) tpl.product_config = {};
+      
+      tpl.product_config.auto_products = selectedProducts;
+      tpl.product_config.last_auto_refresh = nowDt.toISOString();
+      tpl.product_config.next_auto_refresh = new Date(Date.now() + TWENTY_SIX_HOURS_MS).toISOString();
+      
+      // Update ONLY the card data (product info), NOT the template structure
+      if (tpl.product_config.cards) {
+        // Keep all template structure (var_map, buttons, body text) UNCHANGED
+        // Only update the product data that fills the variables at message send time
+        tpl.product_config.cards = tpl.product_config.cards.map((card, i) => {
+          const newProduct = selectedProducts[i] || selectedProducts[0];
+          return {
+            ...card,  // Keep all existing card structure (var_map, buttons, example_values)
+            // ONLY update product data fields:
+            title: newProduct.name,
+            price: newProduct.price,
+            link: newProduct.url,
+            _hot_score: newProduct.score,
+            _hot_views: newProduct.views,
+            _hot_carts: newProduct.carts,
+            _hot_image_url: newProduct.image,
+            _auto_updated: nowDt.toISOString()
+          };
+        });
+        
+        // Rebuild ONLY the send payload (message content), NOT the template
+        // The template structure at Meta stays the same, only message data changes
+        tpl.product_config.send_payload = buildSendMessagePayload(
+          tpl,
+          tpl.product_config,
+          '{{RECIPIENT_PHONE}}'
+        );
+      }
+      
+      console.log(`  ✓ Updated product data ONLY (template structure unchanged)`);
+      
+      console.log(`  ✓ Updated with ${selectedProducts.length} products`);
+      selectedProducts.forEach((p, i) => {
+        console.log(`    ${i + 1}. "${p.name}" (score: ${p.score})`);
+      });
+      
+    } catch (err) {
+      console.error(`  ✗ Template update failed: ${err.message}`);
+    }
+  }
+  
+  db.save();
+  
+  console.log('\n[ProductRefresh] Recommendation refresh complete!');
+  console.log(`  - Templates updated: ${autoTemplates.length}`);
+  console.log(`  - Next refresh: ${new Date(Date.now() + TWENTY_SIX_HOURS_MS).toLocaleString()}`);
+  console.log('╚════════════════════════════════════════════════════════════════╝\n');
 }
