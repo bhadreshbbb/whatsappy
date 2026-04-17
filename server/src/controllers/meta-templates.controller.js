@@ -593,7 +593,7 @@ async function buildAutoProductCards(channelId, cleanName, count = 4) {
     } catch(_) {}
 
     cards.push({
-      body: '{{1}}',
+      body: '✨ {{1}}\n\nTap below to explore this product now!',
       buttons: [{ type: 'URL', text: 'Shop Now', url: `${buttonUrlBase}{{2}}` }],
       source: 'auto',
       image_id: imageId, file_handle: fileHandle, media_id: mediaId,
