@@ -395,51 +395,55 @@ async function buildAutoProductCards(channelId, cleanName, count = 4) {
     console.log(`[AutoCards] Created gallery folder "${folderName}"`);
   }
 
-  // ── Always fetch live from Shopify when shop_url is configured ──────────────
-  // This ensures auto-detect always has fresh products without any manual sync.
-  // Analytics signals (page_views, cart_events) are used to RANK them — Shopify
-  // API is the product data source.
-  const shopUrl = getShopUrl(db, channelId) || inferStoreBaseUrl(db);
-  let shopifyPool = [];
-  if (shopUrl) {
-    try {
-      shopifyPool = await fetchShopifyProducts(shopUrl, 50);
-      console.log(`[AutoCards] Live Shopify fetch: ${shopifyPool.length} products from ${shopUrl}`);
-      // Also update catalog in background so analytics can rank them next time
-      const seededAt = new Date().toISOString();
-      for (const sp of shopifyPool) {
-        const ei = db.product_catalog.findIndex(c => c.url === sp.url);
-        const entry = { channel_id: channelId, name: sp.name, url: sp.url, price: sp._price, image: sp.image, handle: sp.url.split('/').pop(), _seeded_at: seededAt };
-        if (ei >= 0) db.product_catalog[ei] = { ...db.product_catalog[ei], ...entry };
-        else db.product_catalog.push(entry);
-      }
-      db.save();
-    } catch (e) {
-      console.warn(`[AutoCards] Live Shopify fetch failed: ${e.message}`);
-    }
+  // ── Candidates from analytics/pages (db.page_views) — same source as the UI ──
+  // Read page_views, group by URL (same logic as getPageAnalytics), filter product
+  // pages, rank by views descending. Full URL is used directly — no store prefix needed.
+  const since = new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString();
+  const pvRows = (db.page_views || []).filter(p => p.channel_id === channelId && p.viewed_at >= since);
+
+  const byUrl = {};
+  for (const pv of pvRows) {
+    const url = pv.url; if (!url) continue;
+    if (!byUrl[url]) byUrl[url] = { url, title: pv.page_title || '', views: 0, sessions: new Set(),
+      totalDuration: 0, totalScroll: 0, totalEngagement: 0, exits: 0 };
+    byUrl[url].views++;
+    byUrl[url].sessions.add(pv.session_id);
+    byUrl[url].totalDuration   += pv.duration_sec    || 0;
+    byUrl[url].totalScroll     += pv.max_scroll_pct  || 0;
+    byUrl[url].totalEngagement += pv.engagement_score|| 0;
+    if (pv.exit_event) byUrl[url].exits++;
   }
 
-  // ── Rank Shopify products by analytics signals ────────────────────────────
-  // Get analytics scores from computeHotProducts, then apply to Shopify pool
-  const analyticsScores = computeHotProducts(db, channelId, 100);
-  const scoreMap = {};
-  for (const p of analyticsScores) scoreMap[p.url] = p.score;
+  // Same shape as analytics/pages response, filtered to product-like URLs, sorted by views
+  const analyticsPages = Object.values(byUrl)
+    .map(p => ({
+      url:              p.url,
+      title:            p.title,
+      views:            p.views,
+      unique_visitors:  p.sessions.size,
+      avg_duration_sec: p.views ? Math.round(p.totalDuration   / p.views) : 0,
+      avg_scroll_pct:   p.views ? Math.round(p.totalScroll     / p.views) : 0,
+      avg_engagement:   p.views ? Math.round(p.totalEngagement / p.views) : 0,
+      exit_rate:        p.views ? Math.round((p.exits / p.views) * 100) : 0,
+    }))
+    .filter(p => isProductUrl(p.url))
+    .sort((a, b) => b.views - a.views);
 
-  // Sort Shopify pool: analytics-scored first, then by Shopify position (featured order)
-  shopifyPool.sort((a, b) => {
-    const sa = scoreMap[a.url] || 0;
-    const sb = scoreMap[b.url] || 0;
-    return sb - sa; // higher analytics score first
-  });
+  console.log(`[AutoCards] analytics/pages product URLs: ${analyticsPages.length} (from ${pvRows.length} total page_views)`);
+  analyticsPages.slice(0, 8).forEach((p, i) =>
+    console.log(`  #${i+1} views=${p.views} unique=${p.unique_visitors} avg_dur=${p.avg_duration_sec}s  ${p.url}`)
+  );
 
-  // Merge: analytics-only candidates + Shopify pool (deduplicated)
-  const analyticsOnly = analyticsScores.filter(p => !shopifyPool.find(s => s.url === p.url));
-  const candidates = [
-    ...shopifyPool,          // Shopify products ranked by analytics
-    ...analyticsOnly,        // any analytics-only entries not in Shopify (edge case)
-  ];
+  if (analyticsPages.length === 0) {
+    throw new Error(
+      'No product pages found in Analytics → Pages data. ' +
+      'Install the tracking snippet on your store so page visits are recorded, ' +
+      'then auto-detect will use the most-viewed product pages automatically.'
+    );
+  }
 
-  console.log(`[AutoCards] ${candidates.length} candidates (${shopifyPool.length} from Shopify, ${analyticsOnly.length} analytics-only)`);
+  const candidates = analyticsPages.map(p => ({ name: p.title, url: p.url, views: p.views, score: p.views }));
+  console.log(`[AutoCards] ${candidates.length} product page candidates`);
 
   const cards = [];
   const productConfigCards = [];
