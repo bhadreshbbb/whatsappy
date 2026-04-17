@@ -474,8 +474,7 @@ async function buildAutoProductCards(channelId, cleanName, count = 4) {
         title    = (scraped.title     || '').trim();
         price    = (scraped.price     || '').trim();
         imageUrl = (scraped.image_url || '').trim();
-
-        return scraped
+        
       } catch (e) {
         console.warn(`[AutoCards] Skip "${hot.name}" — scrape failed: ${e.message}`);
         continue;
