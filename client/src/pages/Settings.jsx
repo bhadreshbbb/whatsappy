@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from "react";
-import { Save, Eye, EyeOff, Copy, CheckCircle, Zap, MessageSquare, Globe, Code } from "lucide-react";
+import { Save, Eye, EyeOff, Copy, CheckCircle, Zap, MessageSquare, Globe, Code, RefreshCw } from "lucide-react";
 import { settingsApi } from "../api";
+
+const CH = () => ({ 'x-channel-id': localStorage.getItem('channelId') || 'demo' });
 
 export default function Settings() {
   const [settings, setSettings] = useState({});
@@ -12,6 +14,7 @@ export default function Settings() {
   const [testing, setTesting] = useState(false);
   const [copiedSnippet, setCopiedSnippet] = useState(false);
   const [activeTab, setActiveTab] = useState("whatsapp");
+  const [syncing, setSyncing] = useState(false);
 
   const showToast = (msg, type = "success") => {
     setToast({ msg, type });
@@ -31,6 +34,20 @@ export default function Settings() {
       showToast("Settings saved!");
     } catch (e) { showToast("Save failed", "error"); }
     finally { setSaving(false); }
+  };
+
+  const syncCatalog = async () => {
+    if (!settings.shop_url) return showToast("Enter Shop URL first", "error");
+    setSyncing(true);
+    try {
+      const r = await fetch('/api/settings/sync-catalog', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...CH() },
+      }).then(res => res.json());
+      if (r.error) throw new Error(r.error);
+      showToast(`✓ ${r.products_in_catalog} products synced from ${settings.shop_url}`);
+    } catch (e) { showToast(`Sync failed: ${e.message}`, "error"); }
+    finally { setSyncing(false); }
   };
 
   const testWA = async () => {
@@ -351,9 +368,17 @@ WhatsWay.identify({ phone: `}<span style={{color:"#fbbf24"}}>"+919876543210"</sp
           </div>
           <div>
             <label className="label">Shop URL <span style={{color:'#f97316',fontSize:'11px'}}>★ required for Auto-Detect Products</span></label>
-            <input className="input" placeholder="https://laasyna.com"
-              value={settings.shop_url || ""} onChange={e => s("shop_url", e.target.value)} />
-            <p className="text-xs mt-1" style={{ color: "#64748b" }}>Your store domain — used for auto-detect product scraping and cart links</p>
+            <div className="flex gap-2">
+              <input className="input flex-1" placeholder="https://laasyna.com"
+                value={settings.shop_url || ""} onChange={e => s("shop_url", e.target.value)} />
+              <button onClick={syncCatalog} disabled={syncing || !settings.shop_url}
+                title="Sync product catalog from your Shopify store now"
+                className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-orange-500/10 border border-orange-500/20 text-orange-400 hover:bg-orange-500/20 disabled:opacity-40 text-xs font-medium transition-all shrink-0">
+                <RefreshCw size={12} className={syncing ? 'animate-spin' : ''} />
+                {syncing ? 'Syncing…' : 'Sync Products'}
+              </button>
+            </div>
+            <p className="text-xs mt-1" style={{ color: "#64748b" }}>Your Shopify store domain — saves all products for Auto-Detect. Syncs automatically when saved.</p>
           </div>
           <div>
             <label className="label">WhatsApp API Base URL</label>
