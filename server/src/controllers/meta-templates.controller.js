@@ -395,56 +395,74 @@ async function buildAutoProductCards(channelId, cleanName, count = 4) {
     console.log(`[AutoCards] Created gallery folder "${folderName}"`);
   }
 
-  // ── Candidates from analytics/pages (db.page_views) — same source as the UI ──
-  // Read page_views, group by URL (same logic as getPageAnalytics), filter product
-  // pages, rank by views descending. Full URL is used directly — no store prefix needed.
+  // ── Step 1: Get product URLs from analytics/pages (db.page_views) ────────────
   const since = new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString();
   const pvRows = (db.page_views || []).filter(p => p.channel_id === channelId && p.viewed_at >= since);
- return pvRows;
+
   const byUrl = {};
   for (const pv of pvRows) {
     const url = pv.url; if (!url) continue;
-    if (!byUrl[url]) byUrl[url] = { url, title: pv.page_title || '', views: 0, sessions: new Set(),
-      totalDuration: 0, totalScroll: 0, totalEngagement: 0, exits: 0 };
+    if (!byUrl[url]) byUrl[url] = { url, title: pv.page_title || '', views: 0, sessions: new Set() };
     byUrl[url].views++;
     byUrl[url].sessions.add(pv.session_id);
-    byUrl[url].totalDuration   += pv.duration_sec    || 0;
-    byUrl[url].totalScroll     += pv.max_scroll_pct  || 0;
-    byUrl[url].totalEngagement += pv.engagement_score|| 0;
-    if (pv.exit_event) byUrl[url].exits++;
+    if (pv.page_title && pv.page_title.length > (byUrl[url].title||'').length) byUrl[url].title = pv.page_title;
   }
-  r
 
-  // Same shape as analytics/pages response, filtered to product-like URLs, sorted by views
   const analyticsPages = Object.values(byUrl)
-    .map(p => ({
-      url:              p.url,
-      title:            p.title,
-      views:            p.views,
-      unique_visitors:  p.sessions.size,
-      avg_duration_sec: p.views ? Math.round(p.totalDuration   / p.views) : 0,
-      avg_scroll_pct:   p.views ? Math.round(p.totalScroll     / p.views) : 0,
-      avg_engagement:   p.views ? Math.round(p.totalEngagement / p.views) : 0,
-      exit_rate:        p.views ? Math.round((p.exits / p.views) * 100) : 0,
-    }))
     .filter(p => isProductUrl(p.url))
     .sort((a, b) => b.views - a.views);
-  
-  console.log(`[AutoCards] analytics/pages product URLs: ${analyticsPages.length} (from ${pvRows.length} total page_views)`);
-  analyticsPages.slice(0, 8).forEach((p, i) =>
-    console.log(`  #${i+1} views=${p.views} unique=${p.unique_visitors} avg_dur=${p.avg_duration_sec}s  ${p.url}`)
-  );
 
-  if (analyticsPages.length === 0) {
-    throw new Error(
-      'No product pages found in Analytics → Pages data. ' +
-      'Install the tracking snippet on your store so page visits are recorded, ' +
-      'then auto-detect will use the most-viewed product pages automatically.'
-    );
+  console.log(`[AutoCards] analytics/pages: ${analyticsPages.length} product URLs from ${pvRows.length} page_views`);
+  analyticsPages.slice(0, 8).forEach((p, i) => console.log(`  #${i+1} views=${p.views}  ${p.url}`));
+
+  // ── Step 2: Build catalog lookup map (URL → {name, price, image}) ────────────
+  // product_catalog has scraped title+price+image for every tracked URL.
+  // Use it to fill data without re-scraping — images come from here directly.
+  const catalogMap = {};
+  for (const c of (db.product_catalog || [])) {
+    if (c.url) catalogMap[c.url] = c;
   }
 
-  const candidates = analyticsPages.map(p => ({ name: p.title, url: p.url, views: p.views, score: p.views }));
-  console.log(`[AutoCards] ${candidates.length} product page candidates`);
+  // ── Step 3: Build candidates list ─────────────────────────────────────────────
+  // Primary: analytics/pages product URLs (most-viewed first)
+  // Fallback: product_catalog items (when page_views is empty — e.g. tracker not yet installed)
+  let candidates = [];
+  if (analyticsPages.length > 0) {
+    candidates = analyticsPages.map(p => {
+      const cat = catalogMap[p.url] || {};
+      return { url: p.url, name: cat.name || p.title || '', price: cat.price || '', image: cat.image || '', views: p.views, _from_analytics: true };
+    });
+  } else {
+    // Fallback: use product_catalog ranked by cart frequency, then Shopify API
+    console.log(`[AutoCards] page_views empty — falling back to product_catalog + Shopify API`);
+    const shopUrl = getShopUrl(db, channelId) || inferStoreBaseUrl(db);
+    if (shopUrl) {
+      try {
+        const shopifyProducts = await fetchShopifyProducts(shopUrl, 50);
+        const seededAt = new Date().toISOString();
+        for (const sp of shopifyProducts) {
+          const ei = db.product_catalog.findIndex(c => c.url === sp.url);
+          const entry = { channel_id: channelId, name: sp.name, url: sp.url, price: sp._price, image: sp.image, _seeded_at: seededAt };
+          if (ei >= 0) db.product_catalog[ei] = { ...db.product_catalog[ei], ...entry };
+          else db.product_catalog.push(entry);
+          catalogMap[sp.url] = entry;
+        }
+        db.save();
+        console.log(`[AutoCards] Shopify fallback: ${shopifyProducts.length} products loaded`);
+        candidates = shopifyProducts.map(sp => ({ url: sp.url, name: sp.name, price: sp._price, image: sp.image, views: 0, _shopify: true, _title: sp.name, _imageUrl: sp.image }));
+      } catch (e) {
+        console.warn(`[AutoCards] Shopify fallback failed: ${e.message}`);
+      }
+    }
+    if (candidates.length === 0) {
+      // Last resort: use whatever is in product_catalog
+      candidates = (db.product_catalog || [])
+        .filter(c => c.channel_id === channelId && c.url && c.image)
+        .map(c => ({ url: c.url, name: c.name || '', price: c.price || '', image: c.image || '', views: 0 }));
+    }
+  }
+
+  console.log(`[AutoCards] ${candidates.length} candidates ready`);
 
   const cards = [];
   const productConfigCards = [];
@@ -458,30 +476,44 @@ async function buildAutoProductCards(channelId, cleanName, count = 4) {
     }
 
     // ── Get title + price + image ─────────────────────────────────────────────
-    // For Shopify-API candidates: data already validated, skip HTTP scrape.
-    // For analytics candidates: scrape the page to confirm title+price+image.
+    // Priority: catalog data (already scraped) → Shopify API → scrape live
     let title = '', price = '', imageUrl = '';
     const link = hot.url;
 
-    if (hot._shopify && hot._title && hot._imageUrl) {
-      // Shopify API gave us confirmed data
-      title    = hot._title;
-      price    = hot._price || '';
-      imageUrl = hot._imageUrl;
-      console.log(`[AutoCards] Shopify product "${title}" — using API data directly`);
-    } else {
+    // 1. Use data already on the candidate (from catalog or Shopify API)
+    title    = (hot.name  || hot._title    || '').trim();
+    price    = (hot.price || hot._price    || '').trim();
+    imageUrl = (hot.image || hot._imageUrl || '').trim();
+
+    // 2. Fill gaps from product_catalog (has images from tracker scraping)
+    const catEntry = catalogMap[hot.url];
+    if (catEntry) {
+      if (!title)    title    = (catEntry.name  || '').trim();
+      if (!price)    price    = (catEntry.price || '').trim();
+      if (!imageUrl) imageUrl = (catEntry.image || '').trim();
+    }
+
+    // 3. Only scrape if image is still missing (title/price can be inferred but image is required)
+    if (!imageUrl || !title || !price) {
       try {
+        console.log(`[AutoCards] Scraping for missing data: title=${!!title} price=${!!price} image=${!!imageUrl} — ${hot.url}`);
         const scraped = await scrapeProductData(hot.url);
-        title    = (scraped.title     || '').trim();
-        price    = (scraped.price     || '').trim();
-        imageUrl = (scraped.image_url || '').trim();
+        if (!title)    title    = (scraped.title     || '').trim();
+        if (!price)    price    = (scraped.price     || '').trim();
+        if (!imageUrl) imageUrl = (scraped.image_url || '').trim();
+        // Save to catalog so future calls skip scraping
+        if (scraped.image_url) {
+          const ei = db.product_catalog.findIndex(c => c.url === hot.url);
+          const entry = { channel_id: channelId, name: scraped.title || title, url: hot.url, price: scraped.price || price, image: scraped.image_url };
+          if (ei >= 0) db.product_catalog[ei] = { ...db.product_catalog[ei], ...entry };
+          else db.product_catalog.push(entry);
+          catalogMap[hot.url] = entry;
+        }
       } catch (e) {
-        console.warn(`[AutoCards] Skip "${hot.name}" — scrape failed: ${e.message}`);
-        continue;
+        console.warn(`[AutoCards] Scrape failed for "${hot.url}": ${e.message}`);
       }
-      // Fall back to analytics name/price if scraper couldn't extract them
-      if (!title) title = (hot.name  || '').trim();
-      if (!price) price = (hot.price || '').trim();
+    } else {
+      console.log(`[AutoCards] Using stored data for "${title}" — no scrape needed`);
     }
 
     if (!title)    { console.log(`[AutoCards] Skip "${hot.url}" — no title`);    continue; }
