@@ -395,29 +395,51 @@ async function buildAutoProductCards(channelId, cleanName, count = 4) {
     console.log(`[AutoCards] Created gallery folder "${folderName}"`);
   }
 
-  // ── Source A: analytics-ranked candidates ─────────────────────────────────
-  let candidates = computeHotProducts(db, channelId, COUNT * 4);
-
-  // ── Source B: Shopify products.json (used when analytics is sparse / 0) ───
-  // If settings.shop_url is set, always fetch Shopify as a fallback pool so we
-  // always have real product data even on a fresh install with no analytics yet.
+  // ── Always fetch live from Shopify when shop_url is configured ──────────────
+  // This ensures auto-detect always has fresh products without any manual sync.
+  // Analytics signals (page_views, cart_events) are used to RANK them — Shopify
+  // API is the product data source.
   const shopUrl = getShopUrl(db, channelId) || inferStoreBaseUrl(db);
-  if (shopUrl && candidates.length < COUNT) {
-    console.log(`[AutoCards] Analytics gave ${candidates.length} candidates — trying Shopify API at ${shopUrl}`);
+  let shopifyPool = [];
+  if (shopUrl) {
     try {
-      const shopifyProducts = await fetchShopifyProducts(shopUrl, 20);
-      console.log(`[AutoCards] Shopify API returned ${shopifyProducts.length} products`);
-      // Merge: analytics candidates first (higher score), then Shopify products not already present
-      const existingUrls = new Set(candidates.map(c => c.url));
-      for (const sp of shopifyProducts) {
-        if (!existingUrls.has(sp.url)) candidates.push(sp);
+      shopifyPool = await fetchShopifyProducts(shopUrl, 50);
+      console.log(`[AutoCards] Live Shopify fetch: ${shopifyPool.length} products from ${shopUrl}`);
+      // Also update catalog in background so analytics can rank them next time
+      const seededAt = new Date().toISOString();
+      for (const sp of shopifyPool) {
+        const ei = db.product_catalog.findIndex(c => c.url === sp.url);
+        const entry = { channel_id: channelId, name: sp.name, url: sp.url, price: sp._price, image: sp.image, handle: sp.url.split('/').pop(), _seeded_at: seededAt };
+        if (ei >= 0) db.product_catalog[ei] = { ...db.product_catalog[ei], ...entry };
+        else db.product_catalog.push(entry);
       }
+      db.save();
     } catch (e) {
-      console.warn(`[AutoCards] Shopify API failed: ${e.message}`);
+      console.warn(`[AutoCards] Live Shopify fetch failed: ${e.message}`);
     }
   }
 
-  console.log(`[AutoCards] Total candidates after merge: ${candidates.length}`);
+  // ── Rank Shopify products by analytics signals ────────────────────────────
+  // Get analytics scores from computeHotProducts, then apply to Shopify pool
+  const analyticsScores = computeHotProducts(db, channelId, 100);
+  const scoreMap = {};
+  for (const p of analyticsScores) scoreMap[p.url] = p.score;
+
+  // Sort Shopify pool: analytics-scored first, then by Shopify position (featured order)
+  shopifyPool.sort((a, b) => {
+    const sa = scoreMap[a.url] || 0;
+    const sb = scoreMap[b.url] || 0;
+    return sb - sa; // higher analytics score first
+  });
+
+  // Merge: analytics-only candidates + Shopify pool (deduplicated)
+  const analyticsOnly = analyticsScores.filter(p => !shopifyPool.find(s => s.url === p.url));
+  const candidates = [
+    ...shopifyPool,          // Shopify products ranked by analytics
+    ...analyticsOnly,        // any analytics-only entries not in Shopify (edge case)
+  ];
+
+  console.log(`[AutoCards] ${candidates.length} candidates (${shopifyPool.length} from Shopify, ${analyticsOnly.length} analytics-only)`);
 
   const cards = [];
   const productConfigCards = [];
@@ -1424,15 +1446,36 @@ export function computeHotProducts(db, channelId, limit = 10) {
     }
   }
 
-  // ── Source 4: product_catalog ─────────────────────────────────────────────────
-  for (const p of (db.product_catalog || [])) {
-    if (p.channel_id !== channelId) continue;
-    const key = (p.name || p.url || '').toLowerCase(); if (!key) continue;
-    if (!scores[key]) scores[key] = { name: p.name || '', url: p.url || '', image: p.image || '', price: p.price || '', views: 0, carts: 0, page_views: 0 };
+  // ── Source 4: product_catalog — sorted by Shopify position (merchandising order) ─
+  // Give each catalog product a small position-based base score so that when there is
+  // no analytics data the ordering still reflects the store's own featured order.
+  const catalogItems = (db.product_catalog || []).filter(p => p.channel_id === channelId && (p.url || p.name));
+  catalogItems.forEach((p, pos) => {
+    const key = (p.name || p.url || '').toLowerCase();
+    const posScore = Math.max(0, 50 - pos); // first product = 50, 50th+ = 0
+    if (!scores[key]) scores[key] = { name: p.name || '', url: p.url || '', image: p.image || '', price: p.price || '', views: 0, carts: 0, page_views: 0, _pos_score: posScore };
+    else scores[key]._pos_score = (scores[key]._pos_score || 0) + posScore;
     if (!scores[key].url   && p.url)   scores[key].url   = p.url;
     if (!scores[key].name  && p.name)  scores[key].name  = p.name;
     if (!scores[key].image && p.image) scores[key].image = p.image;
     if (!scores[key].price && p.price) scores[key].price = p.price;
+  });
+
+  // ── Cross-match: boost catalog products that appear in cart events by name ────
+  // Normalise to first 3 words for fuzzy matching (handles long product names)
+  function normName(n) { return (n||'').toLowerCase().replace(/[^a-z0-9 ]/g,'').split(/\s+/).slice(0,3).join(' '); }
+  for (const key of Object.keys(scores)) {
+    const norm = normName(scores[key].name);
+    if (!norm) continue;
+    for (const c of (db.cart_events || [])) {
+      if (c.channel_id !== channelId) continue;
+      try {
+        const items = c.products ? JSON.parse(c.products) : [];
+        for (const item of items) {
+          if (normName(item.name) === norm) { scores[key].carts++; break; }
+        }
+      } catch (_) {}
+    }
   }
 
   // ── For products with no URL: construct one from storeBase + /products/slug ───
@@ -1440,19 +1483,18 @@ export function computeHotProducts(db, channelId, limit = 10) {
     for (const p of Object.values(scores)) {
       if (!p.url && p.name) {
         p.url = `${storeBase}/products/${nameToSlug(p.name)}`;
-        console.log(`[computeHotProducts] Constructed URL for "${p.name}": ${p.url}`);
       }
     }
   }
 
   const all = Object.values(scores)
-    .map(p => ({ ...p, score: (p.page_views * 2) + (p.views * 1) + (p.carts * 3) }))
-    .filter(p => p.url)   // must have a URL to scrape
+    .map(p => ({ ...p, score: (p.page_views * 2) + (p.views * 1) + (p.carts * 3) + (p._pos_score || 0) }))
+    .filter(p => p.url)
     .sort((a, b) => b.score - a.score)
     .slice(0, limit);
 
   console.log(`[computeHotProducts] channel=${channelId} → ${all.length} candidates`);
-  all.forEach((p, i) => console.log(`  #${i+1} "${p.name}" score=${p.score} url=${p.url}`));
+  all.slice(0, 6).forEach((p, i) => console.log(`  #${i+1} "${p.name.substring(0,40)}" score=${p.score} (page_views=${p.page_views} carts=${p.carts} pos=${p._pos_score||0})`));
   return all;
 }
 
