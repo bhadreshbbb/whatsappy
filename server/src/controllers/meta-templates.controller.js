@@ -400,7 +400,7 @@ async function buildAutoProductCards(channelId, cleanName, count = 4) {
   // pages, rank by views descending. Full URL is used directly — no store prefix needed.
   const since = new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString();
   const pvRows = (db.page_views || []).filter(p => p.channel_id === channelId && p.viewed_at >= since);
-
+ return pvRows;
   const byUrl = {};
   for (const pv of pvRows) {
     const url = pv.url; if (!url) continue;
@@ -413,7 +413,7 @@ async function buildAutoProductCards(channelId, cleanName, count = 4) {
     byUrl[url].totalEngagement += pv.engagement_score|| 0;
     if (pv.exit_event) byUrl[url].exits++;
   }
-  return byUrl
+  r
 
   // Same shape as analytics/pages response, filtered to product-like URLs, sorted by views
   const analyticsPages = Object.values(byUrl)
