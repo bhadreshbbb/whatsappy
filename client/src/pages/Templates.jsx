@@ -51,16 +51,17 @@ const STATUS_CFG = {
 };
 
 const BLANK_CARD = {
-  body: '{{1}}\n{{2}}',
-  buttons: [{ type: 'URL', text: 'Buy Now', url: 'https://yourstore.com/{{3}}' }],
+  // {{1}} = title + price combined (one variable, newline-separated — simplest Meta-compliant structure)
+  // {{2}} = product link (URL button suffix only — Meta appends it to the button's fixed URL prefix)
+  body: '{{1}}',
+  buttons: [{ type: 'URL', text: 'Shop Now', url: 'https://yourstore.com/products/{{2}}' }],
   image_id: '', header_media_id: '',
   source: 'manual', scrape_url: '',
-  var_map: { '1': 'product_title', '2': 'product_price', '3': 'product_link' },
-  // Enhanced fields for dynamic product data & Meta approval
-  fetched_images: [],          // [{url, alt}] from URL scrape (multiple images)
-  selected_fetch_image: '',    // currently selected fetched image URL
+  var_map: { '1': 'product_title_price', '2': 'product_link' },
+  fetched_images: [],
+  selected_fetch_image: '',
   product_data: { title: '', price: '', link: '', image_url: '' },
-  example_values: {},          // { varNum: exValue } sent to Meta as example
+  example_values: {},
 };
 const BLANK_TPL = {
   name: '', category: 'MARKETING', language: 'en',
@@ -494,32 +495,81 @@ function CreateView({ form, setForm, error, setError, loading, onSubmit, onBack,
     finally { setHotLoading(false); }
   }
 
-  // Build a card pre-filled from a hot product
+  // Build a card pre-filled from a hot product.
+  // {{1}} = title + price (product_title_price), {{2}} = product_link (URL button suffix)
   function hotToCard(hot) {
-    let slug = hot.url || '';
-    try { slug = new URL(hot.url).pathname.split('/').filter(Boolean).pop() || slug; } catch(_) {}
+    let slug = '';
+    let buttonUrl = 'https://yourstore.com/products/{{2}}';
+    try {
+      const u = new URL(hot.url);
+      const parts = u.pathname.split('/').filter(Boolean);
+      slug = parts.pop() || '';
+      // Reconstruct button base URL: origin + path-prefix + {{2}}
+      const prefix = parts.length ? `${u.origin}/${parts.join('/')}/` : `${u.origin}/`;
+      buttonUrl = `${prefix}{{2}}`;
+    } catch(_) {}
+    const titlePrice = [hot.name, hot.price].filter(Boolean).join('\n');
     return {
       ...BLANK_CARD,
       source: 'auto',
       product_data: { title: hot.name||'', price: hot.price||'', link: hot.url||'', image_url: hot.image||'' },
       selected_fetch_image: hot.image || '',
       fetched_images: hot.image ? [{ url: hot.image, alt: hot.name||'' }] : [],
-      var_map: { '1': 'product_title', '2': 'product_price', '3': 'product_link' },
-      example_values: { '1': hot.name||'Product Name', '2': hot.price||'₹799', '3': slug||'product' },
+      buttons: [{ type: 'URL', text: 'Shop Now', url: buttonUrl }],
+      var_map: { '1': 'product_title_price', '2': 'product_link' },
+      example_values: { '1': titlePrice || 'Product Name\n₹799', '2': slug || 'product-slug' },
       _hot_preview: hot,
     };
   }
 
-  // When Auto-Product Mode is toggled ON: fetch hot products for the preview panel only.
-  // The actual card building (scrape + dual upload + gallery save) happens server-side on submit.
+  // When Auto-Product Mode is toggled ON: call /auto-detect-products to validate, upload, and
+  // return pre-filled cards. On success, populate form.carousel_cards so user can edit before submit.
   async function toggleAutoMode(checked) {
     f('auto_product_mode', checked);
     if (!checked) return;
     setHotLoading(true);
+    setError('');
     try {
-      const d = await fetch(`${BASE}/hot-products?limit=4`, { headers: CH() }).then(r=>r.json());
-      setHotProducts(d.products || []);
-    } catch(_) {} finally { setHotLoading(false); }
+      const res = await fetch(`${BASE}/auto-detect-products`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...CH() },
+        body: JSON.stringify({ count: 4, template_name: form.name || 'auto_products' }),
+      });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || 'Auto-detect failed');
+      if (d.cards && d.cards.length >= 2) {
+        f('carousel_cards', d.cards);
+        setHotProducts(d.products || []);
+      }
+    } catch (e) {
+      setError(`Auto-detect failed: ${e.message}`);
+      f('auto_product_mode', false);
+    } finally {
+      setHotLoading(false);
+    }
+  }
+
+  async function reDetectProducts() {
+    if (hotLoading) return;
+    setHotLoading(true);
+    setError('');
+    try {
+      const res = await fetch(`${BASE}/auto-detect-products`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...CH() },
+        body: JSON.stringify({ count: form.carousel_cards.length || 4, template_name: form.name || 'auto_products' }),
+      });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || 'Re-detect failed');
+      if (d.cards && d.cards.length >= 2) {
+        f('carousel_cards', d.cards);
+        setHotProducts(d.products || []);
+      }
+    } catch (e) {
+      setError(`Re-detect failed: ${e.message}`);
+    } finally {
+      setHotLoading(false);
+    }
   }
 
   async function checkPayload() {
@@ -658,10 +708,13 @@ function CreateView({ form, setForm, error, setError, loading, onSubmit, onBack,
     const card   = cards[idx];
     const varMap = card.var_map || {};
     const exVals = { ...(card.example_values || {}) };
+    let slug = '';
+    try { const u = new URL(hot.url); slug = u.pathname.split('/').filter(Boolean).pop() || ''; } catch(_) {}
     for (const [vn, field] of Object.entries(varMap)) {
-      if (field === 'product_title') exVals[vn] = hot.name  || '';
-      if (field === 'product_price') exVals[vn] = hot.price || '';
-      if (field === 'product_link')  exVals[vn] = hot.url   || '';
+      if (field === 'product_title')       exVals[vn] = hot.name  || '';
+      if (field === 'product_price')       exVals[vn] = hot.price || '';
+      if (field === 'product_title_price') exVals[vn] = [hot.name, hot.price].filter(Boolean).join('\n');
+      if (field === 'product_link')        exVals[vn] = slug || hot.url || '';
     }
     const images = hot.image ? [{ url: hot.image, alt: hot.name || '' }] : [];
     cards[idx] = {
@@ -751,47 +804,73 @@ function CreateView({ form, setForm, error, setError, loading, onSubmit, onBack,
               placeholder="Check out these products picked for you! 🛍️" className="input text-sm" />
           </div>
 
-          {/* ── AUTO MODE: read-only product preview ──────────────────── */}
+          {/* ── AUTO MODE: editable pre-filled card editors ────────────────── */}
           {form.auto_product_mode ? (
-            <div className="flex flex-col gap-3">
-              <div className="flex items-center gap-2">
-                <Flame size={13} className="text-orange-400" />
-                <p className="text-white text-sm font-medium">Auto-Detected Products</p>
-                {hotLoading && <Loader2 size={12} className="animate-spin text-orange-400/70 ml-1" />}
+            <>
+              {/* Banner */}
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <div className="flex items-center gap-2">
+                  <Flame size={13} className="text-orange-400" />
+                  <p className="text-white text-sm font-medium">
+                    Auto-Detected Products
+                    <span className="text-slate-500 font-normal text-xs ml-1">
+                      ({form.carousel_cards.length} cards · validated, uploaded, editable)
+                    </span>
+                  </p>
+                  {hotLoading && <Loader2 size={12} className="animate-spin text-orange-400/70" />}
+                </div>
+                <button onClick={reDetectProducts} disabled={hotLoading}
+                  className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg bg-orange-500/10 border border-orange-500/20 text-orange-400 hover:bg-orange-500/20 disabled:opacity-40 transition-all">
+                  <RefreshCw size={11} className={hotLoading ? 'animate-spin' : ''} /> Re-detect
+                </button>
               </div>
               {hotLoading ? (
-                <div className="text-slate-500 text-xs px-1">Detecting trending products from your analytics…</div>
-              ) : hotProducts.length > 0 ? (
-                <div className="grid grid-cols-1 gap-2">
-                  {hotProducts.slice(0, 4).map((hot, i) => (
-                    <div key={i} className="flex items-center gap-3 rounded-lg bg-white/[0.03] border border-white/[0.06] px-3 py-2">
-                      {(hot.image) && (
-                        <img src={`/api/gallery/proxy?url=${encodeURIComponent(hot.image)}`} alt={hot.name}
-                          className="w-10 h-10 rounded object-cover shrink-0 bg-white/5"
-                          onError={e => { e.target.style.display='none'; }} />
-                      )}
-                      <div className="flex-1 min-w-0">
-                        <p className="text-white text-xs font-medium truncate">{hot.name || 'Product'}</p>
-                        <p className="text-slate-400 text-xs">{hot.price || ''}</p>
-                      </div>
-                      <div className="flex items-center gap-2 shrink-0 text-slate-600 text-xs">
-                        <span title="Views">{hot.views || 0} views</span>
-                        <span title="Cart adds">{hot.carts || 0} carts</span>
-                      </div>
-                    </div>
-                  ))}
+                <div className="rounded-xl bg-orange-500/5 border border-orange-500/20 px-4 py-6 text-center text-xs text-orange-300/80">
+                  <Loader2 size={18} className="animate-spin mx-auto mb-2 text-orange-400/50" />
+                  Validating products · downloading images · uploading to Meta &amp; gallery…
                 </div>
               ) : (
-                <div className="rounded-lg bg-orange-500/5 border border-orange-500/20 px-4 py-3 text-xs text-orange-300/80">
-                  No analytics data yet. Products will be auto-detected once visitors start browsing your store.
-                  The server will build the 4 cards automatically when you submit.
-                </div>
+                <>
+                  {/* Editable card editors — same as manual mode */}
+                  <div className="flex items-center justify-between">
+                    <label className="text-white font-medium text-sm">
+                      Product Cards
+                      <span className="text-slate-500 font-normal text-xs ml-1">({form.carousel_cards.length}/10 — all fields editable)</span>
+                    </label>
+                    {form.carousel_cards.length < 10 && (
+                      <button onClick={addCard} className="var-btn flex items-center gap-1">
+                        <Plus size={11} /> Add Card
+                      </button>
+                    )}
+                  </div>
+                  <div className="flex flex-col gap-4">
+                    {form.carousel_cards.map((card, idx) => (
+                      <CarouselCardEditor key={idx} card={card} idx={idx} totalCards={form.carousel_cards.length}
+                        hotProducts={hotProducts} hotLoading={hotLoading}
+                        galleries={galleries} galleryImages={galleryImages}
+                        pickerCard={pickerCard} selFolder={selFolder}
+                        onSetSelFolder={setSelFolder}
+                        loadFolderImages={loadFolderImages}
+                        onSetPickerCard={setPickerCard}
+                        loadHotProducts={loadHotProducts}
+                        onUpdateCard={(k,v) => updateCard(idx, k, v)}
+                        onSetSource={(s) => setCardSource(idx, s)}
+                        onSetVarMap={(vn, val) => setCardVarMap(idx, vn, val)}
+                        onSetExampleValue={(vn, val) => setExampleValue(idx, vn, val)}
+                        onUpdateProductData={(patch) => updateProductData(idx, patch)}
+                        onAddVar={() => addCardVar(idx)}
+                        onRemoveCard={() => removeCard(idx)}
+                        onAddButton={(t) => addCardButton(idx, t)}
+                        onRemoveButton={(bi) => removeCardButton(idx, bi)}
+                        onUpdateButton={(bi, k, v) => { const cs=[...form.carousel_cards]; cs[idx].buttons[bi]={...cs[idx].buttons[bi],[k]:v}; f('carousel_cards',cs); }}
+                        onSelectImage={(img) => selectCardImage(idx, img)}
+                        onAssignHotProduct={(hot) => assignHotProduct(idx, hot)}
+                      />
+                    ))}
+                  </div>
+                </>
               )}
-              <p className="text-slate-600 text-xs">
-                On submit, the server fetches the top 4 trending products, downloads + uploads all images to gallery,
-                and builds all card fields automatically. Messages use the latest media_id stored in gallery.
-              </p>
-            </div>
+            </>
           ) : (
             <>
               {/* Manual mode: card editors */}
@@ -1633,7 +1712,7 @@ function WaCarouselPreview({ introText, cards = [], productCards = [] }) {
 
   const resolvedCards = cards.map((card, i) => {
     const pc = productCards[i] || {};
-    const vm = card.var_map || { '1':'product_title','2':'product_price','3':'product_link' };
+    const vm = card.var_map || { '1':'product_title_price','2':'product_link' };
     const sampleProduct = pc.title ? null : { title: ['Blue Kurti','Cotton Saree','Ethnic Wear'][i%3], price: [`₹799`,`₹1,299`,`₹599`][i%3], link: 'https://store.com/p' };
     const text = resolveText(card.body, vm, pc.title ? pc : (card.product_data || {}), sampleProduct);
     // Raw external URL — used as direct fallback when gallery/proxy fails

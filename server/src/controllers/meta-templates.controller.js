@@ -131,8 +131,8 @@ function buildMetaComponents(tpl) {
 
       // 3. BUTTONS — max 2 per card (Meta spec)
       // CRITICAL: Meta requires URL button variable to always be {{1}} (button-scoped).
-      // We store {{3}} internally (to track which var_map entry = product_link),
-      // but normalise to {{1}} in the Meta payload.
+      // We store {{2}} internally (body uses {{1}} for title+price, button uses {{2}} for link),
+      // but normalise any {{N}} in the button URL to {{1}} in the Meta payload.
       if (card.buttons?.length) {
         const buttons = card.buttons.slice(0, 2).map(b => {
           const bType = String(b.type || '').toUpperCase();
@@ -335,9 +335,9 @@ async function autoUploadTemplateImages(channelId, carouselCards, templateName =
 // Called at template creation time. Scrapes, downloads, and dual-uploads each
 // hot product image (media_id for send + file_handle for template creation).
 // Every image is ALWAYS saved to the gallery with both IDs.
-async function buildAutoProductCards(channelId, cleanName) {
+async function buildAutoProductCards(channelId, cleanName, count = 4) {
   const db = getDb();
-  const COUNT = 4;
+  const COUNT = Math.max(2, count);
   // Fetch more candidates than needed — some may fail validation (missing title/price/image)
   const candidates = computeHotProducts(db, channelId, COUNT * 3);
 
@@ -435,11 +435,25 @@ async function buildAutoProductCards(channelId, cleanName) {
     }
 
     // ── Add card (only reached when title + price + image + media_id all confirmed) ──
+    // Variable structure:
+    //   {{1}} = product_title_price  → "Title\n₹Price"  (one variable, Meta-compliant)
+    //   {{2}} = product_link         → URL button suffix (slug appended to fixed button URL prefix)
+    let slug = link;
+    let buttonUrlBase = 'https://yourstore.com/products/';
+    try {
+      const u = new URL(link);
+      const parts = u.pathname.split('/').filter(Boolean);
+      slug = parts.pop() || slug;
+      buttonUrlBase = parts.length ? `${u.origin}/${parts.join('/')}/` : `${u.origin}/`;
+    } catch(_) {}
+
     cards.push({
-      body: '{{1}}\n{{2}}', buttons: [], source: 'auto',
+      body: '{{1}}',
+      buttons: [{ type: 'URL', text: 'Shop Now', url: `${buttonUrlBase}{{2}}` }],
+      source: 'auto',
       image_id: imageId, file_handle: fileHandle, media_id: mediaId,
-      var_map:        { '1': 'product_title', '2': 'product_price' },
-      example_values: { '1': title, '2': price },
+      var_map:        { '1': 'product_title_price', '2': 'product_link' },
+      example_values: { '1': `${title}\n${price}`, '2': slug },
       product_data:   { title, price, link, image_url: imageUrl },
       selected_fetch_image: imageUrl,
       fetched_images: [{ url: imageUrl, alt: title }],
@@ -464,6 +478,37 @@ async function buildAutoProductCards(channelId, cleanName) {
   db.save();
   console.log(`[AutoCards] ${cards.length}/${candidates.length} candidates passed → gallery "${folderName}"`);
   return { cards, productConfigCards };
+}
+
+// ── Auto-detect products endpoint — validate + upload BEFORE template creation ─
+// POST /api/meta-templates/auto-detect-products
+// Flow: computeHotProducts → scrapeProductData (validates title+price+image) →
+//       downloadImage → uploadMedia (media_id) + uploadMediaResumable (file_handle) →
+//       save to gallery → return ready-to-edit card data to the UI.
+// Only products that pass ALL three checks (title, price, main image) are returned.
+export async function autoDetectProducts(req, res) {
+  try {
+    const channelId = req.headers['x-channel-id'] || 'demo';
+    const { count = 4, template_name = '' } = req.body;
+    const cleanName = (template_name || 'auto_products').toLowerCase().replace(/[^a-z0-9_]/g, '_');
+
+    const { cards, productConfigCards } = await buildAutoProductCards(channelId, cleanName, Number(count));
+
+    res.json({
+      cards,            // ready-to-use carousel card objects (editable in UI)
+      products: productConfigCards.map(c => ({
+        title:    c.title,
+        price:    c.price,
+        link:     c.link,
+        image:    c._hot_image_url,
+        media_id: c.media_id,
+      })),
+      validated: cards.length,
+    });
+  } catch (err) {
+    console.error('[AutoDetect] Error:', err.message);
+    res.status(400).json({ error: err.message });
+  }
 }
 
 // ── Preview / dry-run payload (no submission to Meta) ─────────────────────────
@@ -694,15 +739,15 @@ export async function getSendPayload(req, res) {
           : null),
       folder_name:   tpl.product_config?.folder_name || null,
       products: (tpl.product_config?.cards || []).map((c, i) => ({
-        card: i + 1,
-        title: c.title   || '',
-        price: c.price   || '',
-        link:  c.link    || '',
-        image: c._hot_image_url || '',
-        media_id: c.header_media_id || '',
-        score: c._hot_score || 0,
-        carts: c._hot_carts || 0,
-        views: c._hot_views || 0,
+        card:     i + 1,
+        title:    c.title          || '',
+        price:    c.price          || '',
+        link:     c.link           || '',
+        image:    c._hot_image_url || '',
+        media_id: c.media_id       || '',   // numeric ID for /messages
+        score:    c._hot_score     || 0,
+        carts:    c._hot_carts     || 0,
+        views:    c._hot_views     || 0,
       })),
       template_structure: {
         body:        tpl.body || '',
@@ -769,11 +814,29 @@ export async function createTemplate(req, res) {
       // manual mode:       upload images provided by the client (existing autoUploadTemplateImages)
       let resolvedCards;
       if (is_carousel && auto_product_mode) {
-        // Fully automatic: ignore client-provided carousel_cards.
-        // buildAutoProductCards: computeHotProducts → scrape → downloadImage →
-        //   uploadMedia (media_id for send) + uploadMediaResumable (file_handle for template creation)
-        //   → always saves both IDs to gallery
-        const { cards, productConfigCards } = await buildAutoProductCards(channelId, cleanName);
+        // If client already pre-detected and uploaded cards (via /auto-detect-products), reuse them.
+        // Otherwise run full buildAutoProductCards (fallback for direct submit without pre-detect).
+        const alreadyUploaded = Array.isArray(carousel_cards) && carousel_cards.length >= 2
+          && carousel_cards.every(c => c.media_id || c.file_handle);
+
+        let cards, productConfigCards;
+        if (alreadyUploaded) {
+          cards = carousel_cards;
+          productConfigCards = carousel_cards.map(c => ({
+            title:       c.product_data?.title  || c.example_values?.['1']?.split('\n')[0] || '',
+            price:       c.product_data?.price  || c.example_values?.['1']?.split('\n')[1] || '',
+            link:        c.product_data?.link   || '',
+            image:       c.product_data?.image_url || c._hot_image_url || '',
+            media_id:    c.media_id || '',
+            file_handle: c.file_handle || '',
+          }));
+          console.log(`[MetaTemplates] auto_product_mode: reusing ${cards.length} pre-uploaded cards from client`);
+        } else {
+          // Full auto: scrape + dual-upload
+          ({ cards, productConfigCards } = await buildAutoProductCards(channelId, cleanName));
+          console.log(`[MetaTemplates] auto_product_mode: built ${cards.length} cards via buildAutoProductCards`);
+        }
+
         resolvedCards = cards;
         tpl.carousel_cards = resolvedCards;
         tpl.product_config = {
