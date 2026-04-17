@@ -4,7 +4,7 @@ import {
   AlertCircle, Settings2, Send, Image, Type, Link,
   Zap, Copy, Check, FileText, X, LayoutGrid, ChevronLeft, ChevronRight,
   Globe, Loader2, ImagePlus, ShoppingCart, Flame, Eye, Sparkles,
-  Phone, MessageSquare, ExternalLink, Pencil
+  Phone, MessageSquare, ExternalLink
 } from "lucide-react";
 
 const BASE        = `/api/meta-templates`;
@@ -213,40 +213,6 @@ export default function Templates() {
     setView('config');
   }
   function openCreate() { setView('create'); setError(''); setForm(BLANK_TPL); loadGallery(); }
-  function openEdit(tpl) {
-    if (tpl.meta_status === 'APPROVED' || tpl.meta_status === 'PENDING') {
-      // Approved/pending — structure is locked at Meta; only product data can change
-      openConfig(tpl);
-    } else {
-      // Draft / error — re-open creation form with existing data pre-filled
-      const editForm = {
-        ...BLANK_TPL,
-        name: tpl.name || '',
-        category: tpl.category || 'MARKETING',
-        language: tpl.language || 'en',
-        is_carousel: tpl.is_carousel ?? true,
-        auto_product_mode: tpl.auto_product_mode ?? false,
-        header_type: tpl.header_type || 'NONE',
-        header_text: tpl.header_text || '',
-        body: tpl.body || '',
-        footer: tpl.footer || '',
-        buttons: tpl.buttons || [],
-        variable_labels: tpl.variable_labels || {},
-        carousel_cards: (tpl.carousel_cards || []).map(c => ({
-          ...BLANK_CARD, ...c,
-          product_data:       c.product_data       || BLANK_CARD.product_data,
-          var_map:            c.var_map             || BLANK_CARD.var_map,
-          example_values:     c.example_values      || {},
-          fetched_images:     c.fetched_images      || [],
-          selected_fetch_image: c.selected_fetch_image || '',
-        })),
-      };
-      setForm(editForm);
-      setError('');
-      loadGallery();
-      setView('create');
-    }
-  }
   function copyName(name) { navigator.clipboard.writeText(name); setCopied(name); setTimeout(()=>setCopied(null),1500); }
 
   async function checkSendPayload(tpl) {
@@ -404,15 +370,11 @@ export default function Templates() {
                   {tpl.rejected_reason && <p className="text-xs text-red-400 mt-1">Rejected: {tpl.rejected_reason}</p>}
                 </div>
 
-                {/* Right: actions — Edit + Delete (+ subtle refresh for status sync) */}
+                {/* Right: actions — Delete (+ subtle refresh for status sync) */}
                 <div className="flex items-center gap-1.5 shrink-0">
                   <button onClick={() => handleRefresh(tpl)} disabled={refreshing[tpl.id]} title="Sync status from Meta"
                     className="p-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-slate-600 hover:text-slate-300 disabled:opacity-40 transition-all">
                     <RefreshCw size={12} className={refreshing[tpl.id] ? 'animate-spin' : ''} />
-                  </button>
-                  <button onClick={() => openEdit(tpl)} title={tpl.meta_status === 'APPROVED' || tpl.meta_status === 'PENDING' ? 'Edit products' : 'Edit template'}
-                    className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg bg-blue-500/10 hover:bg-blue-500/20 border border-blue-500/20 text-blue-400 hover:text-blue-300 transition-all">
-                    <Pencil size={12} /> Edit
                   </button>
                   <button onClick={() => deleteTpl(tpl)} title="Delete template"
                     className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg bg-white/5 hover:bg-red-500/20 border border-white/5 hover:border-red-500/20 text-slate-500 hover:text-red-400 transition-all">
@@ -548,19 +510,15 @@ function CreateView({ form, setForm, error, setError, loading, onSubmit, onBack,
     };
   }
 
-  // When Auto-Product Mode is toggled ON: immediately fetch & fill all cards from hot products
+  // When Auto-Product Mode is toggled ON: fetch hot products for the preview panel only.
+  // The actual card building (scrape + dual upload + gallery save) happens server-side on submit.
   async function toggleAutoMode(checked) {
     f('auto_product_mode', checked);
     if (!checked) return;
     setHotLoading(true);
     try {
-      const d = await fetch(`${BASE}/hot-products?limit=10`, { headers: CH() }).then(r=>r.json());
-      const hots = d.products || [];
-      setHotProducts(hots);
-      if (hots.length === 0) return;
-      const newCards = hots.slice(0, 10).map(hot => hotToCard(hot));
-      while (newCards.length < 2) newCards.push({ ...BLANK_CARD, source: 'auto' });
-      f('carousel_cards', newCards);
+      const d = await fetch(`${BASE}/hot-products?limit=4`, { headers: CH() }).then(r=>r.json());
+      setHotProducts(d.products || []);
     } catch(_) {} finally { setHotLoading(false); }
   }
 
@@ -762,7 +720,7 @@ function CreateView({ form, setForm, error, setError, loading, onSubmit, onBack,
           </div>
 
           {/* ── CAROUSEL PRODUCT TEMPLATE ─────────────────────────── */}
-          {/* Auto-product mode banner */}
+          {/* Auto-product mode toggle */}
           <div className={`rounded-xl px-4 py-3 border transition-all ${form.auto_product_mode ? 'bg-orange-500/10 border-orange-500/30' : 'bg-white/[0.02] border-white/10'}`}>
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
@@ -771,7 +729,7 @@ function CreateView({ form, setForm, error, setError, loading, onSubmit, onBack,
                   <p className="text-white text-sm font-medium">Auto-Product Mode</p>
                   <p className="text-slate-500 text-xs">
                     {form.auto_product_mode
-                      ? `Auto-filled ${form.carousel_cards.length} products from tracking data · refreshes every 6h`
+                      ? 'System auto-detects 4 trending products · images uploaded automatically · refreshes every 6h'
                       : 'Fill cards automatically from most-viewed + abandoned-cart products'}
                   </p>
                 </div>
@@ -781,26 +739,6 @@ function CreateView({ form, setForm, error, setError, loading, onSubmit, onBack,
                 <span className="toggle-slider" />
               </label>
             </div>
-            {hotLoading && (
-              <div className="mt-3 flex items-center gap-2 text-orange-400/70 text-xs">
-                <Loader2 size={11} className="animate-spin"/> Fetching trending products…
-              </div>
-            )}
-            {/* Bulk capture button — appears when auto-mode cards have images not yet in gallery */}
-            {form.auto_product_mode && !hotLoading && form.carousel_cards.some(c => !c.image_id && (c.selected_fetch_image || c.product_data?.image_url)) && (
-              <div className="mt-3 flex items-center gap-3 flex-wrap">
-                <button
-                  onClick={captureAllImages}
-                  disabled={bulkCapturing}
-                  className="flex items-center gap-1.5 text-xs bg-orange-600/20 hover:bg-orange-600/30 border border-orange-500/40 text-orange-300 px-3 py-1.5 rounded-lg disabled:opacity-50 transition-all">
-                  {bulkCapturing ? <Loader2 size={11} className="animate-spin"/> : <ImagePlus size={11}/>}
-                  {bulkCapturing ? bulkCaptureStatus : 'Capture All Images → Upload to Gallery'}
-                </button>
-                {bulkCaptureStatus && !bulkCapturing && (
-                  <span className="text-green-400 text-xs flex items-center gap-1"><Check size={10}/>{bulkCaptureStatus}</span>
-                )}
-              </div>
-            )}
           </div>
 
           {/* Intro */}
@@ -813,48 +751,88 @@ function CreateView({ form, setForm, error, setError, loading, onSubmit, onBack,
               placeholder="Check out these products picked for you! 🛍️" className="input text-sm" />
           </div>
 
-          {/* Cards header */}
-          <div className="flex items-center justify-between">
-            <label className="text-white font-medium text-sm">
-              Product Cards
-              <span className="text-slate-500 font-normal text-xs ml-1">
-                ({form.carousel_cards.length}/10 — min 2
-                {form.auto_product_mode ? ' · auto-mode' : ''})
-              </span>
-            </label>
-            {form.carousel_cards.length < 10 && (
-              <button onClick={addCard} className={`var-btn flex items-center gap-1 ${form.auto_product_mode ? 'text-orange-300 border-orange-500/30' : ''}`}>
-                <Plus size={11} />
-                {form.auto_product_mode ? 'Add Next Hot Product' : 'Add Card'}
-              </button>
-            )}
-          </div>
-
-          <div className="flex flex-col gap-4">
-            {form.carousel_cards.map((card, idx) => (
-              <CarouselCardEditor key={idx} card={card} idx={idx} totalCards={form.carousel_cards.length}
-                hotProducts={hotProducts} hotLoading={hotLoading}
-                galleries={galleries} galleryImages={galleryImages}
-                pickerCard={pickerCard} selFolder={selFolder}
-                onSetSelFolder={setSelFolder}
-                loadFolderImages={loadFolderImages}
-                onSetPickerCard={setPickerCard}
-                loadHotProducts={loadHotProducts}
-                onUpdateCard={(k,v) => updateCard(idx, k, v)}
-                onSetSource={(s) => setCardSource(idx, s)}
-                onSetVarMap={(vn, val) => setCardVarMap(idx, vn, val)}
-                onSetExampleValue={(vn, val) => setExampleValue(idx, vn, val)}
-                onUpdateProductData={(patch) => updateProductData(idx, patch)}
-                onAddVar={() => addCardVar(idx)}
-                onRemoveCard={() => removeCard(idx)}
-                onAddButton={(t) => addCardButton(idx, t)}
-                onRemoveButton={(bi) => removeCardButton(idx, bi)}
-                onUpdateButton={(bi, k, v) => { const cs=[...form.carousel_cards]; cs[idx].buttons[bi]={...cs[idx].buttons[bi],[k]:v}; f('carousel_cards',cs); }}
-                onSelectImage={(img) => selectCardImage(idx, img)}
-                onAssignHotProduct={(hot) => assignHotProduct(idx, hot)}
-              />
-            ))}
-          </div>
+          {/* ── AUTO MODE: read-only product preview ──────────────────── */}
+          {form.auto_product_mode ? (
+            <div className="flex flex-col gap-3">
+              <div className="flex items-center gap-2">
+                <Flame size={13} className="text-orange-400" />
+                <p className="text-white text-sm font-medium">Auto-Detected Products</p>
+                {hotLoading && <Loader2 size={12} className="animate-spin text-orange-400/70 ml-1" />}
+              </div>
+              {hotLoading ? (
+                <div className="text-slate-500 text-xs px-1">Detecting trending products from your analytics…</div>
+              ) : hotProducts.length > 0 ? (
+                <div className="grid grid-cols-1 gap-2">
+                  {hotProducts.slice(0, 4).map((hot, i) => (
+                    <div key={i} className="flex items-center gap-3 rounded-lg bg-white/[0.03] border border-white/[0.06] px-3 py-2">
+                      {(hot.image) && (
+                        <img src={`/api/gallery/proxy?url=${encodeURIComponent(hot.image)}`} alt={hot.name}
+                          className="w-10 h-10 rounded object-cover shrink-0 bg-white/5"
+                          onError={e => { e.target.style.display='none'; }} />
+                      )}
+                      <div className="flex-1 min-w-0">
+                        <p className="text-white text-xs font-medium truncate">{hot.name || 'Product'}</p>
+                        <p className="text-slate-400 text-xs">{hot.price || ''}</p>
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0 text-slate-600 text-xs">
+                        <span title="Views">{hot.views || 0} views</span>
+                        <span title="Cart adds">{hot.carts || 0} carts</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="rounded-lg bg-orange-500/5 border border-orange-500/20 px-4 py-3 text-xs text-orange-300/80">
+                  No analytics data yet. Products will be auto-detected once visitors start browsing your store.
+                  The server will build the 4 cards automatically when you submit.
+                </div>
+              )}
+              <p className="text-slate-600 text-xs">
+                On submit, the server fetches the top 4 trending products, downloads + uploads all images to gallery,
+                and builds all card fields automatically. Messages use the latest media_id stored in gallery.
+              </p>
+            </div>
+          ) : (
+            <>
+              {/* Manual mode: card editors */}
+              <div className="flex items-center justify-between">
+                <label className="text-white font-medium text-sm">
+                  Product Cards
+                  <span className="text-slate-500 font-normal text-xs ml-1">({form.carousel_cards.length}/10 — min 2)</span>
+                </label>
+                {form.carousel_cards.length < 10 && (
+                  <button onClick={addCard} className="var-btn flex items-center gap-1">
+                    <Plus size={11} /> Add Card
+                  </button>
+                )}
+              </div>
+              <div className="flex flex-col gap-4">
+                {form.carousel_cards.map((card, idx) => (
+                  <CarouselCardEditor key={idx} card={card} idx={idx} totalCards={form.carousel_cards.length}
+                    hotProducts={hotProducts} hotLoading={hotLoading}
+                    galleries={galleries} galleryImages={galleryImages}
+                    pickerCard={pickerCard} selFolder={selFolder}
+                    onSetSelFolder={setSelFolder}
+                    loadFolderImages={loadFolderImages}
+                    onSetPickerCard={setPickerCard}
+                    loadHotProducts={loadHotProducts}
+                    onUpdateCard={(k,v) => updateCard(idx, k, v)}
+                    onSetSource={(s) => setCardSource(idx, s)}
+                    onSetVarMap={(vn, val) => setCardVarMap(idx, vn, val)}
+                    onSetExampleValue={(vn, val) => setExampleValue(idx, vn, val)}
+                    onUpdateProductData={(patch) => updateProductData(idx, patch)}
+                    onAddVar={() => addCardVar(idx)}
+                    onRemoveCard={() => removeCard(idx)}
+                    onAddButton={(t) => addCardButton(idx, t)}
+                    onRemoveButton={(bi) => removeCardButton(idx, bi)}
+                    onUpdateButton={(bi, k, v) => { const cs=[...form.carousel_cards]; cs[idx].buttons[bi]={...cs[idx].buttons[bi],[k]:v}; f('carousel_cards',cs); }}
+                    onSelectImage={(img) => selectCardImage(idx, img)}
+                    onAssignHotProduct={(hot) => assignHotProduct(idx, hot)}
+                  />
+                ))}
+              </div>
+            </>
+          )}
 
           <div className="flex gap-3 pt-2 border-t border-white/10 flex-wrap">
             <button onClick={onBack} className="px-5 py-2 rounded-xl bg-white/5 hover:bg-white/10 text-slate-300 text-sm transition-all">Cancel</button>

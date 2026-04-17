@@ -176,34 +176,36 @@ async function refreshAutoProductTemplates(forceRefresh = false) {
           //  (a) product image URL changed since last cycle, OR
           //  (b) no media ID stored yet
           const productChanged = newImageUrl && newImageUrl !== prevImageUrl;
-          const needsUpload    = newImageUrl && (productChanged || !existing.header_media_id);
+          const needsUpload    = newImageUrl && (productChanged || !existing.media_id);
 
-          let header_media_id = existing.header_media_id || '';
-          let image_id        = existing.image_id || '';
+          // media_id  = numeric ID from uploadMedia()  → used in /messages { "id": media_id }
+          // file_handle = "4:..." from uploadMediaResumable() → template creation only, NEVER in /messages
+          let media_id    = existing.media_id    || '';
+          let file_handle = existing.file_handle || '';
+          let image_id    = existing.image_id    || '';
 
           if (needsUpload) {
-            // Check gallery cache first (same URL already uploaded this cycle)
+            // Check gallery cache first (same source URL already uploaded this cycle)
             const cached = db.gallery_images.find(
               img => img.source_url === newImageUrl && img.channel_id === channelId
             );
             if (cached && !productChanged) {
-              header_media_id = cached.media_id || '';
-              image_id        = cached.id;
-              console.log(`[AutoProducts] "${tpl.name}" card ${i + 1}: reuse cached media_id → ${header_media_id}`);
+              media_id    = cached.media_id    || '';
+              file_handle = cached.file_handle || '';
+              image_id    = cached.id;
+              console.log(`[AutoProducts] "${tpl.name}" card ${i + 1}: reuse cached → media_id: ${media_id}`);
             } else {
-              // Download image and upload to Meta Graph API
-              // Upload both ways: media_id for send payload, file_handle for template creation
               try {
                 const { buffer, mimeType } = await whatsappService.downloadImage(newImageUrl);
                 const imgFilename = `${folderName}_card${i + 1}.jpg`;
 
-                // Upload 1: regular → media_id (message send: { "image": { "id": media_id } })
-                const mediaId = await whatsappService.uploadMedia(buffer, imgFilename, mimeType);
+                // Upload 1: POST /media → numeric media_id for /messages { "image": { "id": media_id } }
+                const newMediaId = await whatsappService.uploadMedia(buffer, imgFilename, mimeType);
 
-                // Upload 2: resumable → file_handle (template creation: header_handle)
-                let fileHandle = '';
+                // Upload 2: resumable → file_handle "4:..." for template creation only
+                let newFileHandle = '';
                 try {
-                  fileHandle = await whatsappService.uploadMediaResumable(buffer, imgFilename, mimeType);
+                  newFileHandle = await whatsappService.uploadMediaResumable(buffer, imgFilename, mimeType);
                 } catch (fhErr) {
                   console.warn(`[AutoProducts] "${tpl.name}" card ${i + 1}: resumable upload failed (non-fatal): ${fhErr.message}`);
                 }
@@ -212,35 +214,36 @@ async function refreshAutoProductTemplates(forceRefresh = false) {
                   id:            uuidv4(),
                   folder_id:     folder.id,
                   channel_id:    channelId,
-                  filename:      mediaId,
+                  filename:      imgFilename,
                   mime_type:     mimeType,
                   size:          buffer.length,
-                  file_handle:   fileHandle,   // template creation example (header_handle)
-                  media_id:      mediaId,       // send payload { "image": { "id": media_id } }
+                  media_id:      newMediaId,      // /messages { "image": { "id": media_id } }
+                  file_handle:   newFileHandle,   // template creation header_handle only
                   source_url:    newImageUrl,
+                  auto_detected: true,
                   created_at:    nowDt.toISOString(),
                   template_name: tpl.name,
                   card_index:    i,
                 };
                 db.gallery_images.push(imgRecord);
 
-                header_media_id = mediaId;
-                image_id        = imgRecord.id;
-                console.log(`[AutoProducts] "${tpl.name}" card ${i + 1}: ${productChanged ? 're-uploaded new product' : 'first upload'} → media_id: ${mediaId}  file_handle: ${fileHandle || 'n/a'}`);
+                media_id    = newMediaId;
+                file_handle = newFileHandle;
+                image_id    = imgRecord.id;
+                console.log(`[AutoProducts] "${tpl.name}" card ${i + 1}: ${productChanged ? 're-upload' : 'first upload'} → media_id: ${media_id}  file_handle: ${file_handle || 'n/a'}`);
               } catch (imgErr) {
                 console.error(`[AutoProducts] "${tpl.name}" card ${i + 1} image upload failed:`, imgErr.message);
-                // Keep existing IDs if upload fails — don't break the whole refresh
               }
             }
           }
 
           return {
-            title:           hotName   || existing.title  || '',
-            price:           hotPrice  || existing.price  || '',
-            link:            hot.url   || existing.link   || '',
+            title:           hotName  || existing.title || '',
+            price:           hotPrice || existing.price || '',
+            link:            hot.url  || existing.link  || '',
             image_id,
-            media_id:        header_media_id,   // numeric ID for send payload { "id": media_id }
-            header_media_id,
+            media_id,        // numeric — /messages { "image": { "id": media_id } }
+            file_handle,     // "4:..." — template creation only, NEVER used in send payload
             _hot_image_url:  newImageUrl,
             _hot_score:      hot.score,
             _hot_views:      hot.views,
@@ -264,7 +267,7 @@ async function refreshAutoProductTemplates(forceRefresh = false) {
       // Campaigns read this at send time so they always use fresh trending products.
       tpl.product_config.send_payload = buildSendMessagePayload(tpl, tpl.product_config, '{{RECIPIENT_PHONE}}');
 
-      const uploaded = cards.filter(c => c.header_media_id).length;
+      const uploaded = cards.filter(c => c.media_id).length;
       const changed  = cards.filter(c => c._product_changed).length;
       console.log(`\n[AutoProducts] ✓ "${tpl.name}"`);
       console.log(`  🔒 Template structure: UNCHANGED (approved by Meta)`);

@@ -331,6 +331,157 @@ async function autoUploadTemplateImages(channelId, carouselCards, templateName =
   return updatedCards;
 }
 
+// ── Build carousel cards fully from hot products (auto_product_mode) ──────────
+// Called at template creation time. Scrapes, downloads, and dual-uploads each
+// hot product image (media_id for send + file_handle for template creation).
+// Every image is ALWAYS saved to the gallery with both IDs.
+async function buildAutoProductCards(channelId, cleanName) {
+  const db = getDb();
+  const COUNT = 4;
+  const hotProducts = computeHotProducts(db, channelId, COUNT);
+
+  if (!db.gallery_folders) db.gallery_folders = [];
+  if (!db.gallery_images)  db.gallery_images  = [];
+
+  const folderName = cleanName.replace(/[^a-z0-9_\- ]/gi, '_').trim();
+  let folder = db.gallery_folders.find(f => f.channel_id === channelId && f.name === folderName);
+  if (!folder) {
+    folder = { id: uuidv4(), channel_id: channelId, name: folderName, created_at: new Date().toISOString() };
+    db.gallery_folders.push(folder);
+    console.log(`[AutoCards] Created gallery folder "${folderName}"`);
+  }
+
+  // Min 2 cards for Meta carousel; fill up to COUNT from hot products (cycle if fewer)
+  const slots = Math.max(hotProducts.length, 2);
+  const cards = [];
+  const productConfigCards = [];
+
+  for (let i = 0; i < slots; i++) {
+    const hot = hotProducts[i % Math.max(hotProducts.length, 1)] || {};
+
+    let title    = hot.name  || `Trending Product ${i + 1}`;
+    let price    = hot.price || '';
+    let imageUrl = hot.image || '';
+    let link     = hot.url   || '';
+
+    // Scrape fresh product data
+    if (hot.url) {
+      try {
+        const scraped = await scrapeProductData(hot.url);
+        if (scraped.title)     title    = scraped.title;
+        if (scraped.price)     price    = scraped.price;
+        if (scraped.image_url) imageUrl = scraped.image_url;
+        console.log(`[AutoCards] Card ${i + 1}: scraped "${title}"  image:${imageUrl ? 'yes' : 'no'}`);
+      } catch (e) {
+        console.warn(`[AutoCards] Card ${i + 1}: scrape failed (${e.message}) — using tracker data`);
+      }
+    }
+
+    // Dual image upload — check gallery cache first
+    let fileHandle = '';
+    let mediaId    = '';
+    let imageId    = '';
+
+    if (imageUrl) {
+      const cached = db.gallery_images.find(
+        img => img.channel_id === channelId && img.source_url === imageUrl && img.media_id
+      );
+
+      if (cached) {
+        mediaId    = cached.media_id    || '';
+        fileHandle = cached.file_handle || '';
+        imageId    = cached.id;
+        // Ensure file_handle exists (re-upload resumable if missing)
+        if (!fileHandle) {
+          try {
+            const { buffer, mimeType } = await whatsappService.downloadImage(imageUrl);
+            fileHandle = await whatsappService.uploadMediaResumable(buffer, `auto_${cleanName}_c${i + 1}.jpg`, mimeType);
+            cached.file_handle = fileHandle;
+            console.log(`[AutoCards] Card ${i + 1}: back-filled file_handle for cached image → ${fileHandle}`);
+          } catch (e) {
+            console.warn(`[AutoCards] Card ${i + 1}: resumable re-upload failed — ${e.message}`);
+          }
+        }
+        console.log(`[AutoCards] Card ${i + 1}: reused cached gallery → media_id:${mediaId}  file_handle:${fileHandle || 'n/a'}`);
+      } else {
+        try {
+          const { buffer, mimeType } = await whatsappService.downloadImage(imageUrl);
+          const filename = `auto_${cleanName}_c${i + 1}.jpg`;
+
+          // Upload 1: regular → media_id  (message send: { "image": { "id": media_id } })
+          mediaId = await whatsappService.uploadMedia(buffer, filename, mimeType);
+          console.log(`[AutoCards] Card ${i + 1}: media upload → media_id: ${mediaId}`);
+
+          // Upload 2: resumable → file_handle  (template creation: header_handle)
+          try {
+            fileHandle = await whatsappService.uploadMediaResumable(buffer, filename, mimeType);
+            console.log(`[AutoCards] Card ${i + 1}: resumable upload → file_handle: ${fileHandle}`);
+          } catch (e) {
+            console.warn(`[AutoCards] Card ${i + 1}: resumable upload failed (non-fatal) — ${e.message}`);
+          }
+
+          // Always save to gallery with both IDs
+          const imgRecord = {
+            id:            uuidv4(),
+            folder_id:     folder.id,
+            channel_id:    channelId,
+            filename,
+            mime_type:     mimeType,
+            size:          buffer.length,
+            file_handle:   fileHandle,   // template creation (header_handle)
+            media_id:      mediaId,      // message sending  ({ "id": media_id })
+            source_url:    imageUrl,
+            auto_detected: true,
+            product_url:   link,
+            template_name: cleanName,
+            card_index:    i,
+            created_at:    new Date().toISOString(),
+          };
+          db.gallery_images.push(imgRecord);
+          imageId = imgRecord.id;
+        } catch (e) {
+          console.error(`[AutoCards] Card ${i + 1}: image upload failed — ${e.message}`);
+        }
+      }
+    }
+
+    // Standard card structure: body = title + price, no URL button (universal across stores)
+    const card = {
+      body:            '{{1}}\n{{2}}',
+      buttons:         [],
+      image_id:        imageId,
+      header_media_id: fileHandle || mediaId,
+      file_handle:     fileHandle,
+      media_id:        mediaId,
+      source:          'auto',
+      var_map:         { '1': 'product_title', '2': 'product_price' },
+      example_values:  { '1': title, '2': price || '₹999' },
+      product_data:    { title, price, link, image_url: imageUrl },
+      selected_fetch_image: imageUrl,
+      fetched_images:  imageUrl ? [{ url: imageUrl, alt: title }] : [],
+    };
+    cards.push(card);
+
+    productConfigCards.push({
+      title,
+      price,
+      link,
+      image_id:       imageId,
+      media_id:       mediaId,      // ← numeric ID from uploadMedia() — used in /messages { "id": media_id }
+      file_handle:    fileHandle,   // ← "4:..." from uploadMediaResumable() — template creation only
+      _hot_image_url: imageUrl,     // fallback URL if media_id is missing
+      _hot_score:     hot.score ?? 0,
+      _hot_views:     hot.views ?? 0,
+      _hot_carts:     hot.carts ?? 0,
+      _auto_updated:  new Date().toISOString(),
+    });
+  }
+
+  db.save();
+  console.log(`[AutoCards] Built ${cards.length} cards for template "${cleanName}" — images in gallery "${folderName}"`);
+  return { cards, productConfigCards };
+}
+
 // ── Preview / dry-run payload (no submission to Meta) ─────────────────────────
 // POST /api/meta-templates/preview-payload  ← same body as createTemplate
 export async function previewPayload(req, res) {
@@ -470,13 +621,16 @@ export function buildSendMessagePayload(tpl, productConfig, recipientPhone = '{{
         link:  pc.link  || card.product_data?.link  || '',
       };
 
-      // Header image — media_id preferred for send payload (regular upload, numeric ID)
-      // Falls back to file_handle if media_id not yet available (first run / legacy records)
-      const imgId  = pc.media_id || pc.file_handle || card.media_id || card.file_handle || pc.header_media_id || card.header_media_id || '';
-      const imgUrl = pc._hot_image_url || pc.image_url || card.product_data?.image_url || '';
-      if (imgId) {
-        cardComponents.push({ type: 'header', parameters: [{ type: 'image', image: { id: imgId } }] });
+      // Header image for /messages API.
+      // ONLY use media_id (numeric string from uploadMedia → POST /media → data.id).
+      // file_handle ("4:...") is for template creation ONLY — Meta rejects it in /messages.
+      // If no media_id, fall back to image URL via { link: url }.
+      const mediaId = pc.media_id || card.media_id || '';
+      const imgUrl  = pc._hot_image_url || pc.image_url || card.product_data?.image_url || '';
+      if (mediaId) {
+        cardComponents.push({ type: 'header', parameters: [{ type: 'image', image: { id: mediaId } }] });
       } else if (imgUrl) {
+        console.warn(`[SendPayload] Card ${i + 1}: no media_id — falling back to image URL (may be rejected by Meta)`);
         cardComponents.push({ type: 'header', parameters: [{ type: 'image', image: { link: imgUrl } }] });
       }
 
@@ -626,57 +780,28 @@ export async function createTemplate(req, res) {
 
     const creds = getCreds(channelId);
     if (creds) {
-      // ── Step 1: Resolve images (auto-upload if URL provided) ──
-      const resolvedCards = is_carousel ? await autoUploadTemplateImages(channelId, carousel_cards, name) : [];
-      tpl.carousel_cards = resolvedCards;
-
-      // ── Step 1b: Init product_config from resolved card data (auto-mode) ──
-      // This lets campaigns send immediately without waiting for the 6h cron.
-      // For auto_product_mode: hot trending products take priority over the static card data
-      // that was entered at template creation time — the whole point of auto mode is dynamic products.
-      if (is_carousel && auto_product_mode && resolvedCards.length > 0) {
-        const db2 = getDb();
-        const hotNow = computeHotProducts(db2, channelId, resolvedCards.length);
+      // ── Step 1: Resolve images ────────────────────────────────────────────────
+      // auto_product_mode: build ALL cards server-side from hot products (scrape + dual upload)
+      // manual mode:       upload images provided by the client (existing autoUploadTemplateImages)
+      let resolvedCards;
+      if (is_carousel && auto_product_mode) {
+        // Fully automatic: ignore client-provided carousel_cards.
+        // buildAutoProductCards: computeHotProducts → scrape → downloadImage →
+        //   uploadMedia (media_id for send) + uploadMediaResumable (file_handle for template creation)
+        //   → always saves both IDs to gallery
+        const { cards, productConfigCards } = await buildAutoProductCards(channelId, cleanName);
+        resolvedCards = cards;
+        tpl.carousel_cards = resolvedCards;
         tpl.product_config = {
-          cards: resolvedCards.map((c, i) => {
-            const hot = hotNow[i] || null;
-
-            // For auto_product_mode, hot product wins. Fall back to card data if no hot product.
-            const title = hot?.name  || c.product_data?.title  || '';
-            const price = hot?.price || c.product_data?.price  || '';
-            const link  = hot?.url   || c.product_data?.link   || '';
-            const hotImageUrl = hot?.image || c.product_data?.image_url || c.selected_fetch_image || '';
-
-            // Try to find an already-uploaded gallery image for this hot product
-            // (from the 6h auto-detect cycle) — use its media_id + file_handle directly.
-            const galleryImg = hot ? (db2.gallery_images || []).find(img =>
-              img.channel_id === channelId &&
-              img.auto_detected &&
-              (img.product_url === hot.url || img.source_url === hot.image)
-            ) : null;
-
-            return {
-              title,
-              price,
-              link,
-              image_id:        galleryImg?.id         || c.image_id        || '',
-              file_handle:     galleryImg?.file_handle || c.file_handle     || '',
-              media_id:        galleryImg?.media_id    || c.media_id        || '',
-              header_media_id: galleryImg?.file_handle || c.file_handle     || c.header_media_id || '',
-              _hot_image_url:  hotImageUrl,
-              _hot_score:      hot?.score  ?? 0,
-              _hot_views:      hot?.views  ?? 0,
-              _hot_carts:      hot?.carts  ?? 0,
-              _auto_updated:   new Date().toISOString(),
-            };
-          }),
+          cards:             productConfigCards,
           last_auto_refresh: new Date().toISOString(),
-          // Next refresh in 6 hours (aligned with the product detect cycle)
           next_auto_refresh: new Date(Date.now() + 6 * 60 * 60 * 1000).toISOString(),
           folder_name:       cleanName,
         };
-        // Cache the send payload immediately so campaigns can fire without waiting
         tpl.product_config.send_payload = buildSendMessagePayload(tpl, tpl.product_config, '{{RECIPIENT_PHONE}}');
+      } else {
+        resolvedCards = is_carousel ? await autoUploadTemplateImages(channelId, carousel_cards, name) : [];
+        tpl.carousel_cards = resolvedCards;
       }
 
       // ── Step 2: Build Payload ──
