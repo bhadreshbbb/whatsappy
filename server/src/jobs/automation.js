@@ -362,6 +362,137 @@ async function refreshAutoProductTemplates(forceRefresh = false) {
   console.log(`[AutoProducts] ${refreshLabel} refresh done — next at ${new Date(now + nextMs).toLocaleTimeString()}`);
 }
 
+// ── Per-send product refresh ──────────────────────────────────────────────────
+// Called from PATH A just before sending a carousel message when the campaign delay
+// has elapsed since the last refresh. Fetches fresh trending products (same count as
+// template cards), uploads images to get media_id, updates product_config.cards and
+// rebuilds send_payload. media_id is stored in gallery for reuse.
+async function refreshTemplateForSend(db, tpl, channelId) {
+  const nowDt    = new Date();
+  const nowIso   = nowDt.toISOString();
+  const cardCount = (tpl.carousel_cards || []).length || 2;
+
+  console.log(`[SendRefresh] Refreshing products for template "${tpl.name}" (${cardCount} cards)…`);
+
+  // 1. Get hot products — fall back to Shopify catalog when analytics is empty
+  let hotProducts = computeHotProducts(db, channelId, cardCount);
+
+  if (hotProducts.length < cardCount) {
+    // Fill remaining slots from product_catalog (shuffle for variety)
+    const catalog = (db.product_catalog || [])
+      .filter(p => p.channel_id === channelId && p.image)
+      .sort(() => 0.5 - Math.random());
+    const existing = new Set(hotProducts.map(p => p.url));
+    for (const cp of catalog) {
+      if (hotProducts.length >= cardCount) break;
+      if (!existing.has(cp.url)) {
+        hotProducts.push({ name: cp.name, price: cp.price, url: cp.url, image: cp.image, score: 0, views: 0, carts: 0 });
+        existing.add(cp.url);
+      }
+    }
+  }
+
+  if (hotProducts.length === 0) {
+    console.warn(`[SendRefresh] No products found for "${tpl.name}" — keeping existing product_config`);
+    return;
+  }
+
+  // 2. Ensure gallery structures exist
+  if (!db.gallery_folders) db.gallery_folders = [];
+  if (!db.gallery_images)  db.gallery_images  = [];
+
+  const folderName = (tpl.name || 'auto_products').replace(/[^a-z0-9_\- ]/gi, '_').trim();
+  let folder = db.gallery_folders.find(f => f.channel_id === channelId && f.name === folderName);
+  if (!folder) {
+    folder = { id: uuidv4(), channel_id: channelId, name: folderName, created_at: nowIso };
+    db.gallery_folders.push(folder);
+  }
+
+  const existingCards = tpl.product_config?.cards || [];
+
+  // 3. For each card slot: scrape fresh data, upload image → media_id
+  const cards = await Promise.all(
+    Array.from({ length: cardCount }, async (_, i) => {
+      const hot      = hotProducts[i % hotProducts.length];
+      const existing = existingCards[i] || {};
+
+      // Resolve product fields — catalog first, then scrape, then fallback to existing
+      let title    = hot.name  || existing.title || '';
+      let price    = hot.price || existing.price || '';
+      let imageUrl = hot.image || existing._hot_image_url || '';
+      const link   = hot.url   || existing.link  || '';
+
+      if (link && (!title || !price || !imageUrl)) {
+        try {
+          const scraped = await scrapeProductData(link);
+          title    = scraped.title     || title;
+          price    = scraped.price     || price;
+          imageUrl = scraped.image_url || imageUrl;
+        } catch (_) {}
+      }
+
+      // Upload image to get media_id (required for message send)
+      let media_id    = existing.media_id    || '';
+      let file_handle = existing.file_handle || '';
+      let image_id    = existing.image_id    || '';
+
+      if (imageUrl) {
+        // Reuse gallery cache if same source URL already uploaded this session
+        const cached = (db.gallery_images || []).find(
+          img => img.source_url === imageUrl && img.channel_id === channelId && img.media_id
+        );
+        if (cached) {
+          media_id    = cached.media_id    || media_id;
+          file_handle = cached.file_handle || file_handle;
+          image_id    = cached.id          || image_id;
+          console.log(`[SendRefresh] Card ${i + 1}: reuse cached media_id ${media_id}`);
+        } else if (imageUrl !== existing._hot_image_url || !media_id) {
+          try {
+            const { buffer, mimeType } = await whatsappService.downloadImage(imageUrl);
+            const fname = `${folderName}_c${i + 1}_${Date.now()}.jpg`;
+            media_id = await whatsappService.uploadMedia(buffer, fname, mimeType);
+
+            // Also upload resumable for file_handle (template re-creation if needed)
+            try {
+              file_handle = await whatsappService.uploadMediaResumable(buffer, fname, mimeType);
+            } catch (_) {}
+
+            const rec = {
+              id: uuidv4(), folder_id: folder.id, channel_id: channelId,
+              filename: fname, mime_type: mimeType, size: buffer.length,
+              media_id, file_handle, source_url: imageUrl,
+              product_name: title, product_url: link,
+              auto_detected: true, created_at: nowIso, template_name: tpl.name, card_index: i,
+            };
+            db.gallery_images.push(rec);
+            image_id = rec.id;
+            console.log(`[SendRefresh] Card ${i + 1}: uploaded → media_id: ${media_id}  "${title}" ${price}`);
+          } catch (uploadErr) {
+            console.warn(`[SendRefresh] Card ${i + 1} image upload failed (non-fatal): ${uploadErr.message}`);
+          }
+        }
+      }
+
+      return {
+        title, price, link, image_id, media_id, file_handle,
+        _hot_image_url: imageUrl, _hot_score: hot.score,
+        _auto_updated: nowIso,
+      };
+    })
+  );
+
+  // 4. Update product_config and rebuild send_payload
+  if (!tpl.product_config) tpl.product_config = {};
+  tpl.product_config.cards             = cards;
+  tpl.product_config.last_auto_refresh = nowIso;
+  tpl.product_config.send_payload      = buildSendMessagePayload(tpl, tpl.product_config, '{{RECIPIENT_PHONE}}');
+
+  db.save();
+
+  console.log(`[SendRefresh] ✓ "${tpl.name}" refreshed — ${cards.filter(c => c.media_id).length}/${cardCount} images uploaded`);
+  cards.forEach((c, i) => console.log(`  Card ${i + 1}: "${c.title || '—'}"  ${c.price}  media_id:${c.media_id || 'none'}`));
+}
+
 async function runAutomation() {
   const db = getDb();
   const channelId = process.env.CHANNEL_ID || 'demo';
@@ -675,6 +806,17 @@ async function sendMultiple(db, cam, events, type) {
         : null;
 
       if (metaTpl) {
+        // Refresh products if campaign delay has elapsed since last product refresh
+        if (metaTpl.auto_product_mode) {
+          const lastRefresh = metaTpl.product_config?.last_auto_refresh;
+          const delayMs     = (cam.delay_hours || 24) * 60 * 60 * 1000;
+          const stale       = !lastRefresh || (Date.now() - new Date(lastRefresh).getTime()) >= delayMs;
+          if (stale) {
+            console.log(`[SendRefresh] Products stale for "${metaTpl.name}" (delay: ${cam.delay_hours}h) — refreshing…`);
+            await refreshTemplateForSend(db, metaTpl, channelId);
+          }
+        }
+
         // Build the exact /messages carousel payload with language override
         const sendPayload = buildSendMessagePayload(metaTpl, metaTpl.product_config, evt.phone, metaLangCode);
 
