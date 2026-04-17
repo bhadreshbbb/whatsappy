@@ -261,6 +261,27 @@ function CreateModal({ onClose, onCreated }) {
   const [translatedTpl, setTranslatedTpl] = useState(null);
   const [validationErr, setValidationErr] = useState("");
 
+  // ── Audience filters (same as Custom campaign) ────────────────────────────
+  const [showFilters, setShowFilters] = useState(false);
+  const [contacts, setContacts]       = useState([]);
+  const [ctLoading, setCtLoading]     = useState(false);
+  const [fStatus, setFStatus] = useState('');
+  const [fCity,   setFCity]   = useState('');
+  const [fDevice, setFDevice] = useState('');
+  const [fAudLang,setFAudLang]= useState('');   // audience language (separate from message language)
+  const [fScore,  setFScore]  = useState('');
+  const [fCarts,  setFCarts]  = useState('');
+  const [fPages,  setFPages]  = useState('');
+  const [fEngage, setFEngage] = useState('');
+
+  const audFilters = { status: fStatus, city: fCity, device: fDevice, lang: fAudLang,
+                       score: fScore, carts: fCarts, pages: fPages, engage: fEngage };
+  const activeFilterCount = Object.values(audFilters).filter(Boolean).length;
+  const allCities = useMemo(() =>
+    [...new Set(contacts.map(c => c.city).filter(Boolean))].sort(), [contacts]);
+  const matchedContacts = useMemo(() => applyFilters(contacts, audFilters),
+    [contacts, fStatus, fCity, fDevice, fAudLang, fScore, fCarts, fPages, fEngage]);
+
   const CH = () => ({ 'x-channel-id': localStorage.getItem('channelId') || 'demo' });
   const META_LANG_MAP = { en: 'en_US', hi: 'hi', gu: 'gu', ta: 'ta', te: 'te', mr: 'mr', bn: 'bn', ar: 'ar' };
 
@@ -278,6 +299,10 @@ function CreateModal({ onClose, onCreated }) {
         setLang(data.topLang);
       }
     }).catch(() => {});
+    // Load contacts for audience filter preview
+    setCtLoading(true);
+    analyticsApi.contacts(60, 1000).then(d => setContacts(d?.contacts || []))
+      .catch(() => {}).finally(() => setCtLoading(false));
   }, []);
 
   // Fetch send payload preview when Meta template or language changes
@@ -348,6 +373,17 @@ function CreateModal({ onClose, onCreated }) {
   const handleCreate = async () => {
     setSaving(true);
     try {
+      const audRules = [
+        fStatus  && { field: 'status',           op: 'eq',       value: fStatus  },
+        fCity    && { field: 'city',              op: 'contains', value: fCity    },
+        fDevice  && { field: 'device',            op: 'eq',       value: fDevice  },
+        fAudLang && { field: 'language',          op: 'eq',       value: fAudLang },
+        fScore   && { field: 'power_score',       op: 'gte',      value: fScore   },
+        fCarts   && { field: 'cart_events',       op: 'gte',      value: fCarts   },
+        fPages   && { field: 'page_views',        op: 'gte',      value: fPages   },
+        fEngage  && { field: 'engagement_score',  op: 'gte',      value: fEngage  },
+      ].filter(Boolean);
+
       await campaignsApi.create({
         name: `${type.label} (${language === 'per_user' ? 'Native Language' : (LANG_LABEL[language] || language.toUpperCase())})`,
         campaign_type: type.id,
@@ -356,9 +392,10 @@ function CreateModal({ onClose, onCreated }) {
         target_language: language,
         template_id: isMultiStage ? templateIds[0] : templateId,
         template_ids: isMultiStage ? templateIds.filter(id => id !== "") : [],
-        meta_template_id: metaTemplateId || null,   // linked Meta carousel template
+        meta_template_id: metaTemplateId || null,
         delay_hours: delayHrs,
         is_active: true,
+        filters: audRules.length > 0 ? JSON.stringify({ logic: 'AND', rules: audRules }) : null,
       });
       onCreated(); onClose();
     } finally { setSaving(false); }
@@ -594,13 +631,160 @@ function CreateModal({ onClose, onCreated }) {
 
 
            {step === 3 && (
-             <div className="max-w-md mx-auto space-y-8">
-                <div className="p-6 bg-white/[0.02] border border-white/5 rounded-3xl text-center">
-                   <p className="text-[10px] text-slate-500 uppercase tracking-widest mb-2 font-bold text-blue-400">Campaign Summary</p>
-                   <h2 className="text-xl font-bold text-white mb-2">{type.label}</h2>
-                   <p className="text-xs text-slate-400">System will automatically match {type.targetSegment.replace('_',' ')} users from your tracker.</p>
+             <div className="max-w-2xl mx-auto space-y-6">
+                {/* Campaign Summary */}
+                <div className="p-5 bg-white/[0.02] border border-white/5 rounded-2xl text-center">
+                   <p className="text-[10px] text-slate-500 uppercase tracking-widest mb-1 font-bold text-blue-400">Campaign Summary</p>
+                   <h2 className="text-lg font-bold text-white mb-1">{type.label}</h2>
+                   <p className="text-xs text-slate-400">Auto-targets <span className="text-white font-medium">{type.targetSegment.replace(/_/g,' ')}</span> users from your tracker.</p>
                 </div>
-                
+
+                {/* ── Audience Filters ────────────────────────────────── */}
+                <div className="rounded-2xl border border-white/8 overflow-hidden">
+                  {/* Header — toggle */}
+                  <button onClick={() => setShowFilters(v => !v)}
+                    className="w-full flex items-center justify-between px-4 py-3 bg-white/[0.02] hover:bg-white/[0.04] transition-colors">
+                    <div className="flex items-center gap-2">
+                      <Filter size={13} className="text-blue-400" />
+                      <span className="text-xs font-semibold text-white">Refine Audience</span>
+                      {activeFilterCount > 0 && (
+                        <span className="text-[10px] px-2 py-0.5 rounded-full font-bold"
+                          style={{ background: 'rgba(59,130,246,0.15)', border: '1px solid rgba(59,130,246,0.3)', color: '#60a5fa' }}>
+                          {activeFilterCount} active
+                        </span>
+                      )}
+                      {activeFilterCount === 0 && (
+                        <span className="text-[10px] text-slate-600">optional — leave blank to target all</span>
+                      )}
+                    </div>
+                    <ChevronDown size={14} className={`text-slate-500 transition-transform ${showFilters ? 'rotate-180' : ''}`} />
+                  </button>
+
+                  {showFilters && (
+                    <div className="px-4 pb-4 pt-3 space-y-3 border-t border-white/5">
+                      {/* Live count */}
+                      <div className="flex items-center justify-between p-3 rounded-xl"
+                        style={{ background: 'rgba(59,130,246,0.05)', border: '1px solid rgba(59,130,246,0.12)' }}>
+                        <div className="flex items-center gap-2">
+                          <Users size={14} className="text-blue-400" />
+                          <span className="text-xs text-white font-semibold">
+                            {ctLoading ? 'Loading…' : <><span className="text-blue-400">{matchedContacts.length}</span> / {contacts.length} contacts match</>}
+                          </span>
+                        </div>
+                        {activeFilterCount > 0 && (
+                          <button onClick={() => { setFStatus(''); setFCity(''); setFDevice(''); setFAudLang(''); setFScore(''); setFCarts(''); setFPages(''); setFEngage(''); }}
+                            className="text-[10px] px-2 py-1 rounded-lg flex items-center gap-1"
+                            style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)', color: '#f87171' }}>
+                            <X size={9} /> Clear
+                          </button>
+                        )}
+                      </div>
+
+                      <datalist id="create-modal-city-list">
+                        {allCities.map(c => <option key={c} value={c} />)}
+                      </datalist>
+
+                      {/* Filter grid */}
+                      <div className="grid grid-cols-2 gap-2">
+                        <FilterCard label="Status" icon={UserCheck} active={!!fStatus}>
+                          <select value={fStatus} onChange={e => setFStatus(e.target.value)} className="input w-full text-xs py-1.5">
+                            <option value="">All contacts</option>
+                            <option value="active">Active Visitor</option>
+                            <option value="product_view">Product View</option>
+                            <option value="abandoned_cart">Abandoned Cart</option>
+                            <option value="followup_complete">Followup Complete</option>
+                            <option value="purchased">Purchased</option>
+                          </select>
+                        </FilterCard>
+
+                        <FilterCard label="City" icon={Globe} active={!!fCity}>
+                          <input value={fCity} onChange={e => setFCity(e.target.value)}
+                            list="create-modal-city-list" placeholder="Type or pick a city…"
+                            className="input w-full text-xs py-1.5" />
+                        </FilterCard>
+
+                        <FilterCard label="Device" icon={Smartphone} active={!!fDevice}>
+                          <select value={fDevice} onChange={e => setFDevice(e.target.value)} className="input w-full text-xs py-1.5">
+                            <option value="">All devices</option>
+                            <option value="mobile">📱 Mobile</option>
+                            <option value="desktop">🖥 Desktop</option>
+                            <option value="tablet">📲 Tablet</option>
+                          </select>
+                        </FilterCard>
+
+                        <FilterCard label="Language" icon={Globe} active={!!fAudLang}>
+                          <select value={fAudLang} onChange={e => setFAudLang(e.target.value)} className="input w-full text-xs py-1.5">
+                            <option value="">All languages</option>
+                            {LANGUAGES.map(l => <option key={l.code} value={l.code}>{l.flag} {l.label}</option>)}
+                          </select>
+                        </FilterCard>
+
+                        <FilterCard label="Power Score (min)" icon={Flame} active={!!fScore}>
+                          <select value={fScore} onChange={e => setFScore(e.target.value)} className="input w-full text-xs py-1.5">
+                            <option value="">Any score</option>
+                            <option value="20">20+ (Low intent)</option>
+                            <option value="40">40+ (Medium)</option>
+                            <option value="60">60+ (High intent)</option>
+                            <option value="80">80+ (Hot 🔥)</option>
+                          </select>
+                        </FilterCard>
+
+                        <FilterCard label="Cart Events (min)" icon={ShoppingCart} active={!!fCarts}>
+                          <select value={fCarts} onChange={e => setFCarts(e.target.value)} className="input w-full text-xs py-1.5">
+                            <option value="">Any</option>
+                            <option value="1">1+ cart event</option>
+                            <option value="2">2+ cart events</option>
+                            <option value="3">3+ cart events</option>
+                            <option value="5">5+ cart events</option>
+                          </select>
+                        </FilterCard>
+
+                        <FilterCard label="Page Views (min)" icon={Eye} active={!!fPages}>
+                          <select value={fPages} onChange={e => setFPages(e.target.value)} className="input w-full text-xs py-1.5">
+                            <option value="">Any</option>
+                            <option value="2">2+ pages</option>
+                            <option value="5">5+ pages</option>
+                            <option value="10">10+ pages</option>
+                            <option value="20">20+ pages</option>
+                          </select>
+                        </FilterCard>
+
+                        <FilterCard label="Engagement Score (min)" icon={Zap} active={!!fEngage}>
+                          <select value={fEngage} onChange={e => setFEngage(e.target.value)} className="input w-full text-xs py-1.5">
+                            <option value="">Any</option>
+                            <option value="30">30+ (Mild)</option>
+                            <option value="50">50+ (Good)</option>
+                            <option value="70">70+ (High)</option>
+                            <option value="85">85+ (Very high)</option>
+                          </select>
+                        </FilterCard>
+                      </div>
+
+                      {/* Active filter tags */}
+                      {activeFilterCount > 0 && (
+                        <div className="flex flex-wrap gap-1.5 pt-1">
+                          {[
+                            fStatus  && { label: 'Status',      value: fStatus.replace(/_/g, ' ')  },
+                            fCity    && { label: 'City',         value: fCity                       },
+                            fDevice  && { label: 'Device',       value: fDevice                     },
+                            fAudLang && { label: 'Language',     value: LANGUAGES.find(l => l.code === fAudLang)?.label || fAudLang },
+                            fScore   && { label: 'Power Score',  value: `${fScore}+`                },
+                            fCarts   && { label: 'Cart Events',  value: `${fCarts}+`                },
+                            fPages   && { label: 'Page Views',   value: `${fPages}+`                },
+                            fEngage  && { label: 'Engagement',   value: `${fEngage}+`               },
+                          ].filter(Boolean).map((f, i) => (
+                            <span key={i} className="text-[10px] px-2 py-0.5 rounded-full font-medium"
+                              style={{ background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.2)', color: '#60a5fa' }}>
+                              {f.label}: <span className="text-white">{f.value}</span>
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {/* Automation Delay */}
                 <div>
                    <label className="label">Automation Delay (Hours)</label>
                    <div className="flex items-center gap-6">
@@ -610,7 +794,7 @@ function CreateModal({ onClose, onCreated }) {
                    <p className="text-[10px] text-slate-600 mt-2 italic">Recommendation: {(type.id==='abandoned_cart' || type.id==='abandoned_checkout')?'1 hour':'Instant (0h)'} is best for conversion.</p>
                 </div>
 
-                <div className="pt-4 flex gap-4">
+                <div className="pt-2 flex gap-4">
                     <button onClick={()=>setStep(2)} className="btn-secondary flex-1">Back</button>
                     <button onClick={handleCreate} disabled={saving} className="btn-primary flex-[2] justify-center text-lg">{saving ? 'Deploying...' : '🚀 Launch Now'}</button>
                 </div>

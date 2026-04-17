@@ -4,7 +4,7 @@ import {
   AlertCircle, Settings2, Send, Image, Type, Link,
   Zap, Copy, Check, FileText, X, LayoutGrid, ChevronLeft, ChevronRight,
   Globe, Loader2, ImagePlus, ShoppingCart, Flame, Eye, Sparkles,
-  Phone, MessageSquare, ExternalLink
+  Phone, MessageSquare, ExternalLink, Pencil
 } from "lucide-react";
 
 const BASE        = `/api/meta-templates`;
@@ -213,6 +213,40 @@ export default function Templates() {
     setView('config');
   }
   function openCreate() { setView('create'); setError(''); setForm(BLANK_TPL); loadGallery(); }
+  function openEdit(tpl) {
+    if (tpl.meta_status === 'APPROVED' || tpl.meta_status === 'PENDING') {
+      // Approved/pending — structure is locked at Meta; only product data can change
+      openConfig(tpl);
+    } else {
+      // Draft / error — re-open creation form with existing data pre-filled
+      const editForm = {
+        ...BLANK_TPL,
+        name: tpl.name || '',
+        category: tpl.category || 'MARKETING',
+        language: tpl.language || 'en',
+        is_carousel: tpl.is_carousel ?? true,
+        auto_product_mode: tpl.auto_product_mode ?? false,
+        header_type: tpl.header_type || 'NONE',
+        header_text: tpl.header_text || '',
+        body: tpl.body || '',
+        footer: tpl.footer || '',
+        buttons: tpl.buttons || [],
+        variable_labels: tpl.variable_labels || {},
+        carousel_cards: (tpl.carousel_cards || []).map(c => ({
+          ...BLANK_CARD, ...c,
+          product_data:       c.product_data       || BLANK_CARD.product_data,
+          var_map:            c.var_map             || BLANK_CARD.var_map,
+          example_values:     c.example_values      || {},
+          fetched_images:     c.fetched_images      || [],
+          selected_fetch_image: c.selected_fetch_image || '',
+        })),
+      };
+      setForm(editForm);
+      setError('');
+      loadGallery();
+      setView('create');
+    }
+  }
   function copyName(name) { navigator.clipboard.writeText(name); setCopied(name); setTimeout(()=>setCopied(null),1500); }
 
   async function checkSendPayload(tpl) {
@@ -336,16 +370,28 @@ export default function Templates() {
                   {/* Product preview strip */}
                   {configCards.length > 0 && (
                     <div className="flex items-center gap-1.5 mt-2 flex-wrap">
-                      {configCards.slice(0, 4).map((c, i) => (
+                      {configCards.slice(0, 4).map((c, i) => {
+                        const stripSrc = c.image_id
+                          ? `/api/gallery/images/${c.image_id}/preview`
+                          : c._hot_image_url ? proxyUrl(c._hot_image_url) : null;
+                        return (
                         <div key={i} className="flex items-center gap-1.5 bg-white/[0.04] border border-white/5 rounded-lg px-2 py-1">
-                          {c.image_id
-                            ? <img src={`/api/gallery/images/${c.image_id}/preview`} alt="" className="w-4 h-4 object-cover rounded" />
+                          {stripSrc
+                            ? <img src={stripSrc} alt="" className="w-4 h-4 object-cover rounded"
+                                onError={(e) => {
+                                  if (c._hot_image_url && e.target.src !== c._hot_image_url) {
+                                    e.target.src = c._hot_image_url;
+                                  } else {
+                                    e.target.style.display = 'none';
+                                  }
+                                }} />
                             : <Image size={10} className="text-slate-600" />
                           }
                           <span className="text-xs text-slate-300 max-w-[80px] truncate">{c.title}</span>
                           {c.price && <span className="text-xs text-green-400/80">{c.price}</span>}
                         </div>
-                      ))}
+                        );
+                      })}
                       {configCards.length > 4 && <span className="text-xs text-slate-600">+{configCards.length - 4} more</span>}
                     </div>
                   )}
@@ -358,30 +404,19 @@ export default function Templates() {
                   {tpl.rejected_reason && <p className="text-xs text-red-400 mt-1">Rejected: {tpl.rejected_reason}</p>}
                 </div>
 
-                {/* Right: actions */}
-                <div className="flex items-center gap-1.5 shrink-0 flex-wrap justify-end">
-                  <button onClick={() => setPreviewTpl(tpl)} title="Preview WhatsApp message"
-                    className="flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-slate-400 hover:text-white transition-all border border-white/5 hover:border-white/15">
-                    <Phone size={12} /> Preview
+                {/* Right: actions — Edit + Delete (+ subtle refresh for status sync) */}
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <button onClick={() => handleRefresh(tpl)} disabled={refreshing[tpl.id]} title="Sync status from Meta"
+                    className="p-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-slate-600 hover:text-slate-300 disabled:opacity-40 transition-all">
+                    <RefreshCw size={12} className={refreshing[tpl.id] ? 'animate-spin' : ''} />
                   </button>
-                  {tpl.meta_status === 'APPROVED' && (
-                    <button onClick={() => checkSendPayload(tpl)} title="View /messages API payload"
-                      className="flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-lg bg-orange-500/10 hover:bg-orange-500/20 border border-orange-500/20 text-orange-400 transition-all">
-                      <Send size={12} /> Send Payload
-                    </button>
-                  )}
-                  <button onClick={() => handleRefresh(tpl)} disabled={refreshing[tpl.id]} title="Refresh status from Meta"
-                    className="p-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-slate-400 hover:text-white disabled:opacity-40 transition-all">
-                    <RefreshCw size={13} className={refreshing[tpl.id] ? 'animate-spin' : ''} />
+                  <button onClick={() => openEdit(tpl)} title={tpl.meta_status === 'APPROVED' || tpl.meta_status === 'PENDING' ? 'Edit products' : 'Edit template'}
+                    className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg bg-blue-500/10 hover:bg-blue-500/20 border border-blue-500/20 text-blue-400 hover:text-blue-300 transition-all">
+                    <Pencil size={12} /> Edit
                   </button>
-                  {tpl.meta_status === 'APPROVED' && (
-                    <button onClick={() => openConfig(tpl)}
-                      className="flex items-center gap-1 text-xs bg-green-600/20 hover:bg-green-600/40 border border-green-600/30 text-green-400 px-2.5 py-1.5 rounded-lg transition-all">
-                      <Settings2 size={12} /> Configure
-                    </button>
-                  )}
-                  <button onClick={() => deleteTpl(tpl)} className="p-1.5 rounded-lg bg-white/5 hover:bg-red-500/20 text-slate-500 hover:text-red-400 transition-all">
-                    <Trash2 size={13} />
+                  <button onClick={() => deleteTpl(tpl)} title="Delete template"
+                    className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg bg-white/5 hover:bg-red-500/20 border border-white/5 hover:border-red-500/20 text-slate-500 hover:text-red-400 transition-all">
+                    <Trash2 size={12} /> Delete
                   </button>
                 </div>
               </div>
@@ -1615,22 +1650,33 @@ function WaPreviewModal({ tpl, onClose }) {
 // WA CAROUSEL PREVIEW — shows a realistic WA carousel bubble
 function WaCarouselPreview({ introText, cards = [], productCards = [] }) {
   const [activeIdx, setActiveIdx] = useState(0);
+  // Track which card images failed to load so we can show placeholders
+  const [imgErrors, setImgErrors] = useState({});
 
   const resolvedCards = cards.map((card, i) => {
     const pc = productCards[i] || {};
     const vm = card.var_map || { '1':'product_title','2':'product_price','3':'product_link' };
     const sampleProduct = pc.title ? null : { title: ['Blue Kurti','Cotton Saree','Ethnic Wear'][i%3], price: [`₹799`,`₹1,299`,`₹599`][i%3], link: 'https://store.com/p' };
     const text = resolveText(card.body, vm, pc.title ? pc : (card.product_data || {}), sampleProduct);
-    // Image priority: configured gallery > fetched auto image > product_data image > legacy fallbacks
-    const rawImg = card.selected_fetch_image || card.product_data?.image_url
-      || pc._hot_image_url || card._hot_preview?.image || null;
-    const imageUrl = pc.image_id
-      ? `/api/gallery/images/${pc.image_id}/preview`
-      : card.image_id
-        ? `/api/gallery/images/${card.image_id}/preview`
-        : rawImg ? proxyUrl(rawImg) : null;
-    return { text, imageUrl, buttons: card.buttons || [], title: pc.title || card.product_data?.title || sampleProduct?.title, price: pc.price || card.product_data?.price || sampleProduct?.price };
+    // Raw external URL — used as direct fallback when gallery/proxy fails
+    const rawImg = pc._hot_image_url || card.selected_fetch_image || card.product_data?.image_url
+      || card._hot_preview?.image || null;
+    // Primary image: gallery endpoint (serves via Meta API → falls back to source_url on server)
+    const imageUrl = (pc.image_id || card.image_id)
+      ? `/api/gallery/images/${pc.image_id || card.image_id}/preview`
+      : rawImg ? proxyUrl(rawImg) : null;
+    return { text, imageUrl, rawImg, buttons: card.buttons || [], title: pc.title || card.product_data?.title || sampleProduct?.title, price: pc.price || card.product_data?.price || sampleProduct?.price };
   });
+
+  function handleImgError(idx, e) {
+    const card = resolvedCards[idx];
+    // Try raw URL directly (no proxy) as last resort before showing placeholder
+    if (card?.rawImg && e.target.src !== card.rawImg) {
+      e.target.src = card.rawImg;
+    } else {
+      setImgErrors(prev => ({ ...prev, [idx]: true }));
+    }
+  }
 
   return (
     <div className="flex flex-col gap-1.5 w-full">
@@ -1649,8 +1695,9 @@ function WaCarouselPreview({ introText, cards = [], productCards = [] }) {
           <div className="w-full">
             {/* Card image */}
             <div className="w-full h-32 bg-[#2a3942] overflow-hidden">
-              {resolvedCards[activeIdx]?.imageUrl
-                ? <img src={resolvedCards[activeIdx].imageUrl} alt="" className="w-full h-full object-cover" onError={e=>{e.target.style.display='none';}} />
+              {resolvedCards[activeIdx]?.imageUrl && !imgErrors[activeIdx]
+                ? <img src={resolvedCards[activeIdx].imageUrl} alt="" className="w-full h-full object-cover"
+                    onError={(e) => handleImgError(activeIdx, e)} />
                 : <div className="w-full h-full flex flex-col items-center justify-center gap-1 bg-purple-900/20">
                     <Image size={20} className="text-purple-400/50"/>
                     <span className="text-purple-400/50 text-xs">Card {activeIdx+1}</span>

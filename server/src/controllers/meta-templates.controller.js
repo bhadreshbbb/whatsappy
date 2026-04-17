@@ -243,6 +243,32 @@ async function autoUploadTemplateImages(channelId, carouselCards, templateName =
         console.log(`[AutoUpload] Card ${i + 1}: from gallery → file_handle=${galleryImg.file_handle}  media_id=${galleryImg.media_id || 'none'}`);
         continue;
       }
+      // Gallery image exists but has no file_handle (e.g. auto-detected product with only media_id).
+      // Re-upload via source_url to get a file_handle for template approval.
+      if (galleryImg?.source_url) {
+        let imageUrl = galleryImg.source_url;
+        if (imageUrl.startsWith('//')) imageUrl = 'https:' + imageUrl;
+        if (imageUrl.startsWith('http')) {
+          try {
+            const { buffer, mimeType } = await whatsappService.downloadImage(imageUrl);
+            const fileHandle = await whatsappService.uploadMediaResumable(buffer, `gallery_card${i + 1}_${Date.now()}.jpg`, mimeType);
+            const mediaId    = galleryImg.media_id || await whatsappService.uploadMedia(buffer, `gallery_card${i + 1}.jpg`, mimeType);
+            // Persist file_handle back to gallery so future creates don't need to re-upload
+            galleryImg.file_handle = fileHandle;
+            if (!galleryImg.media_id) galleryImg.media_id = mediaId;
+            updatedCards[i] = {
+              ...card,
+              file_handle:     fileHandle,
+              media_id:        mediaId,
+              header_media_id: fileHandle,
+            };
+            console.log(`[AutoUpload] Card ${i + 1}: re-uploaded from source_url → file_handle=${fileHandle}  media_id=${mediaId}`);
+            continue;
+          } catch (reupErr) {
+            console.warn(`[AutoUpload] Card ${i + 1}: re-upload from source_url failed (${reupErr.message}), continuing without file_handle`);
+          }
+        }
+      }
     }
 
     // ── Priority 3: external image URL — upload TWICE to Meta ────────────────
@@ -605,34 +631,51 @@ export async function createTemplate(req, res) {
       tpl.carousel_cards = resolvedCards;
 
       // ── Step 1b: Init product_config from resolved card data (auto-mode) ──
-      // This lets campaigns send immediately without waiting for the 24h cron.
+      // This lets campaigns send immediately without waiting for the 6h cron.
+      // For auto_product_mode: hot trending products take priority over the static card data
+      // that was entered at template creation time — the whole point of auto mode is dynamic products.
       if (is_carousel && auto_product_mode && resolvedCards.length > 0) {
-        const channelIdForConfig = channelId;
         const db2 = getDb();
-        const hotNow = computeHotProducts(db2, channelIdForConfig, resolvedCards.length);
+        const hotNow = computeHotProducts(db2, channelId, resolvedCards.length);
         tpl.product_config = {
           cards: resolvedCards.map((c, i) => {
             const hot = hotNow[i] || null;
+
+            // For auto_product_mode, hot product wins. Fall back to card data if no hot product.
+            const title = hot?.name  || c.product_data?.title  || '';
+            const price = hot?.price || c.product_data?.price  || '';
+            const link  = hot?.url   || c.product_data?.link   || '';
+            const hotImageUrl = hot?.image || c.product_data?.image_url || c.selected_fetch_image || '';
+
+            // Try to find an already-uploaded gallery image for this hot product
+            // (from the 6h auto-detect cycle) — use its media_id + file_handle directly.
+            const galleryImg = hot ? (db2.gallery_images || []).find(img =>
+              img.channel_id === channelId &&
+              img.auto_detected &&
+              (img.product_url === hot.url || img.source_url === hot.image)
+            ) : null;
+
             return {
-              title:           c.product_data?.title  || hot?.name  || '',
-              price:           c.product_data?.price  || hot?.price || '',
-              link:            c.product_data?.link   || hot?.url   || '',
-              image_id:        c.image_id             || '',
-              file_handle:     c.file_handle          || '',          // for template creation example
-              media_id:        c.media_id             || '',          // for send payload { "id": media_id }
-              header_media_id: c.file_handle          || c.header_media_id || '',
-              _hot_image_url:  c.product_data?.image_url || c.selected_fetch_image || hot?.image || '',
-              _hot_score:      hot?.score   ?? 0,
-              _hot_views:      hot?.views   ?? 0,
-              _hot_carts:      hot?.carts   ?? 0,
+              title,
+              price,
+              link,
+              image_id:        galleryImg?.id         || c.image_id        || '',
+              file_handle:     galleryImg?.file_handle || c.file_handle     || '',
+              media_id:        galleryImg?.media_id    || c.media_id        || '',
+              header_media_id: galleryImg?.file_handle || c.file_handle     || c.header_media_id || '',
+              _hot_image_url:  hotImageUrl,
+              _hot_score:      hot?.score  ?? 0,
+              _hot_views:      hot?.views  ?? 0,
+              _hot_carts:      hot?.carts  ?? 0,
               _auto_updated:   new Date().toISOString(),
             };
           }),
           last_auto_refresh: new Date().toISOString(),
-          next_auto_refresh: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+          // Next refresh in 6 hours (aligned with the product detect cycle)
+          next_auto_refresh: new Date(Date.now() + 6 * 60 * 60 * 1000).toISOString(),
           folder_name:       cleanName,
         };
-        // Cache the send payload immediately
+        // Cache the send payload immediately so campaigns can fire without waiting
         tpl.product_config.send_payload = buildSendMessagePayload(tpl, tpl.product_config, '{{RECIPIENT_PHONE}}');
       }
 
@@ -690,6 +733,10 @@ export async function createTemplate(req, res) {
 }
 
 // ── Refresh status from Meta ──────────────────────────────────────────────────
+// Strategy 1 (preferred): query by meta_template_id directly
+//   GET /v25.0/{meta_template_id}?fields=name,status,quality_score,rejected_reason
+// Strategy 2 (fallback): search by name in the WABA templates list
+//   GET /v25.0/{wabaId}/message_templates?name={name}&fields=...
 export async function refreshStatus(req, res) {
   try {
     const db = getDb();
@@ -702,25 +749,107 @@ export async function refreshStatus(req, res) {
     const creds = getCreds(channelId);
     if (!creds) return res.status(400).json({ error: 'WhatsApp credentials not configured' });
 
-    const metaRes = await fetch(
-      `https://graph.facebook.com/v25.0/${creds.wabaId}/message_templates?name=${tpl.name}&fields=name,status,id,quality_score,rejected_reason`,
-      { headers: { Authorization: `Bearer ${creds.token}` } }
-    );
-    const metaData = await metaRes.json();
+    let found = null;
 
-    if (metaRes.ok && metaData.data?.length) {
-      const found = metaData.data.find(t => t.name === tpl.name) || metaData.data[0];
-      // Meta returns "ACTIVE" for approved templates — normalise to "APPROVED" for consistency
+    // ── Strategy 1: direct template ID lookup (most reliable) ────────────────
+    if (tpl.meta_template_id) {
+      try {
+        const directRes = await fetch(
+          `https://graph.facebook.com/v25.0/${tpl.meta_template_id}?fields=name,status,quality_score,rejected_reason`,
+          { headers: { Authorization: `Bearer ${creds.token}` } }
+        );
+        const directData = await directRes.json();
+        if (directRes.ok && directData.status) {
+          found = directData;
+          console.log(`[MetaTemplates] Status (direct ID): ${tpl.meta_template_id} → ${directData.status}`);
+        } else {
+          console.warn(`[MetaTemplates] Direct ID lookup failed: ${JSON.stringify(directData?.error)}`);
+        }
+      } catch (directErr) {
+        console.warn(`[MetaTemplates] Direct ID fetch error: ${directErr.message}`);
+      }
+    }
+
+    // ── Strategy 2: search by name in WABA list ────────────────────────────
+    if (!found) {
+      const listRes = await fetch(
+        `https://graph.facebook.com/v25.0/${creds.wabaId}/message_templates?name=${encodeURIComponent(tpl.name)}&fields=name,status,id,quality_score,rejected_reason`,
+        { headers: { Authorization: `Bearer ${creds.token}` } }
+      );
+      const listData = await listRes.json();
+      if (listRes.ok && listData.data?.length) {
+        found = listData.data.find(t => t.name === tpl.name) || listData.data[0];
+        // Persist the meta_template_id if we didn't have it yet
+        if (found.id && !tpl.meta_template_id) tpl.meta_template_id = found.id;
+        console.log(`[MetaTemplates] Status (name search): "${tpl.name}" → ${found.status}`);
+      }
+    }
+
+    if (found) {
+      // Meta returns "ACTIVE" for approved templates — normalise to "APPROVED"
       const rawStatus = found.status || '';
       tpl.meta_status = rawStatus === 'ACTIVE' ? 'APPROVED' : rawStatus;
-      if (found.id) tpl.meta_template_id = found.id;
       if (found.rejected_reason) tpl.rejected_reason = found.rejected_reason;
+      if (found.quality_score)   tpl.quality_score   = found.quality_score;
+      tpl.status_refreshed_at = new Date().toISOString();
       db.save();
+      console.log(`[MetaTemplates] "${tpl.name}" status updated → ${tpl.meta_status}`);
+    } else {
+      console.warn(`[MetaTemplates] Could not get status for "${tpl.name}" from Meta`);
     }
 
     res.json({ template: tpl });
   } catch (err) {
+    console.error('[MetaTemplates] refreshStatus error:', err.message);
     res.status(500).json({ error: err.message });
+  }
+}
+
+// ── Auto-refresh PENDING template statuses in the background ─────────────────
+// Exported so automation.js can call it on startup and schedule it.
+export async function autoRefreshPendingStatuses() {
+  const db = getDb();
+  const channelId = process.env.CHANNEL_ID || 'demo';
+  const creds = getCreds(channelId);
+  if (!creds) return;
+
+  const pending = (db.meta_templates || []).filter(t =>
+    t.channel_id === channelId &&
+    (t.meta_status === 'PENDING' || t.meta_status === 'DRAFT') &&
+    t.meta_template_id
+  );
+  if (pending.length === 0) return;
+
+  console.log(`[MetaTemplates] Auto-refreshing status for ${pending.length} PENDING/DRAFT template(s)...`);
+  let updated = 0;
+
+  for (const tpl of pending) {
+    try {
+      const res = await fetch(
+        `https://graph.facebook.com/v25.0/${tpl.meta_template_id}?fields=name,status,quality_score,rejected_reason`,
+        { headers: { Authorization: `Bearer ${creds.token}` } }
+      );
+      const data = await res.json();
+      if (res.ok && data.status) {
+        const rawStatus = data.status;
+        const newStatus = rawStatus === 'ACTIVE' ? 'APPROVED' : rawStatus;
+        if (newStatus !== tpl.meta_status) {
+          console.log(`[MetaTemplates] "${tpl.name}": ${tpl.meta_status} → ${newStatus}`);
+          tpl.meta_status = newStatus;
+          if (data.rejected_reason) tpl.rejected_reason = data.rejected_reason;
+          if (data.quality_score)   tpl.quality_score   = data.quality_score;
+          tpl.status_refreshed_at = new Date().toISOString();
+          updated++;
+        }
+      }
+    } catch (e) {
+      console.warn(`[MetaTemplates] Auto-refresh failed for "${tpl.name}": ${e.message}`);
+    }
+  }
+
+  if (updated > 0) {
+    db.save();
+    console.log(`[MetaTemplates] Auto-refresh: ${updated} template(s) status updated`);
   }
 }
 

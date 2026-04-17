@@ -4,12 +4,13 @@ import { aiService } from '../services/ai.service.js';
 import { translateComponents } from '../services/translate.service.js';
 import { saveChatMessage } from '../controllers/chat.controller.js';
 import { upgradeStatus } from '../utils/statusMachine.js';
-import { computeHotProducts, buildSendMessagePayload, scrapeProductData, LANG_MAP } from '../controllers/meta-templates.controller.js';
+import { computeHotProducts, buildSendMessagePayload, scrapeProductData, LANG_MAP, autoRefreshPendingStatuses } from '../controllers/meta-templates.controller.js';
 import { v4 as uuidv4 } from 'uuid';
 
 let cronInterval;
 let productDetectionInterval;
 let productRefreshInterval;
+let templateStatusInterval;
 const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000;
 const SIX_HOURS_MS = 6 * 60 * 60 * 1000;
 const TWENTY_SIX_HOURS_MS = 26 * 60 * 60 * 1000;
@@ -64,34 +65,50 @@ export function startAutomation() {
   productRefreshInterval = setInterval(() => {
     refreshProductRecommendations().catch(err => console.error('[ProductRefresh] Error:', err));
   }, TWENTY_SIX_HOURS_MS);
-  
+
+  // Template status refresh - check PENDING/DRAFT templates every 30 minutes
+  templateStatusInterval = setInterval(() => {
+    autoRefreshPendingStatuses().catch(err => console.error('[TemplateStatus] Error:', err));
+  }, 30 * 60 * 1000);
+
+  // Check pending template statuses immediately on startup
+  autoRefreshPendingStatuses().catch(err => console.error('[TemplateStatus] Initial error:', err));
+
   console.log('Automation engine active:');
   console.log('  - Message sending: Every minute');
   console.log('  - Product detection: Every 6 hours');
   console.log('  - Product refresh: Every 26 hours');
   console.log('  - Template refresh: Every 24 hours');
+  console.log('  - Template status sync: Every 30 minutes');
 }
 
-// ── Every-24-hour refresh: update product_config.cards for auto-mode templates ──
+// ── Product-config refresh for auto-mode templates ───────────────────────────
+// Called every minute (checks next_auto_refresh gate) OR force-called from
+// autoDetectAndScrapeProducts() every 6 hours (bypasses the gate).
 // - Gallery folder is named after each template (auto-created if missing)
 // - If a hot product's image URL changed since last cycle, re-download + re-upload to Meta
+//   (both uploadMedia → media_id for send payload AND uploadMediaResumable → file_handle
+//    so gallery images are always ready for both template creation and message sending)
 // - Always rebuilds the send_payload so campaigns get fresh media IDs
-async function refreshAutoProductTemplates() {
+async function refreshAutoProductTemplates(forceRefresh = false) {
   const now = Date.now();
 
   const db      = getDb();
   const nowDt   = new Date();
   const channelId = process.env.CHANNEL_ID || 'demo';
 
-  // Only auto-product-mode APPROVED/PENDING carousel templates that are due for refresh
+  // Only auto-product-mode APPROVED/PENDING carousel templates that are due for refresh.
+  // When forceRefresh=true (called from 6h product detect), bypass the next_auto_refresh gate.
   const nowIso = new Date(now).toISOString();
   const templates = (db.meta_templates || []).filter(t => {
     if (t.channel_id !== channelId) return false;
     if (!t.is_carousel || !t.auto_product_mode) return false;
     if (t.meta_status !== 'APPROVED' && t.meta_status !== 'PENDING') return false;
-    // Per-template: skip if next_auto_refresh hasn't arrived yet
-    const nextRefresh = t.product_config?.next_auto_refresh;
-    if (nextRefresh && nowIso < nextRefresh) return false;
+    // Per-template: skip if next_auto_refresh hasn't arrived yet (unless forced)
+    if (!forceRefresh) {
+      const nextRefresh = t.product_config?.next_auto_refresh;
+      if (nextRefresh && nowIso < nextRefresh) return false;
+    }
     return true;
   });
   if (templates.length === 0) return;
@@ -174,31 +191,42 @@ async function refreshAutoProductTemplates() {
               image_id        = cached.id;
               console.log(`[AutoProducts] "${tpl.name}" card ${i + 1}: reuse cached media_id → ${header_media_id}`);
             } else {
-              // Download image and upload to Meta Graph API → get media_id for send payload
+              // Download image and upload to Meta Graph API
+              // Upload both ways: media_id for send payload, file_handle for template creation
               try {
                 const { buffer, mimeType } = await whatsappService.downloadImage(newImageUrl);
+                const imgFilename = `${folderName}_card${i + 1}.jpg`;
 
-                // uploadMedia() returns a numeric media_id used in { "image": { "id": media_id } }
-                const mediaId = await whatsappService.uploadMedia(buffer, `${folderName}_card${i + 1}.jpg`, mimeType);
+                // Upload 1: regular → media_id (message send: { "image": { "id": media_id } })
+                const mediaId = await whatsappService.uploadMedia(buffer, imgFilename, mimeType);
+
+                // Upload 2: resumable → file_handle (template creation: header_handle)
+                let fileHandle = '';
+                try {
+                  fileHandle = await whatsappService.uploadMediaResumable(buffer, imgFilename, mimeType);
+                } catch (fhErr) {
+                  console.warn(`[AutoProducts] "${tpl.name}" card ${i + 1}: resumable upload failed (non-fatal): ${fhErr.message}`);
+                }
 
                 const imgRecord = {
-                  id:           uuidv4(),
-                  folder_id:    folder.id,
-                  channel_id:   channelId,
-                  filename:     mediaId,           // named by media_id
-                  mime_type:    mimeType,
-                  size:         buffer.length,
-                  media_id:     mediaId,            // what the send payload uses
-                  source_url:   newImageUrl,
-                  created_at:   nowDt.toISOString(),
+                  id:            uuidv4(),
+                  folder_id:     folder.id,
+                  channel_id:    channelId,
+                  filename:      mediaId,
+                  mime_type:     mimeType,
+                  size:          buffer.length,
+                  file_handle:   fileHandle,   // template creation example (header_handle)
+                  media_id:      mediaId,       // send payload { "image": { "id": media_id } }
+                  source_url:    newImageUrl,
+                  created_at:    nowDt.toISOString(),
                   template_name: tpl.name,
-                  card_index:   i,
+                  card_index:    i,
                 };
                 db.gallery_images.push(imgRecord);
 
                 header_media_id = mediaId;
                 image_id        = imgRecord.id;
-                console.log(`[AutoProducts] "${tpl.name}" card ${i + 1}: ${productChanged ? 're-uploaded new product' : 'first upload'} → media_id: ${mediaId}`);
+                console.log(`[AutoProducts] "${tpl.name}" card ${i + 1}: ${productChanged ? 're-uploaded new product' : 'first upload'} → media_id: ${mediaId}  file_handle: ${fileHandle || 'n/a'}`);
               } catch (imgErr) {
                 console.error(`[AutoProducts] "${tpl.name}" card ${i + 1} image upload failed:`, imgErr.message);
                 // Keep existing IDs if upload fails — don't break the whole refresh
@@ -226,12 +254,14 @@ async function refreshAutoProductTemplates() {
       if (!tpl.product_config) tpl.product_config = {};
       tpl.product_config.cards             = cards;
       tpl.product_config.last_auto_refresh = nowDt.toISOString();
-      tpl.product_config.next_auto_refresh = new Date(now + TWENTY_FOUR_HOURS_MS).toISOString();
+      // When force-called from the 6h product detect cycle, schedule next check in 6h.
+      // When run via the scheduled minute-loop (gate-based), keep 24h interval.
+      tpl.product_config.next_auto_refresh = new Date(now + (forceRefresh ? SIX_HOURS_MS : TWENTY_FOUR_HOURS_MS)).toISOString();
       tpl.product_config.auto_products     = hotProducts.slice(0, cardCount);
       tpl.product_config.folder_name       = folderName;
 
-      // Always rebuild the cached send payload with latest media IDs
-      // Campaigns read this cached payload at send time so they always use fresh products
+      // Always rebuild the cached send payload with latest media IDs.
+      // Campaigns read this at send time so they always use fresh trending products.
       tpl.product_config.send_payload = buildSendMessagePayload(tpl, tpl.product_config, '{{RECIPIENT_PHONE}}');
 
       const uploaded = cards.filter(c => c.header_media_id).length;
@@ -248,7 +278,9 @@ async function refreshAutoProductTemplates() {
   }
 
   db.save();
-  console.log(`[AutoProducts] 24h refresh done — next at ${new Date(now + TWENTY_FOUR_HOURS_MS).toLocaleTimeString()}`);
+  const refreshLabel = forceRefresh ? '6h (post-detect)' : '24h (scheduled)';
+  const nextMs = forceRefresh ? SIX_HOURS_MS : TWENTY_FOUR_HOURS_MS;
+  console.log(`[AutoProducts] ${refreshLabel} refresh done — next at ${new Date(now + nextMs).toLocaleTimeString()}`);
 }
 
 async function runAutomation() {
@@ -278,7 +310,9 @@ async function runAutomation() {
             const requiredGap = (v.followup_count || 1) * 24; // 1=24h, 2=48h, 3=72h
             if (hoursSince < requiredGap) return false;
           }
-          return (isInitial || isFollowup) && v.visited_at < targetTime;
+          if (!(isInitial || isFollowup) || v.visited_at >= targetTime) return false;
+          // Apply optional per-campaign audience filters (city, device, language, scores…)
+          return passesAudienceFilters(db, channelId, v.phone, cam);
         }).slice(0, 5);
 
         await sendMultiple(db, cam, visitors, 'visit');
@@ -301,7 +335,9 @@ async function runAutomation() {
           // Check live visitor status — skip if user has progressed past product_view
           const visitor = db.website_visitors.find(vis => vis.phone === v.phone || vis.session_id === v.session_id);
           if (visitor && isBlockedByStatus(visitor.status, 'product_view')) return false;
-          return (isInitial || isFollowup) && v.created_at < targetTime;
+          if (!((isInitial || isFollowup) && v.created_at < targetTime)) return false;
+          // Apply optional per-campaign audience filters
+          return passesAudienceFilters(db, channelId, v.phone, cam);
         }).slice(0, 5);
 
         await sendMultiple(db, cam, views, 'view');
@@ -325,9 +361,10 @@ async function runAutomation() {
           if (visitor && isBlockedByStatus(visitor.status, cam.campaign_type)) return false;
           if (cam.campaign_type === 'abandoned_cart' && c.event_type === 'checkout_started') return false;
           if (cam.campaign_type === 'abandoned_checkout' && c.event_type === 'add_to_cart') return false;
-
-          return (c.event_type === 'add_to_cart' || c.event_type === 'checkout_started') &&
-                 (isInitial || isFollowup) && c.created_at < targetTime;
+          if (!((c.event_type === 'add_to_cart' || c.event_type === 'checkout_started') &&
+                (isInitial || isFollowup) && c.created_at < targetTime)) return false;
+          // Apply optional per-campaign audience filters (uses visitor record for the phone)
+          return passesAudienceFilters(db, channelId, c.phone, cam);
         }).slice(0, 5);
 
         await sendMultiple(db, cam, carts, 'cart');
@@ -351,7 +388,8 @@ async function runAutomation() {
             const hoursSinceUpgrade = v.updated_at ? (Date.now() - new Date(v.updated_at).getTime()) / 3600000 : 0;
             if (hoursSinceUpgrade < 168) return false;
           }
-          return isInitial || isFollowup;
+          if (!(isInitial || isFollowup)) return false;
+          return passesAudienceFilters(db, channelId, v.phone, cam);
         }).slice(0, 5);
 
         await sendMultiple(db, cam, targets, 'upsell');
@@ -361,10 +399,11 @@ async function runAutomation() {
       // FLOW 5: Post-Purchase — bought something, now upsell related products
       // ────────────────────────────────────────────────────────────────────
       else if (cam.campaign_type === 'post_purchase') {
-        const customers = db.website_visitors.filter(v =>
-          v.channel_id === channelId && v.phone && v.status === 'purchased' &&
-          (v.last_purchase_at || v.visited_at) < targetTime && !v.whatsapp_sent
-        ).slice(0, 5);
+        const customers = db.website_visitors.filter(v => {
+          if (!(v.channel_id === channelId && v.phone && v.status === 'purchased' &&
+                (v.last_purchase_at || v.visited_at) < targetTime && !v.whatsapp_sent)) return false;
+          return passesAudienceFilters(db, channelId, v.phone, cam);
+        }).slice(0, 5);
 
         await sendMultiple(db, cam, customers, 'customer');
       }
@@ -401,6 +440,35 @@ async function runAutomation() {
   }
 
   db.save();
+}
+
+// ── Per-campaign audience filter helpers ─────────────────────────────────────
+// Campaigns can store optional `filters` JSON ({ logic:'AND', rules:[...] })
+// that narrows the auto-targeted audience further (e.g. city, device, language,
+// power_score, page_views, engagement_score, cart_events).
+// These filters are applied on top of the flow-level targeting (status/event type).
+
+function applyRule(visitor, rule) {
+  const cv = visitor[rule.field];
+  if (rule.op === 'eq')       return String(cv ?? '').toLowerCase() === String(rule.value ?? '').toLowerCase();
+  if (rule.op === 'contains') return String(cv ?? '').toLowerCase().includes(String(rule.value ?? '').toLowerCase());
+  if (rule.op === 'gte')      return Number(cv ?? 0) >= Number(rule.value ?? 0);
+  if (rule.op === 'lte')      return Number(cv ?? 0) <= Number(rule.value ?? 0);
+  return true;
+}
+
+/**
+ * Parse campaign.filters and check if the visitor associated with `phone` passes them.
+ * Returns true (include) if no filters are set or if the visitor matches all rules.
+ */
+function passesAudienceFilters(db, channelId, phone, cam) {
+  if (!cam.filters) return true;
+  let rules;
+  try { rules = JSON.parse(cam.filters).rules || []; } catch { return true; }
+  if (rules.length === 0) return true;
+  const visitor = db.website_visitors.find(v => v.phone === phone && v.channel_id === channelId);
+  if (!visitor) return true;  // no visitor record → include (can't filter without data)
+  return rules.every(rule => applyRule(visitor, rule));
 }
 
 /**
@@ -940,18 +1008,30 @@ async function autoDetectAndScrapeProducts() {
           // Download image
           const { buffer, mimeType } = await whatsappService.downloadImage(productImage);
           console.log(`  ✓ Downloaded (${buffer.length} bytes, ${mimeType})`);
-          
-          // Upload to Meta and get media_id
-          console.log(`  → Uploading to Meta...`);
+
+          // Upload 1: regular upload → media_id (for message send payload)
+          console.log(`  → Uploading to Meta (regular)...`);
           const mediaId = await whatsappService.uploadMedia(
             buffer,
             `auto_product_${i + 1}_${Date.now()}.jpg`,
             mimeType
           );
-          
-          console.log(`  ✓ Uploaded to Meta (media_id: ${mediaId})`);
-          
-          // Save to gallery
+          console.log(`  ✓ Regular upload → media_id: ${mediaId}`);
+
+          // Upload 2: resumable upload → file_handle (for template creation/approval)
+          let fileHandle = '';
+          try {
+            fileHandle = await whatsappService.uploadMediaResumable(
+              buffer,
+              `auto_product_${i + 1}_${Date.now()}.jpg`,
+              mimeType
+            );
+            console.log(`  ✓ Resumable upload → file_handle: ${fileHandle}`);
+          } catch (fhErr) {
+            console.warn(`  ⚠ Resumable upload failed (non-fatal): ${fhErr.message}`);
+          }
+
+          // Save both IDs to gallery
           const imageRecord = {
             id: uuidv4(),
             folder_id: folder.id,
@@ -959,7 +1039,8 @@ async function autoDetectAndScrapeProducts() {
             filename: `${productTitle.substring(0, 50)}_${mediaId}`,
             mime_type: mimeType,
             size: buffer.length,
-            media_id: mediaId,
+            file_handle: fileHandle,   // for template creation example (header_handle)
+            media_id: mediaId,         // for message send: { "image": { "id": media_id } }
             source_url: productImage,
             product_name: productTitle,
             product_url: product.url,
@@ -967,9 +1048,9 @@ async function autoDetectAndScrapeProducts() {
             traffic_score: product.score,
             created_at: nowDt.toISOString()
           };
-          
+
           db.gallery_images.push(imageRecord);
-          console.log(`  ✓ Saved to gallery`);
+          console.log(`  ✓ Saved to gallery (file_handle: ${fileHandle ? 'yes' : 'no'}, media_id: ${mediaId})`);
           
         } catch (imgErr) {
           console.error(`  ✗ Image upload failed: ${imgErr.message}`);
@@ -982,11 +1063,16 @@ async function autoDetectAndScrapeProducts() {
   }
   
   db.save();
-  
+
   console.log('\n[ProductDetect] Auto-detect complete!');
   console.log(`  - Products processed: ${topProducts.length}`);
   console.log(`  - Gallery images: ${db.gallery_images.filter(i => i.auto_detected).length}`);
   console.log(`  - Next run: ${new Date(Date.now() + SIX_HOURS_MS).toLocaleString()}`);
+
+  // After fresh product data + images are in the gallery, immediately push to auto-product templates.
+  // Pass forceRefresh=true so it bypasses the 24h next_auto_refresh gate and uses 6h interval.
+  await refreshAutoProductTemplates(true);
+
   console.log('╚════════════════════════════════════════════════════════════════╝\n');
 }
 

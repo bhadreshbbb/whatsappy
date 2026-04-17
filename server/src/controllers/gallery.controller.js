@@ -27,30 +27,55 @@ export async function previewImage(req, res) {
     const img = (db.gallery_images || []).find(i => i.id === id && i.channel_id === channelId);
     if (!img) return res.status(404).json({ error: 'Image not found' });
 
-    const creds = getCredentials(channelId);
-    if (!creds) return res.status(400).json({ error: 'WhatsApp credentials not configured' });
-
-    // Step 1: Get the download URL from Meta
-    const metaRes = await fetch(
-      `https://graph.facebook.com/v25.0/${img.media_id}`,
-      { headers: { Authorization: `Bearer ${creds.token}` } }
-    );
-    const metaData = await metaRes.json();
-    if (!metaRes.ok || !metaData.url) {
-      return res.status(502).json({ error: 'Could not get image URL from Meta' });
+    // ── Helper: proxy the original source URL as fallback ─────────────────────
+    async function serveFromSourceUrl() {
+      const srcUrl = img.source_url;
+      if (!srcUrl || !srcUrl.startsWith('http')) {
+        return res.status(502).json({ error: 'No source URL available for fallback' });
+      }
+      const srcRes = await fetch(srcUrl, {
+        headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'image/*' },
+        signal: AbortSignal.timeout(10000),
+      });
+      if (!srcRes.ok) return res.status(502).json({ error: 'Could not fetch image from source URL' });
+      res.setHeader('Content-Type', srcRes.headers.get('content-type') || img.mime_type || 'image/jpeg');
+      res.setHeader('Cache-Control', 'public, max-age=3600');
+      const buf = await srcRes.arrayBuffer();
+      return res.send(Buffer.from(buf));
     }
 
-    // Step 2: Download the actual image from Meta's CDN
-    const imgRes = await fetch(metaData.url, {
-      headers: { Authorization: `Bearer ${creds.token}` }
-    });
-    if (!imgRes.ok) return res.status(502).json({ error: 'Could not download image from Meta' });
+    // ── Try Meta Graph API first (most up-to-date) ────────────────────────────
+    const creds = getCredentials(channelId);
+    if (creds && img.media_id) {
+      try {
+        // Step 1: Get the download URL from Meta
+        const metaRes = await fetch(
+          `https://graph.facebook.com/v25.0/${img.media_id}`,
+          { headers: { Authorization: `Bearer ${creds.token}` }, signal: AbortSignal.timeout(8000) }
+        );
+        const metaData = await metaRes.json();
+        if (metaRes.ok && metaData.url) {
+          // Step 2: Download the actual image from Meta's CDN
+          const imgRes = await fetch(metaData.url, {
+            headers: { Authorization: `Bearer ${creds.token}` },
+            signal: AbortSignal.timeout(10000),
+          });
+          if (imgRes.ok) {
+            res.setHeader('Content-Type', img.mime_type || 'image/jpeg');
+            res.setHeader('Cache-Control', 'public, max-age=86400');
+            const arrayBuffer = await imgRes.arrayBuffer();
+            return res.send(Buffer.from(arrayBuffer));
+          }
+        }
+        // Meta fetch failed — fall through to source_url
+        console.warn(`[Gallery] Meta preview failed for ${id}, trying source_url`);
+      } catch (metaErr) {
+        console.warn(`[Gallery] Meta preview error for ${id}: ${metaErr.message}, trying source_url`);
+      }
+    }
 
-    // Step 3: Stream it back to the browser
-    res.setHeader('Content-Type', img.mime_type || 'image/jpeg');
-    res.setHeader('Cache-Control', 'public, max-age=86400'); // cache 1 day
-    const arrayBuffer = await imgRes.arrayBuffer();
-    res.send(Buffer.from(arrayBuffer));
+    // ── Fallback: serve directly from the original product image URL ──────────
+    return serveFromSourceUrl();
   } catch (err) {
     console.error('[Gallery] Preview error:', err.message);
     res.status(500).json({ error: err.message });
