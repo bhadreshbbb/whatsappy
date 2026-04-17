@@ -44,9 +44,69 @@ const TWENTY_SIX_HOURS_MS = 26 * 60 * 60 * 1000;
  *    AI-powered upsell recommendations based on what they bought.
  */
 
+// ── Seed product catalog from Shopify /products.json on startup ─────────────
+// Runs once at boot. If shop_url is set and catalog is empty or last seeded >24h ago,
+// fetches all products from Shopify API and saves to product_catalog.
+async function seedProductCatalog() {
+  try {
+    const db = getDb();
+    // Get shop_url from settings or SHOP_URL env
+    let shopUrl = process.env.SHOP_URL || null;
+    if (!shopUrl) {
+      for (const row of (db.channel_settings || [])) {
+        try { const s = JSON.parse(row.settings || '{}'); if (s.shop_url) { shopUrl = s.shop_url; break; } } catch (_) {}
+      }
+    }
+    if (!shopUrl) {
+      console.log('[Seed] No shop_url configured — skipping product catalog seed. Set SHOP_URL env or save in Settings.');
+      return;
+    }
+    shopUrl = shopUrl.replace(/\/$/, '');
+
+    // Check if catalog already has non-demo products seeded recently
+    const existing = (db.product_catalog || []).filter(p => p.url?.includes(new URL(shopUrl).hostname));
+    const lastSeed = existing[0]?._seeded_at;
+    if (existing.length >= 10 && lastSeed && (Date.now() - new Date(lastSeed).getTime()) < 24 * 3600 * 1000) {
+      console.log(`[Seed] Catalog already has ${existing.length} products from ${shopUrl} — skip`);
+      return;
+    }
+
+    console.log(`[Seed] Fetching products from ${shopUrl}/products.json …`);
+    const r = await fetch(`${shopUrl}/products.json?limit=50`, {
+      headers: { 'User-Agent': 'Mozilla/5.0', Accept: 'application/json' },
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const data = await r.json();
+    const products = data.products || [];
+    if (!products.length) { console.log('[Seed] Shopify returned 0 products'); return; }
+
+    if (!db.product_catalog) db.product_catalog = [];
+    const seededAt = new Date().toISOString();
+    let added = 0;
+    for (const p of products) {
+      const url   = `${shopUrl}/products/${p.handle}`;
+      const price = p.variants?.[0]?.price ? `₹${p.variants[0].price}` : '';
+      const image = p.images?.[0]?.src || '';
+      if (!p.title || !image) continue;
+      const existing = db.product_catalog.findIndex(c => c.url === url);
+      const entry = { channel_id: 'demo', name: p.title, url, price, image, handle: p.handle, _seeded_at: seededAt };
+      if (existing >= 0) db.product_catalog[existing] = { ...db.product_catalog[existing], ...entry };
+      else { db.product_catalog.push(entry); added++; }
+    }
+    db.save();
+    console.log(`[Seed] ✓ ${added} new products added to catalog from ${shopUrl} (total: ${db.product_catalog.length})`);
+  } catch (e) {
+    console.error('[Seed] Product catalog seed failed:', e.message);
+  }
+}
+
 export function startAutomation() {
   console.log('Starting automation engine...');
-  
+
+  // Seed product catalog from Shopify on boot
+  seedProductCatalog().catch(err => console.error('[Seed] Error:', err));
+
   // Main automation loop - runs every minute for message sending
   cronInterval = setInterval(() => {
     runAutomation().catch(err => console.error('[Automation] Error:', err));

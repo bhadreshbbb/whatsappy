@@ -105,6 +105,22 @@ function loadDb() {
       console.error('Error loading DB:', e);
     }
   }
+
+  // ── Seed shop_url from SHOP_URL env variable if not already set ──────────
+  const envShopUrl = process.env.SHOP_URL;
+  if (envShopUrl) {
+    if (!db.channel_settings) db.channel_settings = [];
+    let row = db.channel_settings.find(s => s.channel_id === 'demo');
+    if (!row) { row = { channel_id: 'demo', settings: '{}' }; db.channel_settings.push(row); }
+    try {
+      const s = JSON.parse(row.settings || '{}');
+      if (!s.shop_url) {
+        s.shop_url = envShopUrl.replace(/\/$/, '');
+        row.settings = JSON.stringify(s);
+        console.log(`[DB] Seeded shop_url from env: ${s.shop_url}`);
+      }
+    } catch (_) {}
+  }
 }
 
 function saveDb() {
@@ -464,10 +480,28 @@ function executeQuery(sql, params, mode) {
   return null;
 }
 
+// Apply env-based overrides that should always win (e.g. SHOP_URL)
+function applyEnvOverrides() {
+  const envShopUrl = process.env.SHOP_URL;
+  if (!envShopUrl) return;
+  if (!db.channel_settings) db.channel_settings = [];
+  let row = db.channel_settings.find(s => s.channel_id === 'demo');
+  if (!row) { row = { channel_id: 'demo', settings: '{}' }; db.channel_settings.push(row); }
+  try {
+    const s = JSON.parse(row.settings || '{}');
+    if (!s.shop_url) {
+      s.shop_url = envShopUrl.replace(/\/$/, '');
+      row.settings = JSON.stringify(s);
+      console.log(`[DB] Applied SHOP_URL from env: ${s.shop_url}`);
+    }
+  } catch (_) {}
+}
+
 export async function initDb() {
   await initMongo();
   const loadedFromMongo = await loadFromMongo();
   if (!loadedFromMongo) loadDb();
+  applyEnvOverrides();
   
   if (db.message_templates.length === 0) {
     db.message_templates = [
