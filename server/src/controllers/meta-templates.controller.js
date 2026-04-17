@@ -441,7 +441,7 @@ async function buildAutoProductCards(channelId, cleanName, count = 4) {
       'then auto-detect will use the most-viewed product pages automatically.'
     );
   }
-return analyticsPages;
+
   const candidates = analyticsPages.map(p => ({ name: p.title, url: p.url, views: p.views, score: p.views }));
   console.log(`[AutoCards] ${candidates.length} product page candidates`);
 
@@ -573,8 +573,7 @@ return analyticsPages;
       _auto_updated: new Date().toISOString(),
     });
   }
-  
-         
+
   if (cards.length < 2) {
     throw new Error(
       `Auto-detect found only ${cards.length} valid product(s) with title+price+image confirmed. ` +
