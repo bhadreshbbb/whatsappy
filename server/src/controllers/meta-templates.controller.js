@@ -413,6 +413,7 @@ async function buildAutoProductCards(channelId, cleanName, count = 4) {
     byUrl[url].totalEngagement += pv.engagement_score|| 0;
     if (pv.exit_event) byUrl[url].exits++;
   }
+  return byUrl
 
   // Same shape as analytics/pages response, filtered to product-like URLs, sorted by views
   const analyticsPages = Object.values(byUrl)
@@ -428,7 +429,7 @@ async function buildAutoProductCards(channelId, cleanName, count = 4) {
     }))
     .filter(p => isProductUrl(p.url))
     .sort((a, b) => b.views - a.views);
-
+  
   console.log(`[AutoCards] analytics/pages product URLs: ${analyticsPages.length} (from ${pvRows.length} total page_views)`);
   analyticsPages.slice(0, 8).forEach((p, i) =>
     console.log(`  #${i+1} views=${p.views} unique=${p.unique_visitors} avg_dur=${p.avg_duration_sec}s  ${p.url}`)
