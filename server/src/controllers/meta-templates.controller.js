@@ -474,6 +474,8 @@ async function buildAutoProductCards(channelId, cleanName, count = 4) {
         title    = (scraped.title     || '').trim();
         price    = (scraped.price     || '').trim();
         imageUrl = (scraped.image_url || '').trim();
+
+        return scraped
       } catch (e) {
         console.warn(`[AutoCards] Skip "${hot.name}" — scrape failed: ${e.message}`);
         continue;
@@ -573,7 +575,8 @@ async function buildAutoProductCards(channelId, cleanName, count = 4) {
       _auto_updated: new Date().toISOString(),
     });
   }
-
+  return cards
+         
   if (cards.length < 2) {
     throw new Error(
       `Auto-detect found only ${cards.length} valid product(s) with title+price+image confirmed. ` +
