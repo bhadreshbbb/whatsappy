@@ -1239,85 +1239,132 @@ export async function refreshAutoProducts(req, res) {
   }
 }
 
-// Shared helper — used by endpoint and daily cron
 // Returns true if a URL looks like a product page (not home/category/blog/cart)
 function isProductUrl(url) {
   if (!url) return false;
   try {
     const p = new URL(url).pathname.toLowerCase();
-    // Must match product-like path patterns
     if (/\/(products?|item|p|detail|shop|pd)\/[^/]+/.test(p)) return true;
-    // Shopify: /products/slug
     if (p.startsWith('/products/') && p.split('/').filter(Boolean).length >= 2) return true;
-    // WooCommerce: /?p=123 or /product/slug
     return false;
   } catch (_) { return false; }
 }
 
+// Convert a product name to a URL slug  e.g. "Blue Cotton Kurti" → "blue-cotton-kurti"
+function nameToSlug(name) {
+  return (name || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+}
+
+// Derive the store base URL from all known URLs in the DB (prefer product-page origins)
+function inferStoreBaseUrl(db) {
+  const allUrls = [
+    ...(db.page_views      || []).map(p => p.url),
+    ...(db.website_visitors|| []).map(v => v.page_url),
+    ...(db.product_views   || []).map(v => v.product_url),
+    ...(db.cart_events     || []).map(c => c.product_url),
+    ...(db.product_catalog || []).map(p => p.url),
+  ].filter(Boolean);
+
+  // Count origins, ignore localhost / example.com / shop.com placeholder
+  const origins = {};
+  for (const u of allUrls) {
+    try {
+      const o = new URL(u).origin;
+      if (/localhost|127\.0\.0\.1|example\.com|^https?:\/\/shop\.com/.test(o)) continue;
+      origins[o] = (origins[o] || 0) + 1;
+    } catch (_) {}
+  }
+  const sorted = Object.entries(origins).sort((a, b) => b[1] - a[1]);
+  return sorted[0]?.[0] || null;
+}
+
 export function computeHotProducts(db, channelId, limit = 10) {
   const since = new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString();
-  const scores = {};
+  const scores = {};  // keyed by product name (lowercase) for deduplication
 
-  // ── Priority 1: Analytics page_views (actual URLs from the tracker) ──────────
-  // This is the "Pages" tab in Analytics — real browsed URLs, ranked by view count.
+  // ── Infer store base URL (used to construct product URLs when none recorded) ──
+  const storeBase = inferStoreBaseUrl(db);
+  console.log(`[computeHotProducts] storeBase=${storeBase || 'unknown'}`);
+
+  // ── Source 1: Analytics page_views — real browsed product URLs ───────────────
   for (const pv of (db.page_views || [])) {
     if (pv.channel_id !== channelId || pv.viewed_at < since) continue;
     const url = pv.url; if (!url || !isProductUrl(url)) continue;
-    const key = url;
+    const key = (pv.page_title || url).toLowerCase();
     if (!scores[key]) scores[key] = { name: pv.page_title || '', url, image: '', price: '', views: 0, carts: 0, page_views: 0 };
     scores[key].page_views++;
     scores[key].views++;
-    // Keep the most descriptive title seen
-    if (pv.page_title && (!scores[key].name || scores[key].name.length < pv.page_title.length)) {
-      scores[key].name = pv.page_title;
-    }
+    if (pv.page_title && pv.page_title.length > (scores[key].name||'').length) scores[key].name = pv.page_title;
   }
 
-  // ── Priority 2: product_views events (explicit product view tracking) ─────────
+  // ── Source 2: product_views events ───────────────────────────────────────────
   for (const v of (db.product_views || [])) {
     if (v.channel_id !== channelId || v.created_at < since) continue;
-    const key = v.product_url || v.product_name; if (!key) continue;
-    if (!scores[key]) scores[key] = { name: v.product_name, url: v.product_url, image: v.product_image, price: v.product_price, views: 0, carts: 0, page_views: 0 };
+    const key = (v.product_name || v.product_url || '').toLowerCase(); if (!key) continue;
+    if (!scores[key]) scores[key] = { name: v.product_name || '', url: v.product_url || '', image: v.product_image || '', price: v.product_price || '', views: 0, carts: 0, page_views: 0 };
     scores[key].views++;
-    if (!scores[key].name  && v.product_name)  scores[key].name  = v.product_name;
     if (!scores[key].url   && v.product_url)   scores[key].url   = v.product_url;
+    if (!scores[key].name  && v.product_name)  scores[key].name  = v.product_name;
     if (!scores[key].image && v.product_image) scores[key].image = v.product_image;
     if (!scores[key].price && v.product_price) scores[key].price = v.product_price;
   }
 
-  // ── Priority 3: cart_events (strong buying intent — weight 3×) ───────────────
+  // ── Source 3: cart_events — expand ALL products in the cart JSON array ────────
+  // Most real carts store { products: '[{"name":"...","price":...}]' } with no product URL.
+  // We extract every product from every cart event to get accurate name×frequency counts.
   for (const c of (db.cart_events || [])) {
     if (c.channel_id !== channelId || c.recovered || c.created_at < since) continue;
-    let pName = c.product_name, pUrl = c.product_url;
-    if (!pName && c.products) { try { const a = JSON.parse(c.products); pName = a[0]?.name; pUrl = pUrl || a[0]?.url; } catch (_) { } }
-    const key = pUrl || pName; if (!key) continue;
-    if (!scores[key]) scores[key] = { name: pName, url: pUrl, image: c.product_image, price: c.product_price, views: 0, carts: 0, page_views: 0 };
-    scores[key].carts++;
-    if (!scores[key].url   && pUrl)            scores[key].url   = pUrl;
-    if (!scores[key].name  && pName)           scores[key].name  = pName;
-    if (!scores[key].image && c.product_image) scores[key].image = c.product_image;
-    if (!scores[key].price && c.product_price) scores[key].price = c.product_price;
+    let items = [];
+    if (c.product_name) {
+      items.push({ name: c.product_name, price: c.product_price ? String(c.product_price) : '', url: c.product_url || '' });
+    }
+    if (c.products) {
+      try {
+        const parsed = JSON.parse(c.products);
+        for (const item of (Array.isArray(parsed) ? parsed : [])) {
+          if (item.name) items.push({ name: item.name, price: item.price ? `₹${item.price}` : '', url: item.url || c.product_url || '' });
+        }
+      } catch (_) {}
+    }
+    for (const item of items) {
+      if (!item.name) continue;
+      const key = item.name.toLowerCase();
+      if (!scores[key]) scores[key] = { name: item.name, url: item.url || '', image: '', price: item.price || '', views: 0, carts: 0, page_views: 0 };
+      scores[key].carts++;
+      if (!scores[key].url   && item.url)   scores[key].url   = item.url;
+      if (!scores[key].price && item.price) scores[key].price = item.price;
+    }
   }
 
-  // ── Priority 4: product_catalog (static catalog — zero views, still scrape-able) ─
+  // ── Source 4: product_catalog ─────────────────────────────────────────────────
   for (const p of (db.product_catalog || [])) {
     if (p.channel_id !== channelId) continue;
-    const key = p.url || p.name; if (!key) continue;
-    if (!scores[key]) scores[key] = { name: p.name, url: p.url, image: p.image, price: p.price, views: 0, carts: 0, page_views: 0 };
-    if (!scores[key].name  && p.name)  scores[key].name  = p.name;
+    const key = (p.name || p.url || '').toLowerCase(); if (!key) continue;
+    if (!scores[key]) scores[key] = { name: p.name || '', url: p.url || '', image: p.image || '', price: p.price || '', views: 0, carts: 0, page_views: 0 };
     if (!scores[key].url   && p.url)   scores[key].url   = p.url;
+    if (!scores[key].name  && p.name)  scores[key].name  = p.name;
     if (!scores[key].image && p.image) scores[key].image = p.image;
     if (!scores[key].price && p.price) scores[key].price = p.price;
   }
 
-  const all = Object.entries(scores)
-    .map(([, p]) => ({ ...p, score: (p.page_views * 2) + (p.views * 1) + (p.carts * 3) }))
-    // Require a URL to scrape — name is filled by scraper if missing
-    .filter(p => p.url)
+  // ── For products with no URL: construct one from storeBase + /products/slug ───
+  if (storeBase) {
+    for (const p of Object.values(scores)) {
+      if (!p.url && p.name) {
+        p.url = `${storeBase}/products/${nameToSlug(p.name)}`;
+        console.log(`[computeHotProducts] Constructed URL for "${p.name}": ${p.url}`);
+      }
+    }
+  }
+
+  const all = Object.values(scores)
+    .map(p => ({ ...p, score: (p.page_views * 2) + (p.views * 1) + (p.carts * 3) }))
+    .filter(p => p.url)   // must have a URL to scrape
     .sort((a, b) => b.score - a.score)
     .slice(0, limit);
 
-  console.log(`[computeHotProducts] channel=${channelId} → ${all.length} candidates (page_views sources: ${all.filter(p=>p.page_views>0).length})`);
+  console.log(`[computeHotProducts] channel=${channelId} → ${all.length} candidates`);
+  all.forEach((p, i) => console.log(`  #${i+1} "${p.name}" score=${p.score} url=${p.url}`));
   return all;
 }
 
