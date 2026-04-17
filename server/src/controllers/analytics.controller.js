@@ -139,6 +139,12 @@ export const analyticsController = {
           ).length / p.sessions.size) * 100) : 0,
       })).sort((a, b) => b.views - a.views);
 
+      console.log('[Analytics/pages] channel:', channelId, '| days:', days, '| total_views:', pageViews.length, '| pages:', pages.length);
+      if (pages.length > 0) {
+        console.table(pages.map(p => ({ url: p.url, views: p.views, unique: p.unique_visitors, title: p.title })));
+      } else {
+        console.log('[Analytics/pages] No page_views recorded yet for this channel.');
+      }
       res.json({ pages, total_views: pageViews.length });
     } catch (error) { next(error); }
   },
