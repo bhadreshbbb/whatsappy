@@ -368,8 +368,11 @@ async function fetchShopifyProducts(shopBase, limit = 20) {
   }).filter(p => p.name && p.image); // must have title + image at minimum
 }
 
-// Get shop_url from channel settings
+// Get shop_url — env var wins, then channel settings
 function getShopUrl(db, channelId) {
+  // 1. Env var (always available regardless of DB state)
+  if (process.env.SHOP_URL) return process.env.SHOP_URL.replace(/\/$/, '');
+  // 2. Channel settings
   const row = db.channel_settings?.find(s => s.channel_id === channelId) || db.channel_settings?.[0];
   try {
     const s = JSON.parse(row?.settings || '{}');
@@ -556,8 +559,8 @@ async function buildAutoProductCards(channelId, cleanName, count = 4) {
         const imgRecord = {
           id:           uuidv4(),  folder_id: folder.id, channel_id: channelId,
           filename,     mime_type: mimeType,  size: buffer.length,
-          media_id:     mediaId,              // /messages { "image": { "id": media_id } }
-          file_handle:  fileHandle,           // template creation header_handle only
+          media_id:     mediaId,
+          file_handle:  fileHandle,
           source_url:   imageUrl,
           auto_detected: true,
           product_url:  link,     product_name: title,
@@ -568,8 +571,10 @@ async function buildAutoProductCards(channelId, cleanName, count = 4) {
         imageId = imgRecord.id;
         console.log(`[AutoCards] Card ${cardNum}: uploaded → media_id:${mediaId}  file_handle:${fileHandle || 'n/a'}`);
       } catch (e) {
-        console.error(`[AutoCards] Card ${cardNum}: image upload failed — ${e.message}. Skipping.`);
-        continue; // image upload failed — skip this product
+        // Upload failed (no credentials / network) — card still valid with image URL.
+        // media_id will be re-attempted at template submit time.
+        console.warn(`[AutoCards] Card ${cardNum}: Meta upload failed (${e.message}) — card added without media_id, will retry on submit`);
+        mediaId = ''; fileHandle = ''; imageId = '';
       }
     }
 
@@ -608,9 +613,12 @@ async function buildAutoProductCards(channelId, cleanName, count = 4) {
   }
 
   if (cards.length < 2) {
+    const tried = candidates.length;
     throw new Error(
-      `Auto-detect found only ${cards.length} valid product(s) with title+price+image confirmed. ` +
-      `Need at least 2. Ensure product pages are accessible and include price + og:image markup.`
+      `Auto-detect found only ${cards.length} valid product(s) from ${tried} candidates. ` +
+      `Need at least 2. Check: (1) shop_url is set in Settings, ` +
+      `(2) laasyna.com/products.json is accessible, ` +
+      `(3) WhatsApp credentials are configured for image upload.`
     );
   }
 
