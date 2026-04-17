@@ -4,7 +4,7 @@ import { aiService } from '../services/ai.service.js';
 import { translateComponents } from '../services/translate.service.js';
 import { saveChatMessage } from '../controllers/chat.controller.js';
 import { upgradeStatus } from '../utils/statusMachine.js';
-import { computeHotProducts, buildSendMessagePayload, scrapeProductData, LANG_MAP, autoRefreshPendingStatuses } from '../controllers/meta-templates.controller.js';
+import { computeHotProducts, buildSendMessagePayload, scrapeProductData, LANG_MAP, autoRefreshPendingStatuses, buildAutoProductCards } from '../controllers/meta-templates.controller.js';
 import { v4 as uuidv4 } from 'uuid';
 
 let cronInterval;
@@ -113,13 +113,17 @@ export function startAutomation() {
     refreshAutoProductTemplates().catch(err => console.error('[AutoProducts] Error:', err));
   }, 60 * 1000);
   
-  // Product detection - runs every 6 hours to detect and scrape top products
-  productDetectionInterval = setInterval(() => {
-    autoDetectAndScrapeProducts().catch(err => console.error('[ProductDetect] Error:', err));
-  }, SIX_HOURS_MS);
-  
-  // Run immediately on start
-  autoDetectAndScrapeProducts().catch(err => console.error('[ProductDetect] Initial error:', err));
+  // Product detection — same function as UI Auto-Detect button.
+  // Runs on startup and every 6 hours to keep gallery fresh with latest products.
+  const runAutoDetect = () => {
+    const channelId = process.env.CHANNEL_ID || 'demo';
+    buildAutoProductCards(channelId, 'auto_products_seed', 10)
+      .then(() => refreshAutoProductTemplates(true))
+      .catch(err => console.error('[ProductDetect] Error:', err));
+  };
+
+  productDetectionInterval = setInterval(runAutoDetect, SIX_HOURS_MS);
+  runAutoDetect(); // run immediately on startup
   
   // Product recommendation refresh - runs every 26 hours for new product recommendations
   productRefreshInterval = setInterval(() => {

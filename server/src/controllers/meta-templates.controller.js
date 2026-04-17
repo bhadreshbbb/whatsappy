@@ -384,7 +384,7 @@ function getShopUrl(db, channelId) {
   } catch (_) { return null; }
 }
 
-async function buildAutoProductCards(channelId, cleanName, count = 4) {
+export async function buildAutoProductCards(channelId, cleanName, count = 4) {
   const db = getDb();
   const COUNT = Math.max(2, count);
 
