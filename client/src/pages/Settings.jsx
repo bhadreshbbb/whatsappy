@@ -350,10 +350,10 @@ WhatsWay.identify({ phone: `}<span style={{color:"#fbbf24"}}>"+919876543210"</sp
             <p className="text-xs" style={{ color: "#64748b" }}>Shop configuration and API endpoints</p>
           </div>
           <div>
-            <label className="label">Shop URL</label>
-            <input className="input" placeholder="https://yourshop.com"
+            <label className="label">Shop URL <span style={{color:'#f97316',fontSize:'11px'}}>★ required for Auto-Detect Products</span></label>
+            <input className="input" placeholder="https://laasyna.com"
               value={settings.shop_url || ""} onChange={e => s("shop_url", e.target.value)} />
-            <p className="text-xs mt-1" style={{ color: "#334155" }}>Used as fallback for cart_url variable in templates</p>
+            <p className="text-xs mt-1" style={{ color: "#64748b" }}>Your store domain — used for auto-detect product scraping and cart links</p>
           </div>
           <div>
             <label className="label">WhatsApp API Base URL</label>

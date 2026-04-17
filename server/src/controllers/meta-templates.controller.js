@@ -335,11 +335,54 @@ async function autoUploadTemplateImages(channelId, carouselCards, templateName =
 // Called at template creation time. Scrapes, downloads, and dual-uploads each
 // hot product image (media_id for send + file_handle for template creation).
 // Every image is ALWAYS saved to the gallery with both IDs.
+// Fetch products from Shopify /products.json — returns ready-to-use product list
+async function fetchShopifyProducts(shopBase, limit = 20) {
+  const url = `${shopBase}/products.json?limit=${limit}`;
+  console.log(`[AutoCards] Trying Shopify API: ${url}`);
+  const r = await fetch(url, {
+    headers: { 'User-Agent': 'Mozilla/5.0', Accept: 'application/json' },
+    signal: AbortSignal.timeout(12000),
+  });
+  if (!r.ok) throw new Error(`Shopify products.json returned ${r.status}`);
+  const data = await r.json();
+  const products = (data.products || []);
+  return products.map(p => {
+    const variant   = p.variants?.[0];
+    const price     = variant?.price ? `₹${variant.price}` : '';
+    const imageUrl  = p.images?.[0]?.src || '';
+    const handle    = p.handle || nameToSlug(p.title);
+    return {
+      name:     p.title || '',
+      url:      `${shopBase}/products/${handle}`,
+      image:    imageUrl,
+      price,
+      views:    0,
+      carts:    0,
+      score:    0,
+      _shopify: true,
+      // Pre-validated — Shopify API guarantees title, price (may be '0'), image
+      _title:    p.title || '',
+      _price:    price,
+      _imageUrl: imageUrl,
+    };
+  }).filter(p => p.name && p.image); // must have title + image at minimum
+}
+
+// Get shop_url from channel settings
+function getShopUrl(db, channelId) {
+  const row = db.channel_settings?.find(s => s.channel_id === channelId) || db.channel_settings?.[0];
+  try {
+    const s = JSON.parse(row?.settings || '{}');
+    const raw = s.shop_url || s.store_url || s.website_url || '';
+    if (!raw) return null;
+    const base = raw.replace(/\/$/, '');
+    return base.startsWith('http') ? base : `https://${base}`;
+  } catch (_) { return null; }
+}
+
 async function buildAutoProductCards(channelId, cleanName, count = 4) {
   const db = getDb();
   const COUNT = Math.max(2, count);
-  // Fetch more candidates than needed — some may fail validation (missing title/price/image)
-  const candidates = computeHotProducts(db, channelId, COUNT * 3);
 
   if (!db.gallery_folders) db.gallery_folders = [];
   if (!db.gallery_images)  db.gallery_images  = [];
@@ -352,6 +395,30 @@ async function buildAutoProductCards(channelId, cleanName, count = 4) {
     console.log(`[AutoCards] Created gallery folder "${folderName}"`);
   }
 
+  // ── Source A: analytics-ranked candidates ─────────────────────────────────
+  let candidates = computeHotProducts(db, channelId, COUNT * 4);
+
+  // ── Source B: Shopify products.json (used when analytics is sparse / 0) ───
+  // If settings.shop_url is set, always fetch Shopify as a fallback pool so we
+  // always have real product data even on a fresh install with no analytics yet.
+  const shopUrl = getShopUrl(db, channelId) || inferStoreBaseUrl(db);
+  if (shopUrl && candidates.length < COUNT) {
+    console.log(`[AutoCards] Analytics gave ${candidates.length} candidates — trying Shopify API at ${shopUrl}`);
+    try {
+      const shopifyProducts = await fetchShopifyProducts(shopUrl, 20);
+      console.log(`[AutoCards] Shopify API returned ${shopifyProducts.length} products`);
+      // Merge: analytics candidates first (higher score), then Shopify products not already present
+      const existingUrls = new Set(candidates.map(c => c.url));
+      for (const sp of shopifyProducts) {
+        if (!existingUrls.has(sp.url)) candidates.push(sp);
+      }
+    } catch (e) {
+      console.warn(`[AutoCards] Shopify API failed: ${e.message}`);
+    }
+  }
+
+  console.log(`[AutoCards] Total candidates after merge: ${candidates.length}`);
+
   const cards = [];
   const productConfigCards = [];
 
@@ -363,27 +430,36 @@ async function buildAutoProductCards(channelId, cleanName, count = 4) {
       continue;
     }
 
-    // ── Scrape URL: title + price + main image must ALL be present ────────────
+    // ── Get title + price + image ─────────────────────────────────────────────
+    // For Shopify-API candidates: data already validated, skip HTTP scrape.
+    // For analytics candidates: scrape the page to confirm title+price+image.
     let title = '', price = '', imageUrl = '';
     const link = hot.url;
 
-    try {
-      const scraped = await scrapeProductData(hot.url);
-      title    = (scraped.title     || '').trim();
-      price    = (scraped.price     || '').trim();
-      imageUrl = (scraped.image_url || '').trim();
-    } catch (e) {
-      console.warn(`[AutoCards] Skip "${hot.name}" — scrape failed: ${e.message}`);
-      continue;
+    if (hot._shopify && hot._title && hot._imageUrl) {
+      // Shopify API gave us confirmed data
+      title    = hot._title;
+      price    = hot._price || '';
+      imageUrl = hot._imageUrl;
+      console.log(`[AutoCards] Shopify product "${title}" — using API data directly`);
+    } else {
+      try {
+        const scraped = await scrapeProductData(hot.url);
+        title    = (scraped.title     || '').trim();
+        price    = (scraped.price     || '').trim();
+        imageUrl = (scraped.image_url || '').trim();
+      } catch (e) {
+        console.warn(`[AutoCards] Skip "${hot.name}" — scrape failed: ${e.message}`);
+        continue;
+      }
+      // Fall back to analytics name/price if scraper couldn't extract them
+      if (!title) title = (hot.name  || '').trim();
+      if (!price) price = (hot.price || '').trim();
     }
 
-    // Fall back to analytics name/price if scraper couldn't find them
-    if (!title)    title    = (hot.name  || '').trim();
-    if (!price)    price    = (hot.price || '').trim();
-
-    if (!title)    { console.log(`[AutoCards] Skip "${hot.url}" — no title after scrape`);    continue; }
-    if (!price)    { console.log(`[AutoCards] Skip "${hot.url}" — no price after scrape`);    continue; }
-    if (!imageUrl) { console.log(`[AutoCards] Skip "${hot.url}" — no main image after scrape`); continue; }
+    if (!title)    { console.log(`[AutoCards] Skip "${hot.url}" — no title`);    continue; }
+    if (!price)    { console.log(`[AutoCards] Skip "${hot.url}" — no price`);    continue; }
+    if (!imageUrl) { console.log(`[AutoCards] Skip "${hot.url}" — no main image`); continue; }
 
     console.log(`[AutoCards] ✓ Valid product ${cards.length + 1}: "${title}"  ${price}`);
 
@@ -1257,6 +1333,18 @@ function nameToSlug(name) {
 
 // Derive the store base URL from all known URLs in the DB (prefer product-page origins)
 function inferStoreBaseUrl(db) {
+  // First: check channel settings shop_url
+  for (const row of (db.channel_settings || [])) {
+    try {
+      const s = JSON.parse(row.settings || '{}');
+      const raw = s.shop_url || s.store_url || s.website_url || '';
+      if (raw) {
+        const base = raw.replace(/\/$/, '');
+        return base.startsWith('http') ? base : `https://${base}`;
+      }
+    } catch (_) {}
+  }
+
   const allUrls = [
     ...(db.page_views      || []).map(p => p.url),
     ...(db.website_visitors|| []).map(v => v.page_url),
@@ -1265,12 +1353,12 @@ function inferStoreBaseUrl(db) {
     ...(db.product_catalog || []).map(p => p.url),
   ].filter(Boolean);
 
-  // Count origins, ignore localhost / example.com / shop.com placeholder
   const origins = {};
   for (const u of allUrls) {
     try {
       const o = new URL(u).origin;
-      if (/localhost|127\.0\.0\.1|example\.com|^https?:\/\/shop\.com/.test(o)) continue;
+      // Skip obvious placeholders
+      if (/localhost|127\.0\.0\.1|example\.com$/.test(o)) continue;
       origins[o] = (origins[o] || 0) + 1;
     } catch (_) {}
   }
