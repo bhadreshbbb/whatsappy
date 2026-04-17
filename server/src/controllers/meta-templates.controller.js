@@ -113,11 +113,12 @@ function buildMetaComponents(tpl) {
 
       // 1. HEADER — image is mandatory for carousel cards
       const headerComp = { type: 'HEADER', format: 'IMAGE' };
-      if (card.header_media_id) {
-        headerComp.example = { header_handle: [String(card.header_media_id)] };
-        console.log(`[MetaTemplates] Card ${cardIdx + 1} header_handle = "${card.header_media_id}"`);
+      const fileHandle = card.file_handle || card.header_media_id || '';
+      if (fileHandle) {
+        headerComp.example = { header_handle: [String(fileHandle)] };
+        console.log(`[MetaTemplates] Card ${cardIdx + 1} header_handle = "${fileHandle}"`);
       } else {
-        console.warn(`[MetaTemplates] ⚠  Card ${cardIdx + 1}: header_media_id missing — upload image to Gallery first.`);
+        console.warn(`[MetaTemplates] ⚠  Card ${cardIdx + 1}: no file_handle/header_media_id — upload image to Gallery first.`);
       }
       cardComponents.push(headerComp);
 
