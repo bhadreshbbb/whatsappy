@@ -441,7 +441,7 @@ async function buildAutoProductCards(channelId, cleanName, count = 4) {
       'then auto-detect will use the most-viewed product pages automatically.'
     );
   }
-
+return analyticsPages;
   const candidates = analyticsPages.map(p => ({ name: p.title, url: p.url, views: p.views, score: p.views }));
   console.log(`[AutoCards] ${candidates.length} product page candidates`);
 
@@ -474,7 +474,6 @@ async function buildAutoProductCards(channelId, cleanName, count = 4) {
         title    = (scraped.title     || '').trim();
         price    = (scraped.price     || '').trim();
         imageUrl = (scraped.image_url || '').trim();
-        
       } catch (e) {
         console.warn(`[AutoCards] Skip "${hot.name}" — scrape failed: ${e.message}`);
         continue;
@@ -574,7 +573,7 @@ async function buildAutoProductCards(channelId, cleanName, count = 4) {
       _auto_updated: new Date().toISOString(),
     });
   }
-  return cards
+  
          
   if (cards.length < 2) {
     throw new Error(
