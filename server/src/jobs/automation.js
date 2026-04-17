@@ -152,29 +152,45 @@ async function refreshAutoProductTemplates(forceRefresh = false) {
           const hot      = hotProducts[i % hotProducts.length];
           const existing = existingCards[i] || {};
 
-          // ── Scrape fresh product data when URL is available ──────────────────
-          let hotName  = hot.name  || '';
-          let hotPrice = hot.price || '';
-          let hotImage = hot.image || '';
+          // ── Scrape fresh product data — title + price + image all required ─────
+          let hotName  = '';
+          let hotPrice = '';
+          let hotImage = '';
 
           if (hot.url) {
             try {
               const scraped = await scrapeProductData(hot.url);
-              if (scraped.title)     hotName  = scraped.title;
-              if (scraped.price)     hotPrice = scraped.price;
-              if (scraped.image_url) hotImage = scraped.image_url;
-              console.log(`[AutoProducts] "${tpl.name}" card ${i + 1}: scraped "${hotName}" — image: ${hotImage ? 'found' : 'none'}`);
+              hotName  = (scraped.title     || '').trim();
+              hotPrice = (scraped.price     || '').trim();
+              hotImage = (scraped.image_url || '').trim();
+
+              if (!hotName || !hotPrice || !hotImage) {
+                const missing = [!hotName && 'title', !hotPrice && 'price', !hotImage && 'image'].filter(Boolean).join(', ');
+                console.warn(`[AutoProducts] "${tpl.name}" card ${i + 1}: scrape missing ${missing} — keeping existing card data`);
+                // Fall back to existing card data so the card is not broken
+                hotName  = hotName  || existing.title || hot.name  || '';
+                hotPrice = hotPrice || existing.price || hot.price || '';
+                hotImage = hotImage || existing._hot_image_url || hot.image || '';
+              } else {
+                console.log(`[AutoProducts] "${tpl.name}" card ${i + 1}: ✓ "${hotName}" — ${hotPrice}`);
+              }
             } catch (scrapeErr) {
-              console.warn(`[AutoProducts] "${tpl.name}" card ${i + 1}: scrape failed (${scrapeErr.message}), using cached data`);
+              console.warn(`[AutoProducts] "${tpl.name}" card ${i + 1}: scrape failed (${scrapeErr.message}) — keeping existing`);
+              hotName  = existing.title || hot.name  || '';
+              hotPrice = existing.price || hot.price || '';
+              hotImage = existing._hot_image_url || hot.image || '';
             }
+          } else {
+            hotName  = existing.title || hot.name  || '';
+            hotPrice = existing.price || hot.price || '';
+            hotImage = existing._hot_image_url || hot.image || '';
           }
 
           const newImageUrl  = hotImage;
           const prevImageUrl = existing._hot_image_url || '';
 
-          // Re-upload image if:
-          //  (a) product image URL changed since last cycle, OR
-          //  (b) no media ID stored yet
+          // Re-upload only when we have a valid image URL AND it changed or has no media_id.
+          // If hotImage is empty (scrape couldn't find an image), keep the existing IDs.
           const productChanged = newImageUrl && newImageUrl !== prevImageUrl;
           const needsUpload    = newImageUrl && (productChanged || !existing.media_id);
 
@@ -948,21 +964,20 @@ async function autoDetectAndScrapeProducts() {
         continue;
       }
       
-      // Scrape fresh product data
+      // Scrape fresh product data — title + price + main image must ALL be confirmed
       console.log(`  → Scraping ${product.url}`);
       const scraped = await scrapeProductData(product.url);
-      
-      if (!scraped.title && !scraped.image_url) {
-        console.log(`  ⚠ Scrape failed - no data returned`);
-        continue;
-      }
-      
-      const productTitle = scraped.title || product.name;
-      const productPrice = scraped.price || product.price;
-      const productImage = scraped.image_url || product.image;
-      
-      console.log(`  ✓ Scraped: "${productTitle}" - ${productPrice}`);
-      console.log(`  Image: ${productImage ? 'Found' : 'Missing'}`);
+
+      const productTitle = (scraped.title     || '').trim();
+      const productPrice = (scraped.price     || '').trim();
+      const productImage = (scraped.image_url || '').trim();
+
+      if (!productTitle) { console.log(`  ⚠ Skip — no title found after scrape`);      continue; }
+      if (!productPrice) { console.log(`  ⚠ Skip — no price found after scrape`);      continue; }
+      if (!productImage) { console.log(`  ⚠ Skip — no main image found after scrape`); continue; }
+
+      console.log(`  ✓ Validated: "${productTitle}" — ${productPrice}`);
+      console.log(`  Image: ${productImage.slice(0, 80)}`);
       
       // Update product_catalog with fresh data
       const catalogIdx = db.product_catalog.findIndex(

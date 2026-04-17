@@ -338,7 +338,8 @@ async function autoUploadTemplateImages(channelId, carouselCards, templateName =
 async function buildAutoProductCards(channelId, cleanName) {
   const db = getDb();
   const COUNT = 4;
-  const hotProducts = computeHotProducts(db, channelId, COUNT);
+  // Fetch more candidates than needed — some may fail validation (missing title/price/image)
+  const candidates = computeHotProducts(db, channelId, COUNT * 3);
 
   if (!db.gallery_folders) db.gallery_folders = [];
   if (!db.gallery_images)  db.gallery_images  = [];
@@ -351,134 +352,117 @@ async function buildAutoProductCards(channelId, cleanName) {
     console.log(`[AutoCards] Created gallery folder "${folderName}"`);
   }
 
-  // Min 2 cards for Meta carousel; fill up to COUNT from hot products (cycle if fewer)
-  const slots = Math.max(hotProducts.length, 2);
   const cards = [];
   const productConfigCards = [];
 
-  for (let i = 0; i < slots; i++) {
-    const hot = hotProducts[i % Math.max(hotProducts.length, 1)] || {};
+  for (const hot of candidates) {
+    if (cards.length >= COUNT) break;
 
-    let title    = hot.name  || `Trending Product ${i + 1}`;
-    let price    = hot.price || '';
-    let imageUrl = hot.image || '';
-    let link     = hot.url   || '';
-
-    // Scrape fresh product data
-    if (hot.url) {
-      try {
-        const scraped = await scrapeProductData(hot.url);
-        if (scraped.title)     title    = scraped.title;
-        if (scraped.price)     price    = scraped.price;
-        if (scraped.image_url) imageUrl = scraped.image_url;
-        console.log(`[AutoCards] Card ${i + 1}: scraped "${title}"  image:${imageUrl ? 'yes' : 'no'}`);
-      } catch (e) {
-        console.warn(`[AutoCards] Card ${i + 1}: scrape failed (${e.message}) — using tracker data`);
-      }
+    if (!hot.url) {
+      console.log(`[AutoCards] Skip "${hot.name}" — no URL`);
+      continue;
     }
 
-    // Dual image upload — check gallery cache first
-    let fileHandle = '';
-    let mediaId    = '';
-    let imageId    = '';
+    // ── Scrape URL: title + price + main image must ALL be present ────────────
+    let title = '', price = '', imageUrl = '';
+    const link = hot.url;
 
-    if (imageUrl) {
-      const cached = db.gallery_images.find(
-        img => img.channel_id === channelId && img.source_url === imageUrl && img.media_id
-      );
+    try {
+      const scraped = await scrapeProductData(hot.url);
+      title    = (scraped.title     || '').trim();
+      price    = (scraped.price     || '').trim();
+      imageUrl = (scraped.image_url || '').trim();
+    } catch (e) {
+      console.warn(`[AutoCards] Skip "${hot.name}" — scrape failed: ${e.message}`);
+      continue;
+    }
 
-      if (cached) {
-        mediaId    = cached.media_id    || '';
-        fileHandle = cached.file_handle || '';
-        imageId    = cached.id;
-        // Ensure file_handle exists (re-upload resumable if missing)
-        if (!fileHandle) {
-          try {
-            const { buffer, mimeType } = await whatsappService.downloadImage(imageUrl);
-            fileHandle = await whatsappService.uploadMediaResumable(buffer, `auto_${cleanName}_c${i + 1}.jpg`, mimeType);
-            cached.file_handle = fileHandle;
-            console.log(`[AutoCards] Card ${i + 1}: back-filled file_handle for cached image → ${fileHandle}`);
-          } catch (e) {
-            console.warn(`[AutoCards] Card ${i + 1}: resumable re-upload failed — ${e.message}`);
-          }
-        }
-        console.log(`[AutoCards] Card ${i + 1}: reused cached gallery → media_id:${mediaId}  file_handle:${fileHandle || 'n/a'}`);
-      } else {
+    if (!title)    { console.log(`[AutoCards] Skip "${hot.name}" — no title after scrape`);    continue; }
+    if (!price)    { console.log(`[AutoCards] Skip "${hot.name}" — no price after scrape`);    continue; }
+    if (!imageUrl) { console.log(`[AutoCards] Skip "${hot.name}" — no main image after scrape`); continue; }
+
+    console.log(`[AutoCards] ✓ Valid product ${cards.length + 1}: "${title}"  ${price}`);
+
+    // ── Dual image upload ─────────────────────────────────────────────────────
+    let fileHandle = '', mediaId = '', imageId = '';
+    const cardNum = cards.length + 1;
+
+    const cached = db.gallery_images.find(
+      img => img.channel_id === channelId && img.source_url === imageUrl && img.media_id
+    );
+    if (cached) {
+      mediaId    = cached.media_id    || '';
+      fileHandle = cached.file_handle || '';
+      imageId    = cached.id;
+      if (!fileHandle) {
         try {
           const { buffer, mimeType } = await whatsappService.downloadImage(imageUrl);
-          const filename = `auto_${cleanName}_c${i + 1}.jpg`;
+          fileHandle = await whatsappService.uploadMediaResumable(buffer, `auto_${cleanName}_c${cardNum}.jpg`, mimeType);
+          cached.file_handle = fileHandle;
+        } catch (_) { /* non-fatal */ }
+      }
+      console.log(`[AutoCards] Card ${cardNum}: reused cached → media_id:${mediaId}`);
+    } else {
+      try {
+        const { buffer, mimeType } = await whatsappService.downloadImage(imageUrl);
+        const filename = `auto_${cleanName}_c${cardNum}.jpg`;
 
-          // Upload 1: regular → media_id  (message send: { "image": { "id": media_id } })
-          mediaId = await whatsappService.uploadMedia(buffer, filename, mimeType);
-          console.log(`[AutoCards] Card ${i + 1}: media upload → media_id: ${mediaId}`);
-
-          // Upload 2: resumable → file_handle  (template creation: header_handle)
-          try {
-            fileHandle = await whatsappService.uploadMediaResumable(buffer, filename, mimeType);
-            console.log(`[AutoCards] Card ${i + 1}: resumable upload → file_handle: ${fileHandle}`);
-          } catch (e) {
-            console.warn(`[AutoCards] Card ${i + 1}: resumable upload failed (non-fatal) — ${e.message}`);
-          }
-
-          // Always save to gallery with both IDs
-          const imgRecord = {
-            id:            uuidv4(),
-            folder_id:     folder.id,
-            channel_id:    channelId,
-            filename,
-            mime_type:     mimeType,
-            size:          buffer.length,
-            file_handle:   fileHandle,   // template creation (header_handle)
-            media_id:      mediaId,      // message sending  ({ "id": media_id })
-            source_url:    imageUrl,
-            auto_detected: true,
-            product_url:   link,
-            template_name: cleanName,
-            card_index:    i,
-            created_at:    new Date().toISOString(),
-          };
-          db.gallery_images.push(imgRecord);
-          imageId = imgRecord.id;
+        mediaId = await whatsappService.uploadMedia(buffer, filename, mimeType);
+        try {
+          fileHandle = await whatsappService.uploadMediaResumable(buffer, filename, mimeType);
         } catch (e) {
-          console.error(`[AutoCards] Card ${i + 1}: image upload failed — ${e.message}`);
+          console.warn(`[AutoCards] Card ${cardNum}: resumable upload failed (non-fatal) — ${e.message}`);
         }
+
+        const imgRecord = {
+          id:           uuidv4(),  folder_id: folder.id, channel_id: channelId,
+          filename,     mime_type: mimeType,  size: buffer.length,
+          media_id:     mediaId,              // /messages { "image": { "id": media_id } }
+          file_handle:  fileHandle,           // template creation header_handle only
+          source_url:   imageUrl,
+          auto_detected: true,
+          product_url:  link,     product_name: title,
+          template_name: cleanName, card_index: cardNum - 1,
+          created_at:   new Date().toISOString(),
+        };
+        db.gallery_images.push(imgRecord);
+        imageId = imgRecord.id;
+        console.log(`[AutoCards] Card ${cardNum}: uploaded → media_id:${mediaId}  file_handle:${fileHandle || 'n/a'}`);
+      } catch (e) {
+        console.error(`[AutoCards] Card ${cardNum}: image upload failed — ${e.message}. Skipping.`);
+        continue; // image upload failed — skip this product
       }
     }
 
-    // Standard card structure: body = title + price, no URL button (universal across stores)
-    const card = {
-      body:            '{{1}}\n{{2}}',
-      buttons:         [],
-      image_id:        imageId,
-      header_media_id: fileHandle || mediaId,
-      file_handle:     fileHandle,
-      media_id:        mediaId,
-      source:          'auto',
-      var_map:         { '1': 'product_title', '2': 'product_price' },
-      example_values:  { '1': title, '2': price || '₹999' },
-      product_data:    { title, price, link, image_url: imageUrl },
+    // ── Add card (only reached when title + price + image + media_id all confirmed) ──
+    cards.push({
+      body: '{{1}}\n{{2}}', buttons: [], source: 'auto',
+      image_id: imageId, file_handle: fileHandle, media_id: mediaId,
+      var_map:        { '1': 'product_title', '2': 'product_price' },
+      example_values: { '1': title, '2': price },
+      product_data:   { title, price, link, image_url: imageUrl },
       selected_fetch_image: imageUrl,
-      fetched_images:  imageUrl ? [{ url: imageUrl, alt: title }] : [],
-    };
-    cards.push(card);
-
+      fetched_images: [{ url: imageUrl, alt: title }],
+    });
     productConfigCards.push({
-      title,
-      price,
-      link,
-      image_id:       imageId,
-      media_id:       mediaId,      // ← numeric ID from uploadMedia() — used in /messages { "id": media_id }
-      file_handle:    fileHandle,   // ← "4:..." from uploadMediaResumable() — template creation only
-      _hot_image_url: imageUrl,     // fallback URL if media_id is missing
-      _hot_score:     hot.score ?? 0,
-      _hot_views:     hot.views ?? 0,
-      _hot_carts:     hot.carts ?? 0,
-      _auto_updated:  new Date().toISOString(),
+      title, price, link, image_id: imageId,
+      media_id:    mediaId,    // numeric — /messages { "image": { "id": media_id } }
+      file_handle: fileHandle, // "4:..." — template creation only, never in send payload
+      _hot_image_url: imageUrl,
+      _hot_score: hot.score ?? 0, _hot_views: hot.views ?? 0, _hot_carts: hot.carts ?? 0,
+      _auto_updated: new Date().toISOString(),
     });
   }
 
+  if (cards.length < 2) {
+    throw new Error(
+      `Auto-detect found only ${cards.length} valid product(s) with title+price+image confirmed. ` +
+      `Need at least 2. Ensure product pages are accessible and include price + og:image markup.`
+    );
+  }
+
   db.save();
-  console.log(`[AutoCards] Built ${cards.length} cards for template "${cleanName}" — images in gallery "${folderName}"`);
+  console.log(`[AutoCards] ${cards.length}/${candidates.length} candidates passed → gallery "${folderName}"`);
   return { cards, productConfigCards };
 }
 
@@ -1222,7 +1206,8 @@ export function computeHotProducts(db, channelId, limit = 10) {
 
   return Object.entries(scores)
     .map(([, p]) => ({ name: p.name || '', url: p.url || '', image: p.image || '', price: p.price || '', views: p.views, carts: p.carts, score: (p.views * 1) + (p.carts * 3) }))
-    .filter(p => p.name)
+    // Require a URL — without it we cannot scrape to validate title/price/image
+    .filter(p => p.name && p.url)
     .sort((a, b) => b.score - a.score)
     .slice(0, limit);
 }
