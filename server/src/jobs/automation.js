@@ -153,10 +153,28 @@ async function applyCardsToAutoProductTemplates(channelId, productConfigCards) {
         }
       }
 
-      // Slice to card count, cycling if fewer valid products than carousel slots
-      const cards = Array.from({ length: cardCount }, (_, i) =>
-        matchedCards[i % matchedCards.length]
+      // Prefer products NOT already in this template's current cards.
+      // Already-scraped products stay unless there are not enough new ones to fill all slots.
+      const alreadyInTemplate = new Set(
+        (tpl.product_config?.cards || []).map(c => c.link).filter(Boolean)
       );
+      const freshCards    = matchedCards.filter(c => !alreadyInTemplate.has(c.link));
+      const existingCards = matchedCards.filter(c =>  alreadyInTemplate.has(c.link));
+
+      // Fill slots with fresh products first; only pad with existing if not enough fresh ones
+      const pool = freshCards.length >= cardCount
+        ? freshCards
+        : [...freshCards, ...existingCards];
+
+      if (freshCards.length > 0) {
+        console.log(`[ProductDetect] "${tpl.name}" — ${freshCards.length} new product(s), ${existingCards.length} already used`);
+      } else {
+        console.log(`[ProductDetect] "${tpl.name}" — no new products yet, keeping existing ${existingCards.length}`);
+      }
+
+      const cards = pool.length > 0
+        ? Array.from({ length: cardCount }, (_, i) => pool[i % pool.length])
+        : Array.from({ length: cardCount }, (_, i) => matchedCards[i % matchedCards.length]);
 
       if (!tpl.product_config) tpl.product_config = {};
       tpl.product_config.cards             = cards;
