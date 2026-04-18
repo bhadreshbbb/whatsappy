@@ -89,7 +89,7 @@ function buildUrlExample(url, varMap, exampleValues = {}) {
 //     ]}
 //   ]
 // }
-function buildMetaComponents(tpl) {
+function buildMetaComponents(tpl, { preserveVarNumbers = false } = {}) {
   const components = [];
 
   // variable_labels can arrive as object { '1': 'product_title' } or legacy []
@@ -141,7 +141,9 @@ function buildMetaComponents(tpl) {
             // Collect original var numbers BEFORE normalisation (for example lookup)
             const origVars = [...(b.url || '').matchAll(/\{\{(\d+)\}\}/g)].map(m => m[1]);
             // Normalise: replace any {{N}} → {{1}}  (Meta button-variable scope rule)
-            const normalizedUrl = (b.url || '').replace(/\{\{\d+\}\}/g, '{{1}}');
+            const normalizedUrl = preserveVarNumbers
+              ? (b.url || '')
+              : (b.url || '').replace(/\{\{\d+\}\}/g, '{{1}}');
             const btn = { type: 'URL', text: b.text, url: normalizedUrl };
             if (origVars.length) {
               // example = [slug_value] — the value that replaces {{1}} at send time
@@ -685,7 +687,7 @@ export async function previewPayload(req, res) {
       tpl.carousel_cards = await autoUploadTemplateImages(channelId, carousel_cards, name || 'preview');
     }
 
-    const components = buildMetaComponents(tpl);
+    const components = buildMetaComponents(tpl, { preserveVarNumbers: true });
     const payload = {
       name: cleanName,
       category: (tpl.category || 'MARKETING').toUpperCase(),  // "MARKETING" | "UTILITY" — Meta requires UPPERCASE
