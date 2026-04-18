@@ -11,6 +11,7 @@ let cronInterval;
 let productDetectionInterval;
 let productRefreshInterval;
 let templateStatusInterval;
+let _productCycleOffset = 0; // persists in memory between ticks; resets to 0 on restart
 const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000;
 const SIX_HOURS_MS = 60 * 1000; // DEMO: 1 minute (change back to 6 * 60 * 60 * 1000 for production
 const TWENTY_SIX_HOURS_MS = 26 * 60 * 60 * 1000;
@@ -199,28 +200,22 @@ export function startAutomation() {
   // Reads page_views sorted by views (top→medium→low), top 50 max.
   // Each tick starts from a different offset (advances by 4 per cycle) for round-robin coverage.
   // count=10 keeps the scrape window large enough to always find 2+ valid products.
-  const CYCLE_BATCH = 4;  // how many positions to advance each tick
-  const CYCLE_COUNT = 10; // how many candidates to attempt each tick (must be >= 2)
+  const CYCLE_BATCH = 4;  // positions to advance per tick
+  const CYCLE_COUNT = 10; // candidates to attempt per tick
   productDetectionInterval = setInterval(() => {
     const channelId = process.env.CHANNEL_ID || 'demo';
-    const db = getDb();
-    if (!db._auto_product_cycle) db._auto_product_cycle = { offset: 0 };
-    const cycle = db._auto_product_cycle;
-    const currentOffset = cycle.offset;
+    const currentOffset = _productCycleOffset;
 
     buildAutoProductCards(channelId, 'auto_products_seed', CYCLE_COUNT, currentOffset)
       .then(({ productConfigCards, candidatesTotal }) => {
         const poolSize = Math.min(50, candidatesTotal || 0);
-        cycle.offset = poolSize > 0 ? (currentOffset + CYCLE_BATCH) % poolSize : 0;
-        db.save();
-        console.log(`[ProductDetect] Cycle advance: offset ${currentOffset} → ${cycle.offset} (pool=${poolSize})`);
+        _productCycleOffset = poolSize > 0 ? (currentOffset + CYCLE_BATCH) % poolSize : 0;
+        console.log(`[ProductDetect] Cycle: offset ${currentOffset} → ${_productCycleOffset} (pool=${poolSize})`);
         return applyCardsToAutoProductTemplates(channelId, productConfigCards);
       })
       .catch(err => {
-        console.error('[ProductDetect] Error:', err.message);
-        // Reset offset on error so next tick retries from top products
-        const db2 = getDb();
-        if (db2._auto_product_cycle) db2._auto_product_cycle.offset = 0;
+        console.error('[ProductDetect] Error at offset', currentOffset, ':', err.message);
+        _productCycleOffset = 0; // reset to top on error
       });
   }, SIX_HOURS_MS);
   
