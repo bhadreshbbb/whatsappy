@@ -857,17 +857,19 @@ function FilterCard({ label, icon: Icon, children, active }) {
 }
 
 function CustomCampaignModal({ onClose, onCreated }) {
-  const [step, setStep]           = useState(1);
-  const [name, setName]           = useState('');
-  const [delayHrs, setDelay]      = useState(0);
-  const [runTimes, setRunTimes]   = useState(1);   // 0 = infinite
-  const [templateId, setTplId]    = useState('');
-  const [templates, setTemplates] = useState([]);
-  const [tplSearch, setTplSearch] = useState('');
-  const [contacts, setContacts]   = useState([]);
-  const [ctLoading, setCtLoading] = useState(false);
-  const [saving, setSaving]       = useState(false);
-  const [err, setErr]             = useState('');
+  const [step, setStep]               = useState(1);
+  const [name, setName]               = useState('');
+  const [delayHrs, setDelay]          = useState(0);
+  const [runTimes, setRunTimes]       = useState(1);   // 0 = infinite
+  const [templateId, setTplId]        = useState('');
+  const [metaTemplateId, setMetaTplId]= useState('');  // selected meta template
+  const [templates, setTemplates]     = useState([]);
+  const [metaTemplates, setMetaTpls]  = useState([]);  // all meta templates
+  const [tplSearch, setTplSearch]     = useState('');
+  const [contacts, setContacts]       = useState([]);
+  const [ctLoading, setCtLoading]     = useState(false);
+  const [saving, setSaving]           = useState(false);
+  const [err, setErr]                 = useState('');
 
   // Audience filters — all are AND, just pick values
   const [fStatus, setFStatus] = useState('');
@@ -881,6 +883,8 @@ function CustomCampaignModal({ onClose, onCreated }) {
 
   useEffect(() => {
     templatesApi.list().then(setTemplates).catch(() => {});
+    fetch('/api/meta-templates', { headers: CH() })
+      .then(r => r.json()).then(d => setMetaTpls(d.templates || [])).catch(() => {});
     setCtLoading(true);
     analyticsApi.contacts(60, 1000).then(d => {
       setContacts(d?.contacts || []);
@@ -907,8 +911,8 @@ function CustomCampaignModal({ onClose, onCreated }) {
   const handleNext = () => {
     setErr('');
     if (step === 1) {
-      if (!name.trim()) { setErr('Please enter a campaign name.'); return; }
-      if (!templateId)  { setErr('Please select a message template.'); return; }
+      if (!name.trim())                    { setErr('Please enter a campaign name.'); return; }
+      if (!templateId && !metaTemplateId)  { setErr('Please select a message template.'); return; }
       setStep(2);
     } else if (step === 2) {
       if (matched.length === 0) { setErr('No contacts match these filters. Adjust your selection.'); return; }
@@ -931,14 +935,15 @@ function CustomCampaignModal({ onClose, onCreated }) {
       ].filter(Boolean);
       await campaignsApi.create({
         name: name.trim(),
-        campaign_type:  'custom',
-        target_segment: 'custom',
+        campaign_type:   'custom',
+        target_segment:  'custom',
         target_language: fLang || 'en',
-        template_id:  templateId,
-        template_ids: [],
-        delay_hours:  Number(delayHrs),
-        run_times:    runTimes,   // 0 = infinite
-        is_active:    true,
+        template_id:     metaTemplateId ? null : templateId,
+        template_ids:    [],
+        meta_template_id: metaTemplateId || null,
+        delay_hours:     Number(delayHrs),
+        run_times:       runTimes,
+        is_active:       true,
         filters: JSON.stringify({ logic: 'AND', rules }),
       });
       onCreated(); onClose();
@@ -1075,34 +1080,72 @@ function CustomCampaignModal({ onClose, onCreated }) {
 
               </div>
 
-              <div className="space-y-2">
+              <div className="space-y-4">
                 <label className="label flex items-center gap-1.5">
                   <MessageSquare size={12} className="text-green-400" /> Message Template
                 </label>
-                <div className="relative">
-                  <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2" style={{ color: "#475569" }} />
-                  <input value={tplSearch} onChange={e => setTplSearch(e.target.value)}
-                    placeholder="Search templates…" className="input w-full pl-7 text-xs py-1.5" />
-                </div>
-                <div className="space-y-1.5 max-h-52 overflow-y-auto pr-1">
-                  {filteredTpls.length === 0 && (
-                    <p className="text-xs text-center py-4" style={{ color: "#475569" }}>No templates found.</p>
+
+                {/* ── Meta Templates (carousel + all) ── */}
+                {metaTemplates.length > 0 && (
+                  <div className="space-y-1.5">
+                    <p className="text-[10px] font-bold uppercase tracking-widest" style={{ color: "#f97316" }}>Meta Templates</p>
+                    <div className="space-y-1.5 max-h-52 overflow-y-auto pr-1">
+                      {metaTemplates.map(t => {
+                        const sel = metaTemplateId === t.id;
+                        const statusColor = t.meta_status === 'APPROVED' ? '#4ade80' : t.meta_status === 'PENDING' ? '#facc15' : '#f87171';
+                        return (
+                          <button key={t.id}
+                            onClick={() => { setMetaTplId(t.id); setTplId(''); }}
+                            className="w-full p-3 rounded-xl border text-left flex items-center justify-between transition-all"
+                            style={sel
+                              ? { background: "rgba(249,115,22,0.1)", border: "1px solid rgba(249,115,22,0.4)", color: "#fff" }
+                              : { background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)", color: "#94a3b8" }}>
+                            <div>
+                              <p className="text-xs font-semibold text-white">{t.name}</p>
+                              <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+                                <span className="text-[10px] font-semibold" style={{ color: statusColor }}>{t.meta_status || 'DRAFT'}</span>
+                                {t.is_carousel && <span className="text-[10px]" style={{ color: "#f97316" }}>· {t.carousel_cards?.length} cards</span>}
+                                {t.auto_product_mode && <span className="text-[10px]" style={{ color: "#fb923c" }}>· Auto-products</span>}
+                                <span className="text-[10px]" style={{ color: "#64748b" }}>· {t.language?.toUpperCase()}</span>
+                              </div>
+                            </div>
+                            {sel && <CheckCircle size={13} className="text-orange-400 shrink-0" />}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {/* ── Regular Templates ── */}
+                <div className="space-y-1.5">
+                  {metaTemplates.length > 0 && (
+                    <p className="text-[10px] font-bold uppercase tracking-widest" style={{ color: "#64748b" }}>Regular Templates</p>
                   )}
-                  {filteredTpls.map(t => (
-                    <button key={t.id} onClick={() => setTplId(t.id)}
-                      className="w-full p-3 rounded-xl border text-left flex items-center justify-between transition-all"
-                      style={String(templateId) === String(t.id)
-                        ? { background: "rgba(34,197,94,0.1)", border: "1px solid rgba(34,197,94,0.3)", color: "#fff" }
-                        : { background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)", color: "#94a3b8" }}
-                      onMouseEnter={e => { if (String(templateId) !== String(t.id)) e.currentTarget.style.borderColor = "rgba(255,255,255,0.12)"; }}
-                      onMouseLeave={e => { if (String(templateId) !== String(t.id)) e.currentTarget.style.borderColor = "rgba(255,255,255,0.06)"; }}>
-                      <div>
-                        <p className="text-xs font-semibold text-white">{t.name}</p>
-                        <p className="text-[10px] mt-0.5" style={{ color: "#475569" }}>{(t.category || '').replace(/_/g, ' ')}</p>
-                      </div>
-                      {String(templateId) === String(t.id) && <CheckCircle size={13} className="text-green-400 shrink-0" />}
-                    </button>
-                  ))}
+                  <div className="relative">
+                    <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2" style={{ color: "#475569" }} />
+                    <input value={tplSearch} onChange={e => setTplSearch(e.target.value)}
+                      placeholder="Search templates…" className="input w-full pl-7 text-xs py-1.5" />
+                  </div>
+                  <div className="space-y-1.5 max-h-40 overflow-y-auto pr-1">
+                    {filteredTpls.length === 0 && (
+                      <p className="text-xs text-center py-3" style={{ color: "#475569" }}>No regular templates found.</p>
+                    )}
+                    {filteredTpls.map(t => (
+                      <button key={t.id}
+                        onClick={() => { setTplId(t.id); setMetaTplId(''); }}
+                        className="w-full p-3 rounded-xl border text-left flex items-center justify-between transition-all"
+                        style={String(templateId) === String(t.id)
+                          ? { background: "rgba(34,197,94,0.1)", border: "1px solid rgba(34,197,94,0.3)", color: "#fff" }
+                          : { background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)", color: "#94a3b8" }}>
+                        <div>
+                          <p className="text-xs font-semibold text-white">{t.name}</p>
+                          <p className="text-[10px] mt-0.5" style={{ color: "#475569" }}>{(t.category || '').replace(/_/g, ' ')}</p>
+                        </div>
+                        {String(templateId) === String(t.id) && <CheckCircle size={13} className="text-green-400 shrink-0" />}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               </div>
             </div>
