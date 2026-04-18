@@ -126,9 +126,36 @@ async function applyCardsToAutoProductTemplates(channelId, productConfigCards) {
   for (const tpl of templates) {
     try {
       const cardCount = tpl.carousel_cards?.length || 3;
-      // Slice to card count, cycling if fewer cards available
+
+      // Extract the static URL base from the template's button URL (e.g. 'https://laaasyna.com/products/')
+      // Only use products whose link starts with the same base — ensures {{2}} slug resolves correctly.
+      let buttonUrlBase = null;
+      for (const tc of (tpl.carousel_cards || [])) {
+        for (const btn of (tc.buttons || [])) {
+          if (String(btn.type || '').toUpperCase() === 'URL' && btn.url?.includes('{{')) {
+            const varIdx = btn.url.indexOf('{{');
+            if (varIdx > 0) buttonUrlBase = btn.url.substring(0, varIdx);
+            break;
+          }
+        }
+        if (buttonUrlBase) break;
+      }
+
+      // Filter to products whose URL matches the button base; skip unmatched (wrong domain/path)
+      let matchedCards = productConfigCards;
+      if (buttonUrlBase) {
+        const matched = productConfigCards.filter(c => c.link && c.link.startsWith(buttonUrlBase));
+        if (matched.length > 0) {
+          matchedCards = matched;
+          console.log(`[ProductDetect] "${tpl.name}" — ${matched.length}/${productConfigCards.length} products match base "${buttonUrlBase}"`);
+        } else {
+          console.warn(`[ProductDetect] "${tpl.name}" — no products match base "${buttonUrlBase}", using all ${productConfigCards.length}`);
+        }
+      }
+
+      // Slice to card count, cycling if fewer valid products than carousel slots
       const cards = Array.from({ length: cardCount }, (_, i) =>
-        productConfigCards[i % productConfigCards.length]
+        matchedCards[i % matchedCards.length]
       );
 
       if (!tpl.product_config) tpl.product_config = {};
@@ -207,12 +234,14 @@ async function refreshAutoProductTemplates(forceRefresh = false) {
   const nowDt   = new Date();
   const channelId = process.env.CHANNEL_ID || 'demo';
 
-  // Only auto-product-mode APPROVED/PENDING carousel templates that are due for refresh.
-  // When forceRefresh=true (called from 6h product detect), bypass the next_auto_refresh gate.
+  // Only APPROVED/PENDING carousel templates that are NOT auto_product_mode.
+  // auto_product_mode templates are exclusively managed by buildAutoProductCards
+  // (productDetectionInterval) — this function handles non-auto-product carousels only.
   const nowIso = new Date(now).toISOString();
   const templates = (db.meta_templates || []).filter(t => {
     if (t.channel_id !== channelId) return false;
-    if (!t.is_carousel || !t.auto_product_mode) return false;
+    if (!t.is_carousel) return false;
+    if (t.auto_product_mode) return false; // handled by productDetectionInterval
     if (t.meta_status !== 'APPROVED' && t.meta_status !== 'PENDING') return false;
     // Per-template: skip if next_auto_refresh hasn't arrived yet (unless forced)
     if (!forceRefresh) {
