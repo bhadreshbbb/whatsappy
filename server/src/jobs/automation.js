@@ -212,52 +212,62 @@ export function startAutomation() {
         (t.meta_status === 'APPROVED' || t.meta_status === 'PENDING' || t.meta_status === 'DRAFT')
       );
       if (!autoTpls.length) {
-        console.log('[ProductDetect] No auto-product carousel templates found — skipping');
+        console.log('[ProductDetect] No auto-product carousel templates — skipping');
         return;
       }
       console.log(`[ProductDetect] tick — offset=${_productCycleOffset}, templates=${autoTpls.length}`);
 
-      // ── Step 2: scrape products at current offset ─────────────────────────────
       const currentOffset = _productCycleOffset;
-      let productConfigCards = [];
       let candidatesTotal = 0;
-      try {
-        const result = await buildAutoProductCards(channelId, 'auto_products_seed', CYCLE_COUNT, currentOffset);
-        productConfigCards = result.productConfigCards || [];
-        candidatesTotal    = result.candidatesTotal   || 0;
-      } catch (err) {
-        console.error('[ProductDetect] buildAutoProductCards failed:', err.message);
-      }
 
-      // ── Step 3: advance offset regardless of success ─────────────────────────
-      const poolSize = Math.min(50, candidatesTotal || 0);
-      _productCycleOffset = poolSize > 0 ? (currentOffset + CYCLE_BATCH) % poolSize : 0;
-      console.log(`[ProductDetect] offset ${currentOffset} → ${_productCycleOffset} | pool=${poolSize} | got ${productConfigCards.length} products`);
-
-      if (!productConfigCards.length) {
-        console.log('[ProductDetect] 0 valid products this tick — template unchanged');
-        return;
-      }
-
-      // ── Step 4: apply to every auto-product template ─────────────────────────
+      // ── Step 2: per-template scrape + gallery upload + apply ─────────────────
+      // Each template gets its own gallery folder (named after the template) so
+      // media_id / file_handle stored in product_config.cards are valid for that
+      // template's send_payload. Images are replaced (upserted) each cycle.
       for (const tpl of autoTpls) {
         try {
           const cardCount = tpl.carousel_cards?.length || 3;
-          const newCards  = Array.from({ length: cardCount }, (_, i) =>
+
+          let result;
+          try {
+            result = await buildAutoProductCards(channelId, tpl.name, CYCLE_COUNT, currentOffset);
+          } catch (err) {
+            console.error(`[ProductDetect] buildAutoProductCards failed for "${tpl.name}":`, err.message);
+            continue;
+          }
+
+          const productConfigCards = result.productConfigCards || [];
+          // Track largest pool seen across all templates (for offset math)
+          if ((result.candidatesTotal || 0) > candidatesTotal) candidatesTotal = result.candidatesTotal;
+
+          if (!productConfigCards.length) {
+            console.log(`[ProductDetect] "${tpl.name}" — 0 valid products this tick, skipping`);
+            continue;
+          }
+
+          const newCards = Array.from({ length: cardCount }, (_, i) =>
             productConfigCards[i % productConfigCards.length]
           );
+
           if (!tpl.product_config) tpl.product_config = {};
           tpl.product_config.cards             = newCards;
           tpl.product_config.last_auto_refresh = new Date().toISOString();
           tpl.product_config.send_payload      = buildSendMessagePayload(tpl, tpl.product_config, '{{RECIPIENT_PHONE}}');
-          console.log(`[ProductDetect] ✓ "${tpl.name}" — cards updated:`);
+
+          console.log(`[ProductDetect] ✓ "${tpl.name}" — ${cardCount} cards updated (gallery: "${tpl.name}"):`);
           newCards.forEach((c, i) =>
-            console.log(`   Card ${i + 1}: "${c.title || '—'}"  ${c.price || ''}  ${c.link || ''}`)
+            console.log(`   Card ${i + 1}: "${c.title || '—'}"  ${c.price || ''}  media_id:${c.media_id || 'n/a'}  ${c.link || ''}`)
           );
         } catch (e) {
           console.error(`[ProductDetect] template "${tpl.name}" error:`, e.message);
         }
       }
+
+      // ── Step 3: advance offset for next tick ─────────────────────────────────
+      const poolSize = Math.min(50, candidatesTotal || 0);
+      _productCycleOffset = poolSize > 0 ? (currentOffset + CYCLE_BATCH) % poolSize : 0;
+      console.log(`[ProductDetect] offset ${currentOffset} → ${_productCycleOffset} | pool=${poolSize}`);
+
       db.save();
     } catch (err) {
       console.error('[ProductDetect] Fatal error:', err.message);
