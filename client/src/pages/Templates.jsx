@@ -445,7 +445,6 @@ function CreateView({ form, setForm, error, setError, loading, onSubmit, onBack,
   const f = (k, v) => setForm(p => ({ ...p, [k]: v }));
   const [selFolder, setSelFolder]         = useState('');
   const [pickerCard, setPickerCard]       = useState(null);
-  const [hotProducts, setHotProducts]     = useState([]);
   const [hotLoading, setHotLoading]       = useState(false);
   const [showPreview, setShowPreview]     = useState(true);
   const [payloadModal, setPayloadModal]   = useState(null);   // null | { payload, curl }
@@ -483,45 +482,6 @@ function CreateView({ form, setForm, error, setError, loading, onSubmit, onBack,
     setTimeout(() => setBulkCaptureStatus(''), 3000);
   }
 
-  async function loadHotProducts() {
-    if (hotLoading) return;
-    setHotLoading(true);
-    try {
-      const d = await fetch(`${BASE}/hot-products?limit=10`, { headers: CH() }).then(r=>r.json());
-      setHotProducts(d.products || []);
-      return d.products || [];
-    }
-    catch (_) { return []; }
-    finally { setHotLoading(false); }
-  }
-
-  // Build a card pre-filled from a hot product.
-  // {{1}} = title + price (product_title_price), {{2}} = product_link (URL button suffix)
-  function hotToCard(hot) {
-    let slug = '';
-    let buttonUrl = 'https://yourstore.com/products/{{2}}';
-    try {
-      const u = new URL(hot.url);
-      const parts = u.pathname.split('/').filter(Boolean);
-      slug = parts.pop() || '';
-      // Reconstruct button base URL: origin + path-prefix + {{2}}
-      const prefix = parts.length ? `${u.origin}/${parts.join('/')}/` : `${u.origin}/`;
-      buttonUrl = `${prefix}{{2}}`;
-    } catch(_) {}
-    const titlePrice = [hot.name, hot.price].filter(Boolean).join('\n');
-    return {
-      ...BLANK_CARD,
-      source: 'auto',
-      product_data: { title: hot.name||'', price: hot.price||'', link: hot.url||'', image_url: hot.image||'' },
-      selected_fetch_image: hot.image || '',
-      fetched_images: hot.image ? [{ url: hot.image, alt: hot.name||'' }] : [],
-      buttons: [{ type: 'URL', text: 'Shop Now', url: buttonUrl }],
-      var_map: { '1': 'product_title_price', '2': 'product_link' },
-      example_values: { '1': titlePrice || 'Product Name\n₹799', '2': slug || 'product-slug' },
-      _hot_preview: hot,
-    };
-  }
-
   // When Auto-Product Mode is toggled ON: call /auto-detect-products to validate, upload, and
   // return pre-filled cards. On success, populate form.carousel_cards so user can edit before submit.
   async function toggleAutoMode(checked) {
@@ -539,7 +499,6 @@ function CreateView({ form, setForm, error, setError, loading, onSubmit, onBack,
       if (!res.ok) throw new Error(d.error || 'Auto-detect failed');
       if (d.cards && d.cards.length >= 2) {
         f('carousel_cards', d.cards);
-        setHotProducts(d.products || []);
       }
     } catch (e) {
       setError(`Auto-detect failed: ${e.message}`);
@@ -563,7 +522,6 @@ function CreateView({ form, setForm, error, setError, loading, onSubmit, onBack,
       if (!res.ok) throw new Error(d.error || 'Re-detect failed');
       if (d.cards && d.cards.length >= 2) {
         f('carousel_cards', d.cards);
-        setHotProducts(d.products || []);
       }
     } catch (e) {
       setError(`Re-detect failed: ${e.message}`);
@@ -616,7 +574,6 @@ function CreateView({ form, setForm, error, setError, loading, onSubmit, onBack,
   }
   function setCardSource(idx, src) {
     updateCard(idx, 'source', src);
-    if (src === 'auto') loadHotProducts();
   }
   // setCardVarMap — also auto-syncs example_values from product_data
   function setCardVarMap(idx, varNum, val) {
@@ -675,11 +632,7 @@ function CreateView({ form, setForm, error, setError, loading, onSubmit, onBack,
   }
   function addCard() {
     if (form.carousel_cards.length >= 10) return;
-    // In auto mode: add the next hot product as the new card
-    if (form.auto_product_mode && hotProducts.length > form.carousel_cards.length) {
-      const nextHot = hotProducts[form.carousel_cards.length];
-      f('carousel_cards', [...form.carousel_cards, hotToCard(nextHot)]);
-    } else {
+    {
       f('carousel_cards', [...form.carousel_cards, { ...BLANK_CARD }]);
     }
   }
@@ -846,13 +799,11 @@ function CreateView({ form, setForm, error, setError, loading, onSubmit, onBack,
                   <div className="flex flex-col gap-4">
                     {form.carousel_cards.map((card, idx) => (
                       <CarouselCardEditor key={idx} card={card} idx={idx} totalCards={form.carousel_cards.length}
-                        hotProducts={hotProducts} hotLoading={hotLoading}
                         galleries={galleries} galleryImages={galleryImages}
                         pickerCard={pickerCard} selFolder={selFolder}
                         onSetSelFolder={setSelFolder}
                         loadFolderImages={loadFolderImages}
                         onSetPickerCard={setPickerCard}
-                        loadHotProducts={loadHotProducts}
                         onUpdateCard={(k,v) => updateCard(idx, k, v)}
                         onSetSource={(s) => setCardSource(idx, s)}
                         onSetVarMap={(vn, val) => setCardVarMap(idx, vn, val)}
@@ -864,7 +815,6 @@ function CreateView({ form, setForm, error, setError, loading, onSubmit, onBack,
                         onRemoveButton={(bi) => removeCardButton(idx, bi)}
                         onUpdateButton={(bi, k, v) => { const cs=[...form.carousel_cards]; cs[idx].buttons[bi]={...cs[idx].buttons[bi],[k]:v}; f('carousel_cards',cs); }}
                         onSelectImage={(img) => selectCardImage(idx, img)}
-                        onAssignHotProduct={(hot) => assignHotProduct(idx, hot)}
                       />
                     ))}
                   </div>
@@ -957,7 +907,7 @@ function proxyUrl(url) {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CAROUSEL CARD EDITOR — Enhanced: multi-image fetch, editable product data, dynamic vars + Meta examples
-function CarouselCardEditor({ card, idx, totalCards, hotProducts, hotLoading, galleries, galleryImages, pickerCard, selFolder, onSetSelFolder, loadFolderImages, onSetPickerCard, loadHotProducts, onUpdateCard, onSetSource, onSetVarMap, onSetExampleValue, onUpdateProductData, onAddVar, onRemoveCard, onAddButton, onRemoveButton, onUpdateButton, onSelectImage, onAssignHotProduct }) {
+function CarouselCardEditor({ card, idx, totalCards, galleries, galleryImages, pickerCard, selFolder, onSetSelFolder, loadFolderImages, onSetPickerCard, onUpdateCard, onSetSource, onSetVarMap, onSetExampleValue, onUpdateProductData, onAddVar, onRemoveCard, onAddButton, onRemoveButton, onUpdateButton, onSelectImage }) {
   const source      = card.source || 'manual';
   const bodyVars    = extractVars(card.body);
   const productData = card.product_data || {};
@@ -1148,52 +1098,6 @@ function CarouselCardEditor({ card, idx, totalCards, hotProducts, hotLoading, ga
               selected_fetch_image: data.images?.[0]?.url || data.image_url || '',
             })}
           />
-        )}
-
-        {/* ── AUTO-DETECT MODE ────────────────────────────────────────────── */}
-        {source === 'auto' && (
-          <div className="bg-orange-500/5 border border-orange-500/20 rounded-xl p-3 flex flex-col gap-2">
-            <div className="flex items-center justify-between">
-              <p className="text-orange-400 text-xs font-medium flex items-center gap-1">
-                <Flame size={11}/> Trending + abandoned — click to auto-fill all fields
-              </p>
-              <button onClick={loadHotProducts} className="text-slate-500 hover:text-slate-300">
-                <RefreshCw size={11} className={hotLoading?'animate-spin':''}/>
-              </button>
-            </div>
-            {hotLoading && <div className="skeleton h-10 rounded-lg" />}
-            {!hotLoading && hotProducts.length === 0 && (
-              <p className="text-slate-500 text-xs">No data yet — builds as visitors browse. Falls back to product catalog.</p>
-            )}
-            {hotProducts.length > 0 && (
-              <div className="flex flex-col gap-1.5 max-h-52 overflow-y-auto">
-                {hotProducts.slice(0,8).map((hp,hi) => {
-                  const isSel = productData.title === hp.name && productData.link === hp.url;
-                  return (
-                    <button key={hi} onClick={() => onAssignHotProduct(hp)}
-                      className={`flex items-center gap-2 p-2 rounded-lg text-left transition-all border ${
-                        isSel ? 'border-orange-500/50 bg-orange-500/10' : 'border-white/5 bg-white/5 hover:border-orange-500/25 hover:bg-orange-500/5'
-                      }`}>
-                      {hp.image
-                        ? <img src={proxyUrl(hp.image)} alt="" className="w-10 h-10 object-cover rounded-lg shrink-0" onError={e=>e.target.style.display='none'} />
-                        : <div className="w-10 h-10 bg-white/5 rounded-lg shrink-0 flex items-center justify-center"><Image size={14} className="text-slate-600"/></div>
-                      }
-                      <div className="flex-1 min-w-0">
-                        <p className="text-white text-xs truncate font-medium">{hp.name}</p>
-                        <div className="flex items-center gap-2 mt-0.5">
-                          {hp.price && <span className="text-green-400 text-xs">{hp.price}</span>}
-                          {hp.carts > 0 && <span className="text-orange-400 text-xs flex items-center gap-0.5"><ShoppingCart size={8}/>{hp.carts}</span>}
-                          {hp.views > 0 && <span className="text-slate-500 text-xs flex items-center gap-0.5"><Eye size={8}/>{hp.views}</span>}
-                        </div>
-                      </div>
-                      {isSel && <Check size={13} className="text-orange-400 shrink-0"/>}
-                      <span className="text-xs text-slate-600 shrink-0">#{hi+1}</span>
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-          </div>
         )}
 
         {/* ── EDITABLE PRODUCT DATA — always visible, pre-filled from source ── */}
@@ -1404,58 +1308,18 @@ function ConfigView({ tpl, config, setConfig, galleries, galleryImages, loadFold
   const set = (k, v) => setConfig(p => ({ ...p, [k]: v }));
   const [selFolder, setSelFolder]           = useState('');
   const [activeCard, setActiveCard]         = useState(0);
-  const [hotProducts, setHotProducts]       = useState([]);
-  const [hotLoading, setHotLoading]         = useState(false);
   const [autoRefreshing, setAutoRefreshing] = useState(false);
 
-  useEffect(() => { if (tpl.is_carousel) loadHotProducts(); }, []);
-
-  async function loadHotProducts() {
-    setHotLoading(true);
-    try {
-      const d = await fetch(`${BASE}/hot-products?limit=10`, {headers:CH()}).then(r=>r.json());
-      const hots = d.products || [];
-      setHotProducts(hots);
-      // Auto-populate cards that have no product data yet (auto_product_mode templates)
-      if (tpl.auto_product_mode && hots.length > 0) {
-        setConfig(prev => {
-          const cards = [...(prev.cards || [])];
-          hots.forEach((hot, i) => {
-            if (i < cards.length && !cards[i].title) {
-              cards[i] = {
-                ...cards[i],
-                title:          hot.name  || '',
-                price:          hot.price || '',
-                link:           hot.url   || '',
-                _hot_image_url: hot.image || '',
-                _hot_score:     hot.score,
-                _hot_carts:     hot.carts,
-                _hot_views:     hot.views,
-              };
-            }
-          });
-          return { ...prev, cards };
-        });
-      }
-    } catch(_){} finally { setHotLoading(false); }
-  }
   async function triggerAutoRefresh() {
     setAutoRefreshing(true);
     try {
       const d = await api(`/${tpl.id}/refresh-auto`, {method:'POST'});
       if (d.template?.product_config) setConfig(d.template.product_config);
-      setHotProducts(d.hot_products||[]);
     } catch(e){console.error(e);} finally { setAutoRefreshing(false); }
   }
   function setCardField(idx,key,val) {
     const cards=[...(config.cards||[])]; cards[idx]={...cards[idx],[key]:val}; set('cards',cards);
   }
-  function assignHot(idx, hot) {
-    const cards=[...(config.cards||[])];
-    cards[idx]={...cards[idx], title:hot.name, price:hot.price, link:hot.url, _hot_image_url:hot.image, _hot_score:hot.score, _hot_carts:hot.carts, _hot_views:hot.views};
-    set('cards',cards);
-  }
-
   const isCarousel = tpl.is_carousel;
   const activeCardData = (config.cards||[])[activeCard] || {};
 
@@ -1474,58 +1338,13 @@ function ConfigView({ tpl, config, setConfig, galleries, galleryImages, loadFold
         <div className={`grid gap-6 lg:grid-cols-[1fr_360px]`}>
           {/* LEFT: editor */}
           <div className="flex flex-col gap-5">
-            {/* Hot products panel */}
-            <div className="bg-orange-500/5 border border-orange-500/20 rounded-2xl p-4 flex flex-col gap-3">
-              <div className="flex items-center justify-between flex-wrap gap-2">
-                <div className="flex items-center gap-2">
-                  <Flame size={14} className="text-orange-400"/>
-                  <div>
-                    <p className="text-white text-sm font-medium">Hot Products</p>
-                    <p className="text-slate-500 text-xs">Trending + abandoned cart — click any to assign to Card {activeCard+1}</p>
-                  </div>
-                </div>
-                <div className="flex items-center gap-2">
-                  {tpl.auto_product_mode && (
-                    <button onClick={triggerAutoRefresh} disabled={autoRefreshing}
-                      className="flex items-center gap-1.5 text-xs bg-orange-600/20 hover:bg-orange-600/40 border border-orange-500/30 text-orange-400 px-3 py-1.5 rounded-lg disabled:opacity-50 transition-all">
-                      <RefreshCw size={11} className={autoRefreshing?'animate-spin':''}/> Auto-fill now
-                    </button>
-                  )}
-                  <button onClick={loadHotProducts} disabled={hotLoading} className="p-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-slate-400 transition-all">
-                    <RefreshCw size={12} className={hotLoading?'animate-spin':''}/>
-                  </button>
-                </div>
-              </div>
-              {hotLoading && (
-                <div className="flex gap-2">{[...Array(4)].map((_,i)=><div key={i} className="skeleton w-28 h-24 rounded-xl shrink-0"/>)}</div>
-              )}
-              {!hotLoading && hotProducts.length === 0 && (
-                <p className="text-slate-500 text-xs py-2">No tracking data yet. Products will appear as visitors browse and abandon carts. Falls back to your product catalog.</p>
-              )}
-              {hotProducts.length > 0 && (
-                <div className="flex gap-2 overflow-x-auto pb-1">
-                  {hotProducts.map((hot,i) => (
-                    <button key={i} onClick={() => assignHot(activeCard, hot)}
-                      className={`shrink-0 w-28 rounded-xl overflow-hidden border transition-all text-left ${activeCardData.title===hot.name ? 'border-orange-500/50 bg-orange-500/5' : 'border-white/5 bg-white/[0.03] hover:border-orange-500/30 hover:bg-orange-500/5'}`}>
-                      <div className="w-full h-16 overflow-hidden bg-white/5">
-                        {hot.image
-                          ? <img src={hot.image} alt="" className="w-full h-full object-cover" onError={e=>e.target.style.display='none'}/>
-                          : <div className="w-full h-full flex items-center justify-center"><Image size={14} className="text-slate-700"/></div>
-                        }
-                      </div>
-                      <div className="p-1.5">
-                        <p className="text-white text-xs truncate font-medium leading-tight">{hot.name}</p>
-                        {hot.price && <p className="text-green-400 text-xs">{hot.price}</p>}
-                        <div className="flex items-center gap-1 mt-0.5">
-                          {hot.carts>0 && <span className="text-orange-400 text-xs flex items-center gap-0.5"><ShoppingCart size={7}/>{hot.carts}</span>}
-                          {hot.views>0 && <span className="text-slate-500 text-xs flex items-center gap-0.5"><Eye size={7}/>{hot.views}</span>}
-                        </div>
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
+            {/* Auto-refresh button for auto_product_mode templates */}
+            {tpl.auto_product_mode && (
+              <button onClick={triggerAutoRefresh} disabled={autoRefreshing}
+                className="flex items-center gap-1.5 text-xs bg-orange-600/20 hover:bg-orange-600/40 border border-orange-500/30 text-orange-400 px-3 py-1.5 rounded-lg disabled:opacity-50 transition-all self-start">
+                <RefreshCw size={11} className={autoRefreshing?'animate-spin':''}/> Refresh Products Now
+              </button>
+            )}
 
             {/* Card tabs */}
             <div className="flex gap-2 flex-wrap">
