@@ -1156,51 +1156,83 @@ export async function refreshStatus(req, res) {
   }
 }
 
-// ── Auto-refresh PENDING template statuses in the background ─────────────────
-// Exported so automation.js can call it on startup and schedule it.
+// ── Auto-refresh ALL template statuses from Meta WABA in one bulk call ────────
+// Fetches the full WABA template list and syncs every local template's status.
+// Handles: PENDING → APPROVED, PENDING → REJECTED, missing meta_template_id.
 export async function autoRefreshPendingStatuses() {
   const db = getDb();
   const channelId = process.env.CHANNEL_ID || 'demo';
   const creds = getCreds(channelId);
   if (!creds) return;
 
-  const pending = (db.meta_templates || []).filter(t =>
-    t.channel_id === channelId &&
-    (t.meta_status === 'PENDING' || t.meta_status === 'DRAFT') &&
-    t.meta_template_id
+  // Only bother if we have at least one non-APPROVED template with a submitted ID
+  const localTemplates = (db.meta_templates || []).filter(t => t.channel_id === channelId);
+  const needsCheck = localTemplates.filter(t =>
+    t.meta_status === 'PENDING' || t.meta_status === 'DRAFT' || t.meta_status === 'IN_APPEAL'
   );
-  if (pending.length === 0) return;
+  if (needsCheck.length === 0) return;
 
-  console.log(`[MetaTemplates] Auto-refreshing status for ${pending.length} PENDING/DRAFT template(s)...`);
-  let updated = 0;
+  console.log(`[MetaTemplates] Bulk status sync — checking ${needsCheck.length} template(s) via WABA list…`);
 
-  for (const tpl of pending) {
-    try {
-      const res = await fetch(
-        `https://graph.facebook.com/v25.0/${tpl.meta_template_id}?fields=name,status,quality_score,rejected_reason`,
-        { headers: { Authorization: `Bearer ${creds.token}` } }
-      );
+  // Fetch all templates from WABA (paginate if needed)
+  const metaTemplates = {};
+  let url = `https://graph.facebook.com/v25.0/${creds.wabaId}/message_templates?fields=id,name,status,quality_score,rejected_reason&limit=100`;
+  try {
+    while (url) {
+      const res = await fetch(url, { headers: { Authorization: `Bearer ${creds.token}` } });
       const data = await res.json();
-      if (res.ok && data.status) {
-        const rawStatus = data.status;
-        const newStatus = rawStatus === 'ACTIVE' ? 'APPROVED' : rawStatus;
-        if (newStatus !== tpl.meta_status) {
-          console.log(`[MetaTemplates] "${tpl.name}": ${tpl.meta_status} → ${newStatus}`);
-          tpl.meta_status = newStatus;
-          if (data.rejected_reason) tpl.rejected_reason = data.rejected_reason;
-          if (data.quality_score)   tpl.quality_score   = data.quality_score;
-          tpl.status_refreshed_at = new Date().toISOString();
-          updated++;
-        }
+      if (!res.ok) {
+        console.warn(`[MetaTemplates] WABA list fetch failed: ${JSON.stringify(data?.error)}`);
+        break;
       }
-    } catch (e) {
-      console.warn(`[MetaTemplates] Auto-refresh failed for "${tpl.name}": ${e.message}`);
+      for (const mt of (data.data || [])) {
+        // Key by both name and id so we can match either way
+        metaTemplates[mt.name] = mt;
+        if (mt.id) metaTemplates[mt.id] = mt;
+      }
+      url = data.paging?.next || null;
+    }
+  } catch (e) {
+    console.warn(`[MetaTemplates] WABA list fetch error: ${e.message}`);
+    return;
+  }
+
+  let updated = 0;
+  for (const tpl of needsCheck) {
+    // Match by meta_template_id first, then by name
+    const found = (tpl.meta_template_id && metaTemplates[tpl.meta_template_id])
+      || metaTemplates[tpl.name];
+
+    if (!found) {
+      console.warn(`[MetaTemplates] "${tpl.name}" not found in WABA list`);
+      continue;
+    }
+
+    // Persist meta_template_id if we got it from the list
+    if (found.id && !tpl.meta_template_id) {
+      tpl.meta_template_id = found.id;
+    }
+
+    const rawStatus = found.status || '';
+    const newStatus = rawStatus === 'ACTIVE' ? 'APPROVED' : rawStatus;
+
+    if (newStatus !== tpl.meta_status) {
+      console.log(`[MetaTemplates] "${tpl.name}": ${tpl.meta_status} → ${newStatus}`);
+      tpl.meta_status = newStatus;
+      if (found.rejected_reason) tpl.rejected_reason = found.rejected_reason;
+      if (found.quality_score)   tpl.quality_score   = found.quality_score;
+      tpl.status_refreshed_at = new Date().toISOString();
+      updated++;
+    } else {
+      console.log(`[MetaTemplates] "${tpl.name}": still ${newStatus}`);
     }
   }
 
   if (updated > 0) {
     db.save();
-    console.log(`[MetaTemplates] Auto-refresh: ${updated} template(s) status updated`);
+    console.log(`[MetaTemplates] Bulk sync done — ${updated} template(s) updated`);
+  } else {
+    console.log(`[MetaTemplates] Bulk sync done — no status changes`);
   }
 }
 
