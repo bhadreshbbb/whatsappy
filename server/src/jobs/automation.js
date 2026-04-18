@@ -640,7 +640,7 @@ async function runAutomation() {
         const targets = db.website_visitors.filter(v => {
           if (v.channel_id !== channelId || !v.phone || v.is_opted_out) return false;
           if (filters.length > 0 && !filters.includes(v.status)) return false;
-          
+
           const executions = db.abandoned_cart_executions.filter(x => x.campaign_id === cam.id && x.phone === v.phone);
           const isInitial = executions.length === 0;
 
@@ -655,6 +655,32 @@ async function runAutomation() {
             if (hoursSince < (cam.delay_hours || 24)) return false;
           }
           return isInitial || isFollowup;
+        }).slice(0, 5);
+
+        await sendMultiple(db, cam, targets, 'broadcast');
+      }
+
+      // ── Custom campaign: audience filtered via rules, sends meta template if linked ──
+      else if (cam.campaign_type === 'custom') {
+        let filterDef = { logic: 'AND', rules: [] };
+        try { filterDef = JSON.parse(cam.filters || '{}'); } catch (_) {}
+        const { logic = 'AND', rules = [] } = filterDef;
+
+        const targets = db.website_visitors.filter(v => {
+          if (v.channel_id !== channelId || !v.phone || v.is_opted_out) return false;
+          // Delay gate: skip if sent too recently
+          if (v.whatsapp_sent_at) {
+            const hoursSince = (Date.now() - new Date(v.whatsapp_sent_at).getTime()) / 3600000;
+            if (hoursSince < (cam.delay_hours || 24)) return false;
+          }
+          // De-dup: skip if already sent by this campaign and it's one-time
+          if (cam.is_one_time) {
+            const alreadySent = db.abandoned_cart_executions.find(x => x.campaign_id === cam.id && x.phone === v.phone);
+            if (alreadySent) return false;
+          }
+          if (!rules.length) return true;
+          const results = rules.map(r => applyRule(v, r));
+          return logic === 'AND' ? results.every(Boolean) : results.some(Boolean);
         }).slice(0, 5);
 
         await sendMultiple(db, cam, targets, 'broadcast');
@@ -720,6 +746,7 @@ const STATUS_ALLOWED = {
 
 function isBlockedByStatus(visitorStatus, campaignType) {
   if (campaignType === 'custom_broadcast') return false; // Allowed unconditionally (relies on query filters)
+  if (campaignType === 'custom') return false;           // Custom campaigns use their own filter rules
   if (!visitorStatus) return false;
   const allowed = STATUS_ALLOWED[visitorStatus];
   if (!allowed) return false; // unknown status — don't block

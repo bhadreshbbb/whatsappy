@@ -1,6 +1,7 @@
 import { getDb } from '../services/database.js';
 import { whatsappService } from '../services/whatsapp.service.js';
 import { saveChatMessage } from './chat.controller.js';
+import { buildSendMessagePayload, LANG_MAP } from './meta-templates.controller.js';
 
 export const campaignsController = {
   async getCampaigns(req, res, next) {
@@ -129,156 +130,134 @@ export const campaignsController = {
       const { id } = req.params;
       const channelId = req.headers['x-channel-id'] || 'demo';
       const campaign = db.abandoned_cart_campaigns.find(c => c.id == id);
-      if (!campaign) {
-        return res.status(404).json({ error: 'Campaign not found' });
-      }
+      if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
 
+      // ── Build target audience ──────────────────────────────────────────────
       let targetEvents = [];
       const seg = campaign.target_segment || 'all';
 
-      // ── Custom campaign: apply stored filter rules ──────────────────────────
+      const applyRule = (visitor, rule) => {
+        const cv = visitor[rule.field];
+        if (rule.op === 'eq')       return String(cv ?? '').toLowerCase() === String(rule.value ?? '').toLowerCase();
+        if (rule.op === 'contains') return String(cv ?? '').toLowerCase().includes(String(rule.value ?? '').toLowerCase());
+        if (rule.op === 'gte')      return Number(cv ?? 0) >= Number(rule.value ?? 0);
+        if (rule.op === 'lte')      return Number(cv ?? 0) <= Number(rule.value ?? 0);
+        return true;
+      };
+
       if (campaign.campaign_type === 'custom') {
         let filterDef = { logic: 'AND', rules: [] };
         try { filterDef = JSON.parse(campaign.filters || '{}'); } catch (_) {}
         const { logic = 'AND', rules = [] } = filterDef;
-
-        const applyRule = (visitor, rule) => {
-          const cv = visitor[rule.field];
-          if (rule.op === 'eq')       return String(cv ?? '').toLowerCase() === String(rule.value ?? '').toLowerCase();
-          if (rule.op === 'contains') return String(cv ?? '').toLowerCase().includes(String(rule.value ?? '').toLowerCase());
-          if (rule.op === 'gte')      return Number(cv ?? 0) >= Number(rule.value ?? 0);
-          if (rule.op === 'lte')      return Number(cv ?? 0) <= Number(rule.value ?? 0);
-          return true;
-        };
-
         targetEvents = db.website_visitors.filter(v => {
           if (v.channel_id !== channelId || !v.phone) return false;
           if (!rules.length) return true;
           const results = rules.map(r => applyRule(v, r));
           return logic === 'AND' ? results.every(Boolean) : results.some(Boolean);
         });
-
-      // Advanced User Filtering Engine (existing types)
       } else if (campaign.campaign_type === 'abandoned_cart') {
         targetEvents = db.cart_events.filter(c => c.channel_id === channelId && !c.recovered && c.phone);
       } else if (campaign.campaign_type === 'product_view') {
         targetEvents = db.product_views.filter(v => v.channel_id === channelId && v.phone);
       } else {
-        // Custom Broadcasts / Post-Purchase Upsells
         targetEvents = db.website_visitors.filter(v => {
           if (v.channel_id !== channelId || !v.phone) return false;
           if (seg === 'purchasers' || campaign.campaign_type === 'post_purchase') return v.status === 'purchased';
           if (seg === 'hot_users') return v.status === 'hot_user';
           if (seg === 'active_visitors') return v.status === 'active' || v.status === 'product_view';
-          return true; // seg === 'all'
+          return true;
         });
       }
-      
-      // Resolve template
-      const templateId = (campaign.template_ids && campaign.template_ids.length > 0)
+
+      // ── Resolve linked templates ───────────────────────────────────────────
+      const metaTpl = campaign.meta_template_id
+        ? (db.meta_templates || []).find(t => t.id === campaign.meta_template_id)
+        : null;
+
+      const templateId = (campaign.template_ids?.length > 0)
         ? campaign.template_ids[0]
         : (campaign.template_id || null);
       const templateRecord = templateId ? db.message_templates.find(t => t.id == templateId) : null;
 
-      // Build base message text from template
       let baseText = '';
-      if (templateRecord) {
-        if (templateRecord.body_text) {
-          baseText = templateRecord.body_text;
-        } else if (templateRecord.components) {
-          try {
-            const comps = JSON.parse(templateRecord.components);
-            baseText = comps.find(c => c.type === 'body')?.text || comps[0]?.text || '';
-          } catch (_) {}
-        }
+      if (templateRecord?.body_text) {
+        baseText = templateRecord.body_text;
+      } else if (templateRecord?.components) {
+        try {
+          const comps = JSON.parse(templateRecord.components);
+          baseText = comps.find(c => c.type === 'body')?.text || comps[0]?.text || '';
+        } catch (_) {}
       }
 
       let sent = 0;
+
       for (const target of targetEvents) {
         if (!target.phone) continue;
-        // Avoid sending the same initial blast twice immediately
+        // Rate-limit: skip if sent within last hour for non-cart campaigns
         if (campaign.campaign_type !== 'abandoned_cart' && target.whatsapp_sent_at) {
-          const hoursSince = (Date.now() - new Date(target.whatsapp_sent_at).getTime()) / (60 * 60 * 1000);
+          const hoursSince = (Date.now() - new Date(target.whatsapp_sent_at).getTime()) / 3600000;
           if (hoursSince < 1) continue;
         }
 
         const userLang = campaign.target_language === 'per_user'
           ? (target.language || 'en')
           : (campaign.target_language || 'en');
+        const metaLangCode = LANG_MAP[userLang] || userLang;
 
-        // Fill variables into message text
-        // Start with event-level data, then override with template-stored values
-        const variables = {
-          name: target.name || 'Customer',
-          product_name: target.product_name || '',
-          product_price: target.product_price || String(target.total_amount || ''),
-          total_amount: String(target.total_amount || ''),
-          cart_url: target.cart_url || '',
-          product_url: target.product_url || '',
-          product_image: target.product_image || '',
-        };
-        // Template-stored product data always wins (manual / URL-scraped)
-        if (templateRecord) {
-          if (templateRecord.product_data) {
-            try {
-              const pd = typeof templateRecord.product_data === 'string'
-                ? JSON.parse(templateRecord.product_data)
-                : templateRecord.product_data;
-              if (pd.name  || pd.title) variables.product_name  = pd.name  || pd.title;
-              if (pd.price)             variables.product_price = String(pd.price);
-              if (pd.image)             variables.product_image = pd.image;
-              if (pd.link  || pd.url)   variables.product_url   = pd.link  || pd.url;
-            } catch (_) {}
-          }
-          if (templateRecord.example_values) {
-            try {
-              const ev = typeof templateRecord.example_values === 'string'
-                ? JSON.parse(templateRecord.example_values)
-                : templateRecord.example_values;
-              for (const [k, v] of Object.entries(ev)) {
-                if (v !== undefined && v !== '' && k in variables) variables[k] = v;
-              }
-            } catch (_) {}
-          }
-          if (templateRecord.carousel_cards) {
-            try {
-              const cards = typeof templateRecord.carousel_cards === 'string'
-                ? JSON.parse(templateRecord.carousel_cards)
-                : templateRecord.carousel_cards;
-              if (Array.isArray(cards) && cards.length > 0) {
-                const pd = cards[0].product_data || {};
-                if (pd.title || pd.name) variables.product_name  = pd.title || pd.name;
-                if (pd.price)            variables.product_price = String(pd.price);
-                if (pd.image)            variables.product_image = pd.image;
-                if (pd.link  || pd.url)  variables.product_url   = pd.link  || pd.url;
-              }
-            } catch (_) {}
-          }
-        }
-        let resolvedText = baseText;
-        for (const [k, v] of Object.entries(variables)) {
-          resolvedText = resolvedText.replace(new RegExp(`\\{\\{${k}\\}\\}`, 'g'), v);
-        }
-
-        // Actually send via WhatsApp API
         let wamid = null;
-        try {
-          const result = await whatsappService.sendMessage(
-            target.phone,
-            [{ type: 'body', text: baseText }],
-            variables
-          );
-          wamid = result.messageId || null;
-          resolvedText = result.resolvedText || resolvedText;
-        } catch (e) {
-          console.error('[Campaign] Send error:', e.message);
+        let resolvedText = '';
+
+        // ── PATH A: Meta template send (carousel / approved template) ─────────
+        if (metaTpl) {
+          const sendPayload = buildSendMessagePayload(metaTpl, metaTpl.product_config, target.phone, metaLangCode);
+          console.log(`[Campaign Send] Meta template "${metaTpl.name}" → ${target.phone}`);
+          console.log(JSON.stringify(sendPayload, null, 2));
+          try {
+            const result = await whatsappService.sendTemplateMessage(target.phone, sendPayload);
+            wamid = result.messageId || null;
+            resolvedText = result.resolvedText || `[Template: ${metaTpl.name}]`;
+          } catch (e) {
+            console.error('[Campaign] Meta template send error:', e.message);
+            resolvedText = `[Template: ${metaTpl.name}]`;
+          }
+
+        // ── PATH B: Regular text/template message ─────────────────────────────
+        } else {
+          const variables = {
+            name: target.name || 'Customer',
+            product_name: target.product_name || '',
+            product_price: target.product_price || String(target.total_amount || ''),
+            total_amount: String(target.total_amount || ''),
+            cart_url: target.cart_url || '',
+            product_url: target.product_url || '',
+            product_image: target.product_image || '',
+          };
+          if (templateRecord?.product_data) {
+            try {
+              const pd = typeof templateRecord.product_data === 'string' ? JSON.parse(templateRecord.product_data) : templateRecord.product_data;
+              if (pd.name || pd.title) variables.product_name  = pd.name || pd.title;
+              if (pd.price)            variables.product_price = String(pd.price);
+              if (pd.image)            variables.product_image = pd.image;
+              if (pd.link || pd.url)   variables.product_url   = pd.link || pd.url;
+            } catch (_) {}
+          }
+          resolvedText = baseText;
+          for (const [k, v] of Object.entries(variables)) {
+            resolvedText = resolvedText.replace(new RegExp(`\\{\\{${k}\\}\\}`, 'g'), v);
+          }
+          try {
+            const result = await whatsappService.sendMessage(target.phone, [{ type: 'body', text: baseText }], variables);
+            wamid = result.messageId || null;
+            resolvedText = result.resolvedText || resolvedText;
+          } catch (e) {
+            console.error('[Campaign] Send error:', e.message);
+          }
         }
 
-        // Save to chat inbox
         saveChatMessage(db, target.phone, resolvedText, channelId, {
           wamid,
           campaignName: campaign.name,
-          templateName: templateRecord?.name || null,
+          templateName: metaTpl?.name || templateRecord?.name || null,
         });
 
         db.abandoned_cart_executions.push({
@@ -287,21 +266,22 @@ export const campaignsController = {
           cart_event_id: target.cart_id || target.id,
           phone: target.phone,
           name: target.name || null,
-          template_id: templateId,
+          template_id: metaTpl?.id || templateId,
+          template_name: metaTpl?.name || templateRecord?.name || null,
           stage: 1,
-          language: userLang,
-          products: target.products || '[]',
-          status: 'sent',
-          sent_at: new Date().toISOString()
+          language: metaLangCode,
+          status: wamid ? 'sent' : 'failed',
+          sent_at: new Date().toISOString(),
+          is_meta_template: !!metaTpl,
         });
 
-        target.whatsapp_sent = 1;
-        target.followup_count = (target.followup_count || 0) + 1;
+        target.whatsapp_sent    = 1;
+        target.followup_count   = (target.followup_count || 0) + 1;
         target.whatsapp_sent_at = new Date().toISOString();
         sent++;
       }
 
-      campaign.total_sent = (campaign.total_sent || 0) + sent;
+      campaign.total_sent  = (campaign.total_sent || 0) + sent;
       campaign.last_run_at = new Date().toISOString();
       db.save();
 
