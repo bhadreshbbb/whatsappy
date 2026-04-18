@@ -829,16 +829,34 @@ export function buildSendMessagePayload(tpl, productConfig, recipientPhone = '{{
       }
 
       // URL button parameters — {{N}} in stored URL resolves via var_map to product field.
-      // At send time the button expects exactly 1 parameter for its {{1}} (normalised at creation).
+      // Two modes depending on how the template button URL was created:
+      //   • Static prefix + variable  e.g. "https://store.com/products/{{2}}"
+      //     → send ONLY the slug. Meta appends it to the static prefix.
+      //   • Entire URL is variable    e.g. "{{2}}" or "{{1}}"
+      //     → send the FULL URL. Meta uses it as-is.
       (card.buttons || []).slice(0, 2).forEach((btn, bi) => {
         if (String(btn.type || '').toLowerCase() === 'url' && btn.url?.includes('{{')) {
-          const urlVars = [...btn.url.matchAll(/\{\{(\d+)\}\}/g)].map(m => m[1]);
-          const rawFallback = String(exV[urlVars[0]] || '');
-          // Ensure fallback is also just a slug, never a full URL
-          const fallbackSlug = rawFallback.startsWith('http')
-            ? (() => { try { return new URL(rawFallback).pathname.split('/').filter(Boolean).pop() || ''; } catch { return ''; } })()
-            : rawFallback;
-          const paramVal = getFieldValue(urlVars[0], vm, pd) || fallbackSlug;
+          const urlVars  = [...btn.url.matchAll(/\{\{(\d+)\}\}/g)].map(m => m[1]);
+          const varStart = btn.url.indexOf('{{');
+          const staticPrefix = varStart > 0 ? btn.url.substring(0, varStart) : ''; // '' when entire URL is variable
+
+          const fullLink = pd.link || '';
+          let paramVal;
+
+          if (staticPrefix) {
+            // Template has a static prefix — parameter must be only the slug so Meta doesn't double the prefix
+            const slug = getFieldValue(urlVars[0], vm, pd); // extracts last path segment
+            const rawFallback = String(exV[urlVars[0]] || '');
+            const fallbackSlug = rawFallback.startsWith('http')
+              ? (() => { try { return new URL(rawFallback).pathname.split('/').filter(Boolean).pop() || ''; } catch { return ''; } })()
+              : rawFallback;
+            paramVal = slug || fallbackSlug;
+          } else {
+            // Entire URL is the variable — send the full product URL so the button is clickable
+            paramVal = fullLink || getFieldValue(urlVars[0], vm, pd) || String(exV[urlVars[0]] || '');
+            // If we only have a slug (no protocol), prepend nothing — it's stored as-is by Meta
+          }
+
           if (paramVal) {
             cardComponents.push({ type: 'button', sub_type: 'url', index: String(bi), parameters: [{ type: 'text', text: paramVal }] });
           }
