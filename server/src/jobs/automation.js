@@ -197,26 +197,72 @@ export function startAutomation() {
   }, 60 * 1000);
 
   // Product detection — every SIX_HOURS_MS (1 min in DEMO).
-  // Reads page_views sorted by views (top→medium→low), top 50 max.
-  // Each tick starts from a different offset (advances by 4 per cycle) for round-robin coverage.
-  // count=10 keeps the scrape window large enough to always find 2+ valid products.
-  const CYCLE_BATCH = 4;  // positions to advance per tick
-  const CYCLE_COUNT = 10; // candidates to attempt per tick
-  productDetectionInterval = setInterval(() => {
-    const channelId = process.env.CHANNEL_ID || 'demo';
-    const currentOffset = _productCycleOffset;
+  const CYCLE_BATCH = 4;
+  const CYCLE_COUNT = 10;
+  productDetectionInterval = setInterval(async () => {
+    try {
+      const channelId = process.env.CHANNEL_ID || 'demo';
+      const db = getDb();
 
-    buildAutoProductCards(channelId, 'auto_products_seed', CYCLE_COUNT, currentOffset)
-      .then(({ productConfigCards, candidatesTotal }) => {
-        const poolSize = Math.min(50, candidatesTotal || 0);
-        _productCycleOffset = poolSize > 0 ? (currentOffset + CYCLE_BATCH) % poolSize : 0;
-        console.log(`[ProductDetect] Cycle: offset ${currentOffset} → ${_productCycleOffset} (pool=${poolSize})`);
-        return applyCardsToAutoProductTemplates(channelId, productConfigCards);
-      })
-      .catch(err => {
-        console.error('[ProductDetect] Error at offset', currentOffset, ':', err.message);
-        _productCycleOffset = 0; // reset to top on error
-      });
+      // ── Step 1: find auto-product templates ──────────────────────────────────
+      const autoTpls = (db.meta_templates || []).filter(t =>
+        t.channel_id === channelId &&
+        t.is_carousel &&
+        t.auto_product_mode &&
+        (t.meta_status === 'APPROVED' || t.meta_status === 'PENDING' || t.meta_status === 'DRAFT')
+      );
+      if (!autoTpls.length) {
+        console.log('[ProductDetect] No auto-product carousel templates found — skipping');
+        return;
+      }
+      console.log(`[ProductDetect] tick — offset=${_productCycleOffset}, templates=${autoTpls.length}`);
+
+      // ── Step 2: scrape products at current offset ─────────────────────────────
+      const currentOffset = _productCycleOffset;
+      let productConfigCards = [];
+      let candidatesTotal = 0;
+      try {
+        const result = await buildAutoProductCards(channelId, 'auto_products_seed', CYCLE_COUNT, currentOffset);
+        productConfigCards = result.productConfigCards || [];
+        candidatesTotal    = result.candidatesTotal   || 0;
+      } catch (err) {
+        console.error('[ProductDetect] buildAutoProductCards failed:', err.message);
+      }
+
+      // ── Step 3: advance offset regardless of success ─────────────────────────
+      const poolSize = Math.min(50, candidatesTotal || 0);
+      _productCycleOffset = poolSize > 0 ? (currentOffset + CYCLE_BATCH) % poolSize : 0;
+      console.log(`[ProductDetect] offset ${currentOffset} → ${_productCycleOffset} | pool=${poolSize} | got ${productConfigCards.length} products`);
+
+      if (!productConfigCards.length) {
+        console.log('[ProductDetect] 0 valid products this tick — template unchanged');
+        return;
+      }
+
+      // ── Step 4: apply to every auto-product template ─────────────────────────
+      for (const tpl of autoTpls) {
+        try {
+          const cardCount = tpl.carousel_cards?.length || 3;
+          const newCards  = Array.from({ length: cardCount }, (_, i) =>
+            productConfigCards[i % productConfigCards.length]
+          );
+          if (!tpl.product_config) tpl.product_config = {};
+          tpl.product_config.cards             = newCards;
+          tpl.product_config.last_auto_refresh = new Date().toISOString();
+          tpl.product_config.send_payload      = buildSendMessagePayload(tpl, tpl.product_config, '{{RECIPIENT_PHONE}}');
+          console.log(`[ProductDetect] ✓ "${tpl.name}" — cards updated:`);
+          newCards.forEach((c, i) =>
+            console.log(`   Card ${i + 1}: "${c.title || '—'}"  ${c.price || ''}  ${c.link || ''}`)
+          );
+        } catch (e) {
+          console.error(`[ProductDetect] template "${tpl.name}" error:`, e.message);
+        }
+      }
+      db.save();
+    } catch (err) {
+      console.error('[ProductDetect] Fatal error:', err.message);
+      _productCycleOffset = 0;
+    }
   }, SIX_HOURS_MS);
   
   // Product recommendation refresh - runs every 26 hours for new product recommendations
