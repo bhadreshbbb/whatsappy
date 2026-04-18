@@ -863,6 +863,7 @@ function CustomCampaignModal({ onClose, onCreated }) {
   const [runTimes, setRunTimes]       = useState(1);   // 0 = infinite
   const [templateId, setTplId]        = useState('');
   const [metaTemplateId, setMetaTplId]= useState('');  // selected meta template
+  const [metaPayloadPreview, setMetaPayloadPreview] = useState(null);
   const [templates, setTemplates]     = useState([]);
   const [metaTemplates, setMetaTpls]  = useState([]);  // all meta templates
   const [tplSearch, setTplSearch]     = useState('');
@@ -891,6 +892,13 @@ function CustomCampaignModal({ onClose, onCreated }) {
       setContacts(d?.contacts || []);
     }).catch(() => {}).finally(() => setCtLoading(false));
   }, []);
+
+  useEffect(() => {
+    if (!metaTemplateId) { setMetaPayloadPreview(null); return; }
+    const chHeaders = { 'x-channel-id': localStorage.getItem('channelId') || 'demo' };
+    fetch(`/api/meta-templates/${metaTemplateId}/send-payload`, { headers: chHeaders })
+      .then(r => r.json()).then(setMetaPayloadPreview).catch(() => setMetaPayloadPreview(null));
+  }, [metaTemplateId]);
 
   const filters = { status: fStatus, city: fCity, device: fDevice, lang: fLang,
                     score: fScore, carts: fCarts, pages: fPages, engage: fEngage };
@@ -1006,7 +1014,8 @@ function CustomCampaignModal({ onClose, onCreated }) {
 
           {/* ══ STEP 1: Setup ══ */}
           {step === 1 && (
-            <div className="space-y-6 max-w-2xl mx-auto">
+            <div className="flex gap-6 h-full">{/* two-col layout */}
+            <div className="flex-1 space-y-6 min-w-0">
 
               <div className="space-y-1.5">
                 <label className="label flex items-center gap-1.5">
@@ -1149,7 +1158,56 @@ function CustomCampaignModal({ onClose, onCreated }) {
                   </div>
                 </div>
               </div>
-            </div>
+            </div>{/* end left col */}
+
+            {/* ── Right: Payload Preview ── */}
+            <div className="w-80 shrink-0 space-y-3">
+              <p className="text-[10px] font-bold uppercase tracking-widest" style={{ color: "#64748b" }}>Payload Preview</p>
+              {metaTemplateId && metaPayloadPreview ? (
+                <div className="space-y-2">
+                  <div className="p-2 rounded-xl text-[10px] font-mono" style={{ background: "rgba(249,115,22,0.05)", border: "1px solid rgba(249,115,22,0.2)", color: "#f97316" }}>
+                    POST {metaPayloadPreview.api_url || 'https://graph.facebook.com/v25.0/.../messages'}
+                  </div>
+                  <div className="flex items-center gap-2 text-[10px]" style={{ color: "#64748b" }}>
+                    <span>Lang: <span className="text-white font-mono">{metaPayloadPreview.payload?.template?.language?.code}</span></span>
+                    {metaPayloadPreview.last_refresh && (
+                      <span>· {new Date(metaPayloadPreview.last_refresh).toLocaleTimeString()}</span>
+                    )}
+                  </div>
+                  <div className="space-y-1 max-h-40 overflow-y-auto">
+                    {(metaPayloadPreview.products || []).filter(p => p.title).map((p, i) => (
+                      <div key={i} className="flex items-center gap-2 rounded-lg px-2 py-1.5" style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" }}>
+                        {p.image && <img src={p.image} alt="" className="w-8 h-8 object-cover rounded shrink-0" onError={e => e.target.style.display='none'} />}
+                        <div className="flex-1 min-w-0">
+                          <p className="text-white text-[11px] font-medium truncate">Card {i+1}: {p.title}</p>
+                          {p.price && <p className="text-green-400 text-[10px]">{p.price}</p>}
+                        </div>
+                      </div>
+                    ))}
+                    {!(metaPayloadPreview.products || []).some(p => p.title) && (
+                      <p className="text-[10px] text-center py-2" style={{ color: "#475569" }}>Products auto-fill at send time.</p>
+                    )}
+                  </div>
+                  <div className="rounded-xl p-2 max-h-64 overflow-y-auto" style={{ background: "rgba(0,0,0,0.3)" }}>
+                    <pre className="text-[10px] font-mono whitespace-pre-wrap" style={{ color: "#94a3b8" }}>{JSON.stringify(metaPayloadPreview.payload, null, 2)}</pre>
+                  </div>
+                </div>
+              ) : templateId && templates.find(t => String(t.id) === String(templateId)) ? (
+                <div className="rounded-xl p-3 space-y-2" style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)" }}>
+                  <p className="text-xs font-semibold text-white">{templates.find(t => String(t.id) === String(templateId))?.name}</p>
+                  <p className="text-[11px] leading-relaxed" style={{ color: "#94a3b8" }}>
+                    {templates.find(t => String(t.id) === String(templateId))?.body_text || 'No preview available.'}
+                  </p>
+                </div>
+              ) : (
+                <div className="rounded-xl p-4 flex flex-col items-center justify-center gap-2 text-center h-32" style={{ background: "rgba(255,255,255,0.02)", border: "1px dashed rgba(255,255,255,0.08)" }}>
+                  <Eye size={18} style={{ color: "#334155" }} />
+                  <p className="text-[10px]" style={{ color: "#475569" }}>Select a template to preview the send payload</p>
+                </div>
+              )}
+            </div>{/* end right col */}
+
+          </div>
           )}
 
           {/* ══ STEP 2: Audience Filters ══ */}
