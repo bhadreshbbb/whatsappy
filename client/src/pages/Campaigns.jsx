@@ -883,7 +883,8 @@ function CustomCampaignModal({ onClose, onCreated }) {
 
   useEffect(() => {
     templatesApi.list().then(setTemplates).catch(() => {});
-    fetch('/api/meta-templates', { headers: CH() })
+    const chHeaders = { 'x-channel-id': localStorage.getItem('channelId') || 'demo' };
+    fetch('/api/meta-templates', { headers: chHeaders })
       .then(r => r.json()).then(d => setMetaTpls(d.templates || [])).catch(() => {});
     setCtLoading(true);
     analyticsApi.contacts(60, 1000).then(d => {
