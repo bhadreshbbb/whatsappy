@@ -113,17 +113,15 @@ export function startAutomation() {
     refreshAutoProductTemplates().catch(err => console.error('[AutoProducts] Error:', err));
   }, 60 * 1000);
   
-  // Product detection — same function as UI Auto-Detect button.
-  // Runs on startup and every 6 hours to keep gallery fresh with latest products.
-  const runAutoDetect = () => {
+  // Product detection — every 6 hours only (NOT on startup).
+  // Scrapes fresh trending products, uploads images, updates product_config.cards,
+  // rebuilds send_payload so campaigns get correct variable-replaced messages.
+  productDetectionInterval = setInterval(() => {
     const channelId = process.env.CHANNEL_ID || 'demo';
     buildAutoProductCards(channelId, 'auto_products_seed', 10)
       .then(() => refreshAutoProductTemplates(true))
       .catch(err => console.error('[ProductDetect] Error:', err));
-  };
-
-  productDetectionInterval = setInterval(runAutoDetect, SIX_HOURS_MS);
-  runAutoDetect(); // run immediately on startup
+  }, SIX_HOURS_MS);
   
   // Product recommendation refresh - runs every 26 hours for new product recommendations
   productRefreshInterval = setInterval(() => {
