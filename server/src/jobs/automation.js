@@ -207,9 +207,10 @@ export function startAutomation() {
 
   // Product detection — every SIX_HOURS_MS (1 min in DEMO).
   // Reads page_views sorted by views (top→medium→low), top 50 max.
-  // Each tick scrapes a different batch of 4 products (round-robin cycling).
-  // Cycle: tick1=products 1-4, tick2=5-8, tick3=9-12 … wraps back at end.
-  const CYCLE_BATCH = 4;
+  // Each tick starts from a different offset (advances by 4 per cycle) for round-robin coverage.
+  // count=10 keeps the scrape window large enough to always find 2+ valid products.
+  const CYCLE_BATCH = 4;  // how many positions to advance each tick
+  const CYCLE_COUNT = 10; // how many candidates to attempt each tick (must be >= 2)
   productDetectionInterval = setInterval(() => {
     const channelId = process.env.CHANNEL_ID || 'demo';
     const db = getDb();
@@ -217,7 +218,7 @@ export function startAutomation() {
     const cycle = db._auto_product_cycle;
     const currentOffset = cycle.offset;
 
-    buildAutoProductCards(channelId, 'auto_products_seed', CYCLE_BATCH, currentOffset)
+    buildAutoProductCards(channelId, 'auto_products_seed', CYCLE_COUNT, currentOffset)
       .then(({ productConfigCards, candidatesTotal }) => {
         const poolSize = Math.min(50, candidatesTotal || 0);
         cycle.offset = poolSize > 0 ? (currentOffset + CYCLE_BATCH) % poolSize : 0;
@@ -225,7 +226,12 @@ export function startAutomation() {
         console.log(`[ProductDetect] Cycle advance: offset ${currentOffset} → ${cycle.offset} (pool=${poolSize})`);
         return applyCardsToAutoProductTemplates(channelId, productConfigCards);
       })
-      .catch(err => console.error('[ProductDetect] Error:', err));
+      .catch(err => {
+        console.error('[ProductDetect] Error:', err.message);
+        // Reset offset on error so next tick retries from top products
+        const db2 = getDb();
+        if (db2._auto_product_cycle) db2._auto_product_cycle.offset = 0;
+      });
   }, SIX_HOURS_MS);
   
   // Product recommendation refresh - runs every 26 hours for new product recommendations
