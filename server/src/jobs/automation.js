@@ -101,6 +101,53 @@ async function seedProductCatalog() {
   }
 }
 
+// ── Apply page_views-only cards to all auto-product templates ────────────────
+// Called after buildAutoProductCards (which reads ONLY page_views).
+// Updates product_config.cards + rebuilds send_payload for every auto-product
+// APPROVED/PENDING carousel template. No computeHotProducts — same data source
+// as the template-creation auto-detect button.
+async function applyCardsToAutoProductTemplates(channelId, productConfigCards) {
+  const db = getDb();
+  const now = Date.now();
+  const nowIso = new Date(now).toISOString();
+
+  const templates = (db.meta_templates || []).filter(t =>
+    t.channel_id === channelId &&
+    t.is_carousel &&
+    t.auto_product_mode &&
+    (t.meta_status === 'APPROVED' || t.meta_status === 'PENDING')
+  );
+
+  if (templates.length === 0) {
+    console.log('[ProductDetect] No auto-product carousel templates found — skipping apply');
+    return;
+  }
+
+  for (const tpl of templates) {
+    try {
+      const cardCount = tpl.carousel_cards?.length || 3;
+      // Slice to card count, cycling if fewer cards available
+      const cards = Array.from({ length: cardCount }, (_, i) =>
+        productConfigCards[i % productConfigCards.length]
+      );
+
+      if (!tpl.product_config) tpl.product_config = {};
+      tpl.product_config.cards             = cards;
+      tpl.product_config.last_auto_refresh = nowIso;
+      tpl.product_config.next_auto_refresh = new Date(now + SIX_HOURS_MS).toISOString();
+      tpl.product_config.send_payload      = buildSendMessagePayload(tpl, tpl.product_config, '{{RECIPIENT_PHONE}}');
+
+      console.log(`[ProductDetect] ✓ "${tpl.name}" — ${cardCount} cards applied, send_payload rebuilt`);
+      cards.forEach((c, i) => console.log(`  Card ${i + 1}: "${c.title || '—'}"  ${c.price || ''}  media_id:${c.media_id || 'n/a'}`));
+    } catch (e) {
+      console.error(`[ProductDetect] Template "${tpl.name}" apply error:`, e.message);
+    }
+  }
+
+  db.save();
+  console.log(`[ProductDetect] Applied page_views cards to ${templates.length} template(s)`);
+}
+
 export function startAutomation() {
   console.log('Starting automation engine...');
 
@@ -112,14 +159,15 @@ export function startAutomation() {
     runAutomation().catch(err => console.error('[Automation] Error:', err));
     refreshAutoProductTemplates().catch(err => console.error('[AutoProducts] Error:', err));
   }, 60 * 1000);
-  
-  // Product detection — every 6 hours only (NOT on startup).
-  // Scrapes fresh trending products, uploads images, updates product_config.cards,
-  // rebuilds send_payload so campaigns get correct variable-replaced messages.
+
+  // Product detection — every SIX_HOURS_MS (1 min in DEMO).
+  // Calls buildAutoProductCards which reads ONLY from page_views table —
+  // same function as the template-creation auto-detect button.
+  // Then applies those cards directly to all auto-product templates.
   productDetectionInterval = setInterval(() => {
     const channelId = process.env.CHANNEL_ID || 'demo';
     buildAutoProductCards(channelId, 'auto_products_seed', 10)
-      .then(() => refreshAutoProductTemplates(true))
+      .then(({ productConfigCards }) => applyCardsToAutoProductTemplates(channelId, productConfigCards))
       .catch(err => console.error('[ProductDetect] Error:', err));
   }, SIX_HOURS_MS);
   
