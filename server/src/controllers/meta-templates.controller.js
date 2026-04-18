@@ -983,7 +983,8 @@ export async function createTemplate(req, res) {
               image_id:       c.image_id    || '',
             };
           });
-          // Ensure gallery has an entry for each card's media_id so 6h refresh can reuse them
+          // Ensure gallery has an entry for each card's media_id so 6h refresh can reuse them.
+          // Upsert: update existing record for this card slot, or insert new one.
           if (!db.gallery_folders) db.gallery_folders = [];
           if (!db.gallery_images)  db.gallery_images  = [];
           let folder = db.gallery_folders.find(f => f.channel_id === channelId && f.name === cleanName);
@@ -993,21 +994,35 @@ export async function createTemplate(req, res) {
           }
           for (const [i, c] of carousel_cards.entries()) {
             const imgUrl = c.product_data?.image_url || c._hot_image_url || c.selected_fetch_image || '';
-            if (c.media_id && imgUrl && !db.gallery_images.find(g => g.media_id === c.media_id)) {
-              db.gallery_images.push({
-                id: uuidv4(), folder_id: folder.id, channel_id: channelId,
-                filename: `${cleanName}_c${i + 1}.jpg`,
-                media_id:    c.media_id,
-                file_handle: c.file_handle || '',
-                source_url:  imgUrl,
-                product_name: c.product_data?.title || '',
-                product_url:  c.product_data?.link  || '',
-                auto_detected: true, template_name: cleanName, card_index: i,
-                created_at: new Date().toISOString(),
-              });
-              console.log(`[MetaTemplates] Gallery stored card ${i + 1} media_id:${c.media_id} for template "${cleanName}"`);
+            const mediaId = c.media_id || '';
+            const fileHandle = c.file_handle || '';
+            if (!mediaId && !fileHandle) continue; // nothing to store
+            // Upsert by card_index + template_name — replace the slot's old record
+            const existIdx = db.gallery_images.findIndex(
+              g => g.channel_id === channelId && g.template_name === cleanName && g.card_index === i
+            );
+            const record = {
+              id: existIdx >= 0 ? db.gallery_images[existIdx].id : uuidv4(),
+              folder_id: folder.id, channel_id: channelId,
+              filename:    `${cleanName}_c${i + 1}.jpg`,
+              media_id:    mediaId,
+              file_handle: fileHandle,
+              source_url:  imgUrl,
+              product_name: c.product_data?.title || '',
+              product_url:  c.product_data?.link  || '',
+              auto_detected: true, template_name: cleanName, card_index: i,
+              created_at: existIdx >= 0 ? db.gallery_images[existIdx].created_at : new Date().toISOString(),
+              updated_at: new Date().toISOString(),
+            };
+            if (existIdx >= 0) {
+              db.gallery_images[existIdx] = record;
+              console.log(`[MetaTemplates] Gallery updated card ${i + 1} media_id:${mediaId} for "${cleanName}"`);
+            } else {
+              db.gallery_images.push(record);
+              console.log(`[MetaTemplates] Gallery stored card ${i + 1} media_id:${mediaId} for "${cleanName}"`);
             }
           }
+          db.save(); // persist gallery immediately before Meta API call
           console.log(`[MetaTemplates] auto_product_mode: reusing ${cards.length} pre-uploaded cards from client`);
         } else {
           // Full auto: scrape + dual-upload

@@ -288,8 +288,12 @@ async function refreshAutoProductTemplates(forceRefresh = false) {
                   console.warn(`[AutoProducts] "${tpl.name}" card ${i + 1}: resumable upload failed (non-fatal): ${fhErr.message}`);
                 }
 
+                // Upsert gallery record for this card slot — replace old image with new one
+                const existGallIdx = db.gallery_images.findIndex(
+                  g => g.channel_id === channelId && g.template_name === tpl.name && g.card_index === i
+                );
                 const imgRecord = {
-                  id:            uuidv4(),
+                  id:            existGallIdx >= 0 ? db.gallery_images[existGallIdx].id : uuidv4(),
                   folder_id:     folder.id,
                   channel_id:    channelId,
                   filename:      imgFilename,
@@ -299,11 +303,16 @@ async function refreshAutoProductTemplates(forceRefresh = false) {
                   file_handle:   newFileHandle,   // template creation header_handle only
                   source_url:    newImageUrl,
                   auto_detected: true,
-                  created_at:    nowDt.toISOString(),
+                  created_at:    existGallIdx >= 0 ? db.gallery_images[existGallIdx].created_at : nowDt.toISOString(),
+                  updated_at:    nowDt.toISOString(),
                   template_name: tpl.name,
                   card_index:    i,
                 };
-                db.gallery_images.push(imgRecord);
+                if (existGallIdx >= 0) {
+                  db.gallery_images[existGallIdx] = imgRecord; // replace old record
+                } else {
+                  db.gallery_images.push(imgRecord);
+                }
 
                 media_id    = newMediaId;
                 file_handle = newFileHandle;
@@ -459,14 +468,21 @@ async function refreshTemplateForSend(db, tpl, channelId) {
               file_handle = await whatsappService.uploadMediaResumable(buffer, fname, mimeType);
             } catch (_) {}
 
+            const existIdx = db.gallery_images.findIndex(
+              g => g.channel_id === channelId && g.template_name === tpl.name && g.card_index === i
+            );
             const rec = {
-              id: uuidv4(), folder_id: folder.id, channel_id: channelId,
+              id: existIdx >= 0 ? db.gallery_images[existIdx].id : uuidv4(),
+              folder_id: folder.id, channel_id: channelId,
               filename: fname, mime_type: mimeType, size: buffer.length,
               media_id, file_handle, source_url: imageUrl,
               product_name: title, product_url: link,
-              auto_detected: true, created_at: nowIso, template_name: tpl.name, card_index: i,
+              auto_detected: true, template_name: tpl.name, card_index: i,
+              created_at: existIdx >= 0 ? db.gallery_images[existIdx].created_at : nowIso,
+              updated_at: nowIso,
             };
-            db.gallery_images.push(rec);
+            if (existIdx >= 0) { db.gallery_images[existIdx] = rec; }
+            else { db.gallery_images.push(rec); }
             image_id = rec.id;
             console.log(`[SendRefresh] Card ${i + 1}: uploaded → media_id: ${media_id}  "${title}" ${price}`);
           } catch (uploadErr) {
