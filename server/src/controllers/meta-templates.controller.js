@@ -473,17 +473,15 @@ export async function buildAutoProductCards(channelId, cleanName, count = 4, off
   candidates = candidates.slice(0, MAX_POOL);
   const totalCandidates = candidates.length;
 
-  // Round-robin cycle: rotate by offset so each interval tick scrapes a different batch
+  // Round-robin cycle: slice from offset — NO wrap-around so old products don't bleed in.
+  // At offset=8 with 12 products we get [I,J,K,L] only; no A,B,C,D padding.
   if (offset > 0 && totalCandidates > 0) {
     const start = offset % totalCandidates;
-    const window = candidates.slice(start);
-    candidates = window.length >= COUNT
-      ? window
-      : [...window, ...candidates.slice(0, Math.max(0, COUNT - window.length))];
-    console.log(`[AutoCards] Cycle offset=${offset} → starting from #${start + 1} of ${totalCandidates}`);
+    candidates = candidates.slice(start); // strict window — no padding from position 0
+    console.log(`[AutoCards] Cycle offset=${offset} → #${start + 1}–${Math.min(start + COUNT, totalCandidates)} of ${totalCandidates}`);
   }
 
-  console.log(`[AutoCards] ${candidates.length} candidates ready (pool=${totalCandidates}, offset=${offset})`);
+  console.log(`[AutoCards] ${candidates.length} candidates in window (pool=${totalCandidates}, offset=${offset})`);
 
   const cards = [];
   const productConfigCards = [];
@@ -631,6 +629,13 @@ export async function buildAutoProductCards(channelId, cleanName, count = 4, off
   }
 
   if (cards.length < 2) {
+    if (offset > 0) {
+      // Automation cycle: window at this offset had too few valid products — return gracefully
+      // so automation.js can advance the offset and try the next batch next tick.
+      console.warn(`[AutoCards] Only ${cards.length} valid product(s) at offset=${offset} — returning empty for cycle skip`);
+      db.save();
+      return { cards, productConfigCards, candidatesTotal: totalCandidates };
+    }
     const tried = candidates.length;
     throw new Error(
       `Auto-detect found only ${cards.length} valid product(s) from ${tried} candidates. ` +

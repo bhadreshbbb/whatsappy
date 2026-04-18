@@ -111,6 +111,11 @@ async function applyCardsToAutoProductTemplates(channelId, productConfigCards) {
   const now = Date.now();
   const nowIso = new Date(now).toISOString();
 
+  if (!productConfigCards || productConfigCards.length === 0) {
+    console.log('[ProductDetect] No valid products in this cycle window — skipping template update');
+    return;
+  }
+
   const templates = (db.meta_templates || []).filter(t =>
     t.channel_id === channelId &&
     t.is_carousel &&
@@ -153,28 +158,13 @@ async function applyCardsToAutoProductTemplates(channelId, productConfigCards) {
         }
       }
 
-      // Prefer products NOT already in this template's current cards.
-      // Already-scraped products stay unless there are not enough new ones to fill all slots.
-      const alreadyInTemplate = new Set(
-        (tpl.product_config?.cards || []).map(c => c.link).filter(Boolean)
-      );
-      const freshCards    = matchedCards.filter(c => !alreadyInTemplate.has(c.link));
-      const existingCards = matchedCards.filter(c =>  alreadyInTemplate.has(c.link));
+      // Use the offset-provided batch directly — the cycle in buildAutoProductCards already
+      // ensures we get a different set of products each tick. No fresh-product reordering
+      // needed (that was causing top-viewed products to always win over mid/low-viewed ones).
+      const pool = matchedCards.length > 0 ? matchedCards : productConfigCards;
+      console.log(`[ProductDetect] "${tpl.name}" — applying ${pool.length} product(s) from cycle window`);
 
-      // Fill slots with fresh products first; only pad with existing if not enough fresh ones
-      const pool = freshCards.length >= cardCount
-        ? freshCards
-        : [...freshCards, ...existingCards];
-
-      if (freshCards.length > 0) {
-        console.log(`[ProductDetect] "${tpl.name}" — ${freshCards.length} new product(s), ${existingCards.length} already used`);
-      } else {
-        console.log(`[ProductDetect] "${tpl.name}" — no new products yet, keeping existing ${existingCards.length}`);
-      }
-
-      const cards = pool.length > 0
-        ? Array.from({ length: cardCount }, (_, i) => pool[i % pool.length])
-        : Array.from({ length: cardCount }, (_, i) => matchedCards[i % matchedCards.length]);
+      const cards = Array.from({ length: cardCount }, (_, i) => pool[i % pool.length]);
 
       if (!tpl.product_config) tpl.product_config = {};
       tpl.product_config.cards             = cards;
