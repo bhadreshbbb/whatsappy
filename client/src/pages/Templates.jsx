@@ -838,7 +838,6 @@ function CreateView({ form, setForm, error, setError, loading, onSubmit, onBack,
               <div className="flex flex-col gap-4">
                 {form.carousel_cards.map((card, idx) => (
                   <CarouselCardEditor key={idx} card={card} idx={idx} totalCards={form.carousel_cards.length}
-                    hotProducts={hotProducts} hotLoading={hotLoading}
                     galleries={galleries} galleryImages={galleryImages}
                     pickerCard={pickerCard} selFolder={selFolder}
                     onSetSelFolder={setSelFolder}
