@@ -386,7 +386,7 @@ function getShopUrl(db, channelId) {
   } catch (_) { return null; }
 }
 
-export async function buildAutoProductCards(channelId, cleanName, count = 4) {
+export async function buildAutoProductCards(channelId, cleanName, count = 4, offset = 0) {
   const db = getDb();
   const COUNT = Math.max(2, count);
 
@@ -468,7 +468,22 @@ export async function buildAutoProductCards(channelId, cleanName, count = 4) {
     }
   }
 
-  console.log(`[AutoCards] ${candidates.length} candidates ready`);
+  // Limit pool to top 50 (sorted by views: top → medium → low)
+  const MAX_POOL = 50;
+  candidates = candidates.slice(0, MAX_POOL);
+  const totalCandidates = candidates.length;
+
+  // Round-robin cycle: rotate by offset so each interval tick scrapes a different batch
+  if (offset > 0 && totalCandidates > 0) {
+    const start = offset % totalCandidates;
+    const window = candidates.slice(start);
+    candidates = window.length >= COUNT
+      ? window
+      : [...window, ...candidates.slice(0, Math.max(0, COUNT - window.length))];
+    console.log(`[AutoCards] Cycle offset=${offset} → starting from #${start + 1} of ${totalCandidates}`);
+  }
+
+  console.log(`[AutoCards] ${candidates.length} candidates ready (pool=${totalCandidates}, offset=${offset})`);
 
   const cards = [];
   const productConfigCards = [];
@@ -627,7 +642,7 @@ export async function buildAutoProductCards(channelId, cleanName, count = 4) {
 
   db.save();
   console.log(`[AutoCards] ${cards.length}/${candidates.length} candidates passed → gallery "${folderName}"`);
-  return { cards, productConfigCards };
+  return { cards, productConfigCards, candidatesTotal: totalCandidates };
 }
 
 // ── Auto-detect products endpoint — validate + upload BEFORE template creation ─

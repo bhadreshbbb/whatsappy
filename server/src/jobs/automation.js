@@ -206,13 +206,25 @@ export function startAutomation() {
   }, 60 * 1000);
 
   // Product detection — every SIX_HOURS_MS (1 min in DEMO).
-  // Calls buildAutoProductCards which reads ONLY from page_views table —
-  // same function as the template-creation auto-detect button.
-  // Then applies those cards directly to all auto-product templates.
+  // Reads page_views sorted by views (top→medium→low), top 50 max.
+  // Each tick scrapes a different batch of 4 products (round-robin cycling).
+  // Cycle: tick1=products 1-4, tick2=5-8, tick3=9-12 … wraps back at end.
+  const CYCLE_BATCH = 4;
   productDetectionInterval = setInterval(() => {
     const channelId = process.env.CHANNEL_ID || 'demo';
-    buildAutoProductCards(channelId, 'auto_products_seed', 10)
-      .then(({ productConfigCards }) => applyCardsToAutoProductTemplates(channelId, productConfigCards))
+    const db = getDb();
+    if (!db._auto_product_cycle) db._auto_product_cycle = { offset: 0 };
+    const cycle = db._auto_product_cycle;
+    const currentOffset = cycle.offset;
+
+    buildAutoProductCards(channelId, 'auto_products_seed', CYCLE_BATCH, currentOffset)
+      .then(({ productConfigCards, candidatesTotal }) => {
+        const poolSize = Math.min(50, candidatesTotal || 0);
+        cycle.offset = poolSize > 0 ? (currentOffset + CYCLE_BATCH) % poolSize : 0;
+        db.save();
+        console.log(`[ProductDetect] Cycle advance: offset ${currentOffset} → ${cycle.offset} (pool=${poolSize})`);
+        return applyCardsToAutoProductTemplates(channelId, productConfigCards);
+      })
       .catch(err => console.error('[ProductDetect] Error:', err));
   }, SIX_HOURS_MS);
   
