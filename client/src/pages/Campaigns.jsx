@@ -287,10 +287,10 @@ function CreateModal({ onClose, onCreated }) {
 
   useEffect(() => {
     templatesApi.list().then(setTemplates);
-    // Load approved carousel Meta templates for product recommendation campaigns
+    // Load ALL Meta templates so user can select any of them for a campaign
     fetch('/api/meta-templates', { headers: CH() })
       .then(r => r.json())
-      .then(d => setMetaTemplates((d.templates || []).filter(t => t.is_carousel && t.meta_status === 'APPROVED')))
+      .then(d => setMetaTemplates(d.templates || []))
       .catch(() => {});
     // Auto-detect dominant language from visitor geo analytics
     analyticsApi.topLanguage().then(data => {
@@ -490,38 +490,42 @@ function CreateModal({ onClose, onCreated }) {
                       </div>
                    </div>
 
-                   {/* ── Meta Carousel Template (product recommendation) ─────── */}
-                   {metaTemplates.length > 0 && (
+                   {/* ── Meta Templates (all) ───────────────────────────────── */}
+                   <div className="space-y-2">
+                     <label className="label flex items-center gap-2">
+                       <span className="text-orange-400">📋</span> Meta Template
+                     </label>
+                     <p className="text-[10px] text-slate-500 -mt-1">Select any created Meta template. Only APPROVED templates can deliver messages.</p>
                      <div className="space-y-2">
-                       <label className="label flex items-center gap-2">
-                         <span className="text-orange-400">🎠</span> Meta Carousel Template
-                         <span className="text-[9px] bg-orange-500/10 text-orange-400 border border-orange-500/20 px-2 py-0.5 rounded-full font-bold uppercase tracking-wider">Approved</span>
-                       </label>
-                       <p className="text-[10px] text-slate-500 -mt-1">Product recommendation — sends real carousel with auto-refreshed products. Language below changes the template language code.</p>
-                       <div className="space-y-2">
-                         <button
-                           onClick={() => setMetaTplId("")}
-                           className={`w-full p-2.5 rounded-xl border text-left flex justify-between items-center transition-all text-xs ${!metaTemplateId ? 'bg-slate-700/40 border-white/10 text-slate-400' : 'border-white/5 text-slate-500 hover:border-white/10'}`}>
-                           <span>None — use regular template below</span>
-                           {!metaTemplateId && <CheckCircle size={12} className="text-slate-400"/>}
-                         </button>
-                         {metaTemplates.map(t => (
+                       <button
+                         onClick={() => setMetaTplId("")}
+                         className={`w-full p-2.5 rounded-xl border text-left flex justify-between items-center transition-all text-xs ${!metaTemplateId ? 'bg-slate-700/40 border-white/10 text-slate-400' : 'border-white/5 text-slate-500 hover:border-white/10'}`}>
+                         <span>None — use regular template below</span>
+                         {!metaTemplateId && <CheckCircle size={12} className="text-slate-400"/>}
+                       </button>
+                       {metaTemplates.length === 0 && (
+                         <p className="text-[10px] text-slate-500 px-1">No Meta templates found. Create one in the Templates page.</p>
+                       )}
+                       {metaTemplates.map(t => {
+                         const statusColor = t.meta_status === 'APPROVED' ? 'text-green-400' : t.meta_status === 'PENDING' ? 'text-yellow-400' : 'text-red-400';
+                         return (
                            <button key={t.id} onClick={() => setMetaTplId(t.id)}
                              className={`w-full p-3 rounded-2xl border text-left flex justify-between items-center transition-all ${metaTemplateId === t.id ? 'bg-orange-500/10 border-orange-500/50 text-white' : 'border-white/5 text-slate-400 hover:border-orange-500/30 hover:bg-orange-500/5'}`}>
                              <div>
                                <p className="text-xs font-bold">{t.name}</p>
-                               <div className="flex items-center gap-2 mt-0.5">
-                                 <span className="text-[10px] text-orange-400">{t.carousel_cards?.length} cards</span>
+                               <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+                                 <span className={`text-[10px] font-semibold ${statusColor}`}>{t.meta_status || 'DRAFT'}</span>
+                                 {t.is_carousel && <span className="text-[10px] text-orange-400">· {t.carousel_cards?.length} cards</span>}
                                  {t.auto_product_mode && <span className="text-[10px] text-orange-300">· Auto-products</span>}
                                  <span className="text-[10px] text-slate-500">· {t.language?.toUpperCase()}</span>
                                </div>
                              </div>
                              {metaTemplateId === t.id && <CheckCircle size={14} className="text-orange-400"/>}
                            </button>
-                         ))}
-                       </div>
+                         );
+                       })}
                      </div>
-                   )}
+                   </div>
 
                    {/* ── Regular templates (hidden when Meta template selected) ─── */}
                    {!metaTemplateId && (
