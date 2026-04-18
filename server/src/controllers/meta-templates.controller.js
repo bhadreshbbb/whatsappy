@@ -803,7 +803,7 @@ export function buildSendMessagePayload(tpl, productConfig, recipientPhone = '{{
       // file_handle ("4:...") is for template creation ONLY — Meta rejects it in /messages.
       // If no media_id, fall back to image URL via { link: url }.
       const mediaId = pc.media_id || card.media_id || '';
-      const imgUrl  = pc._hot_image_url || pc.image_url || card.product_data?.image_url || '';
+      const imgUrl  = pc._hot_image_url || pc.image_url || pc.image || card.product_data?.image_url || '';
       if (mediaId) {
         cardComponents.push({ type: 'header', parameters: [{ type: 'image', image: { id: mediaId } }] });
       } else if (imgUrl) {
@@ -970,14 +970,44 @@ export async function createTemplate(req, res) {
         let cards, productConfigCards;
         if (alreadyUploaded) {
           cards = carousel_cards;
-          productConfigCards = carousel_cards.map(c => ({
-            title:       c.product_data?.title  || c.example_values?.['1']?.split('\n')[0] || '',
-            price:       c.product_data?.price  || c.example_values?.['1']?.split('\n')[1] || '',
-            link:        c.product_data?.link   || '',
-            image:       c.product_data?.image_url || c._hot_image_url || '',
-            media_id:    c.media_id || '',
-            file_handle: c.file_handle || '',
-          }));
+          productConfigCards = carousel_cards.map(c => {
+            const imageUrl = c.product_data?.image_url || c._hot_image_url || c.selected_fetch_image || '';
+            return {
+              title:          c.product_data?.title  || c.example_values?.['1']?.split('\n')[0] || '',
+              price:          c.product_data?.price  || c.example_values?.['1']?.split('\n')[1] || '',
+              link:           c.product_data?.link   || '',
+              _hot_image_url: imageUrl,   // required by buildSendMessagePayload as image URL fallback
+              image_url:      imageUrl,
+              media_id:       c.media_id    || '',   // numeric — /messages { "image": { "id": media_id } }
+              file_handle:    c.file_handle || '',   // "4:..." — template creation only
+              image_id:       c.image_id    || '',
+            };
+          });
+          // Ensure gallery has an entry for each card's media_id so 6h refresh can reuse them
+          if (!db.gallery_folders) db.gallery_folders = [];
+          if (!db.gallery_images)  db.gallery_images  = [];
+          let folder = db.gallery_folders.find(f => f.channel_id === channelId && f.name === cleanName);
+          if (!folder) {
+            folder = { id: uuidv4(), channel_id: channelId, name: cleanName, created_at: new Date().toISOString() };
+            db.gallery_folders.push(folder);
+          }
+          for (const [i, c] of carousel_cards.entries()) {
+            const imgUrl = c.product_data?.image_url || c._hot_image_url || c.selected_fetch_image || '';
+            if (c.media_id && imgUrl && !db.gallery_images.find(g => g.media_id === c.media_id)) {
+              db.gallery_images.push({
+                id: uuidv4(), folder_id: folder.id, channel_id: channelId,
+                filename: `${cleanName}_c${i + 1}.jpg`,
+                media_id:    c.media_id,
+                file_handle: c.file_handle || '',
+                source_url:  imgUrl,
+                product_name: c.product_data?.title || '',
+                product_url:  c.product_data?.link  || '',
+                auto_detected: true, template_name: cleanName, card_index: i,
+                created_at: new Date().toISOString(),
+              });
+              console.log(`[MetaTemplates] Gallery stored card ${i + 1} media_id:${c.media_id} for template "${cleanName}"`);
+            }
+          }
           console.log(`[MetaTemplates] auto_product_mode: reusing ${cards.length} pre-uploaded cards from client`);
         } else {
           // Full auto: scrape + dual-upload
@@ -992,6 +1022,7 @@ export async function createTemplate(req, res) {
           last_auto_refresh: new Date().toISOString(),
           next_auto_refresh: new Date(Date.now() + 6 * 60 * 60 * 1000).toISOString(),
           folder_name:       cleanName,
+          auto_products:     productConfigCards.map(c => ({ name: c.title, price: c.price, url: c.link, image: c._hot_image_url || c.image_url })),
         };
         tpl.product_config.send_payload = buildSendMessagePayload(tpl, tpl.product_config, '{{RECIPIENT_PHONE}}');
       } else {
