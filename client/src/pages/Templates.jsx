@@ -843,7 +843,7 @@ function CreateView({ form, setForm, error, setError, loading, onSubmit, onBack,
                     onSetSelFolder={setSelFolder}
                     loadFolderImages={loadFolderImages}
                     onSetPickerCard={setPickerCard}
-                    loadHotProducts={loadHotProducts}
+
                     onUpdateCard={(k,v) => updateCard(idx, k, v)}
                     onSetSource={(s) => setCardSource(idx, s)}
                     onSetVarMap={(vn, val) => setCardVarMap(idx, vn, val)}
