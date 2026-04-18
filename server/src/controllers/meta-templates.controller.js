@@ -544,26 +544,60 @@ export async function buildAutoProductCards(channelId, cleanName, count = 4, off
     // ── Dual image upload ─────────────────────────────────────────────────────
     let fileHandle = '', mediaId = '', imageId = '';
     const cardNum = cards.length + 1;
+    const filename = `auto_${folderName}_c${cardNum}.jpg`;
 
-    const cached = db.gallery_images.find(
+    // Check if this source_url was already uploaded anywhere (reuse media_id to avoid redundant uploads)
+    const globalCached = db.gallery_images.find(
       img => img.channel_id === channelId && img.source_url === imageUrl && img.media_id
     );
-    if (cached) {
-      mediaId    = cached.media_id    || '';
-      fileHandle = cached.file_handle || '';
-      imageId    = cached.id;
+
+    if (globalCached) {
+      mediaId    = globalCached.media_id    || '';
+      fileHandle = globalCached.file_handle || '';
+
+      // Ensure a record exists in THIS folder (so gallery shows it under the template folder)
+      const folderRecord = db.gallery_images.find(
+        img => img.channel_id === channelId && img.folder_id === folder.id && img.source_url === imageUrl
+      );
+      if (folderRecord) {
+        // Update in-place (refresh title, price, card slot)
+        folderRecord.media_id     = mediaId;
+        folderRecord.file_handle  = fileHandle;
+        folderRecord.product_name = title;
+        folderRecord.product_url  = link;
+        folderRecord.card_index   = cardNum - 1;
+        folderRecord.updated_at   = new Date().toISOString();
+        imageId = folderRecord.id;
+      } else {
+        // Create a new record in the template folder (same media_id, different folder)
+        const newRec = {
+          id:            uuidv4(), folder_id: folder.id, channel_id: channelId,
+          filename,      mime_type: globalCached.mime_type || 'image/jpeg', size: globalCached.size || 0,
+          media_id:      mediaId,
+          file_handle:   fileHandle,
+          source_url:    imageUrl,
+          auto_detected: true,
+          product_url:   link, product_name: title,
+          template_name: folderName, card_index: cardNum - 1,
+          created_at:    new Date().toISOString(),
+        };
+        db.gallery_images.push(newRec);
+        imageId = newRec.id;
+      }
+
+      // Backfill missing file_handle on the global record if needed
       if (!fileHandle) {
         try {
           const { buffer, mimeType } = await whatsappService.downloadImage(imageUrl);
-          fileHandle = await whatsappService.uploadMediaResumable(buffer, `auto_${cleanName}_c${cardNum}.jpg`, mimeType);
-          cached.file_handle = fileHandle;
+          fileHandle = await whatsappService.uploadMediaResumable(buffer, filename, mimeType);
+          globalCached.file_handle = fileHandle;
+          if (folderRecord) folderRecord.file_handle = fileHandle;
         } catch (_) { /* non-fatal */ }
       }
-      console.log(`[AutoCards] Card ${cardNum}: reused cached → media_id:${mediaId}`);
+      console.log(`[AutoCards] Card ${cardNum}: reused cached media_id:${mediaId} → upserted in folder "${folderName}"`);
     } else {
       try {
         const { buffer, mimeType } = await whatsappService.downloadImage(imageUrl);
-        const filename = `auto_${cleanName}_c${cardNum}.jpg`;
 
         mediaId = await whatsappService.uploadMedia(buffer, filename, mimeType);
         try {
@@ -572,23 +606,28 @@ export async function buildAutoProductCards(channelId, cleanName, count = 4, off
           console.warn(`[AutoCards] Card ${cardNum}: resumable upload failed (non-fatal) — ${e.message}`);
         }
 
+        // Upsert: replace existing record in this folder slot, or push new one
+        const existIdx = db.gallery_images.findIndex(
+          img => img.channel_id === channelId && img.folder_id === folder.id && img.card_index === cardNum - 1
+        );
         const imgRecord = {
-          id:           uuidv4(),  folder_id: folder.id, channel_id: channelId,
-          filename,     mime_type: mimeType,  size: buffer.length,
-          media_id:     mediaId,
-          file_handle:  fileHandle,
-          source_url:   imageUrl,
+          id:            existIdx >= 0 ? db.gallery_images[existIdx].id : uuidv4(),
+          folder_id:     folder.id, channel_id: channelId,
+          filename,      mime_type: mimeType, size: buffer.length,
+          media_id:      mediaId,
+          file_handle:   fileHandle,
+          source_url:    imageUrl,
           auto_detected: true,
-          product_url:  link,     product_name: title,
-          template_name: cleanName, card_index: cardNum - 1,
-          created_at:   new Date().toISOString(),
+          product_url:   link, product_name: title,
+          template_name: folderName, card_index: cardNum - 1,
+          created_at:    existIdx >= 0 ? db.gallery_images[existIdx].created_at : new Date().toISOString(),
+          updated_at:    new Date().toISOString(),
         };
-        db.gallery_images.push(imgRecord);
+        if (existIdx >= 0) db.gallery_images[existIdx] = imgRecord;
+        else db.gallery_images.push(imgRecord);
         imageId = imgRecord.id;
         console.log(`[AutoCards] Card ${cardNum}: uploaded → media_id:${mediaId}  file_handle:${fileHandle || 'n/a'}`);
       } catch (e) {
-        // Upload failed (no credentials / network) — card still valid with image URL.
-        // media_id will be re-attempted at template submit time.
         console.warn(`[AutoCards] Card ${cardNum}: Meta upload failed (${e.message}) — card added without media_id, will retry on submit`);
         mediaId = ''; fileHandle = ''; imageId = '';
       }
