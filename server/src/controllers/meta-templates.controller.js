@@ -739,10 +739,15 @@ function getFieldValue(varNum, varMap, productCard) {
       return t && p ? `${t}\n${p}` : (t || p);
     }
     case 'product_link': {
-      const link = productCard?.link || '';
-      // URL buttons expect just the variable segment (slug), not the full URL
-      try { const seg = new URL(link).pathname.split('/').filter(Boolean).pop(); return seg || link; }
-      catch { return link; }
+      const link = productCard?.link || productCard?.url || productCard?.product_url || '';
+      if (!link) return '';
+      // If already a slug (no protocol), return as-is
+      if (!link.startsWith('http')) return link;
+      // Extract ONLY the last path segment (slug) — never pass the full URL as button parameter
+      try {
+        const seg = new URL(link).pathname.split('/').filter(Boolean).pop() || '';
+        return seg;
+      } catch { return ''; }
     }
     case 'customer_name':  return 'Customer';
     case 'cart_total':     return productCard?.cart_total || '';
@@ -828,7 +833,12 @@ export function buildSendMessagePayload(tpl, productConfig, recipientPhone = '{{
       (card.buttons || []).slice(0, 2).forEach((btn, bi) => {
         if (String(btn.type || '').toLowerCase() === 'url' && btn.url?.includes('{{')) {
           const urlVars = [...btn.url.matchAll(/\{\{(\d+)\}\}/g)].map(m => m[1]);
-          const paramVal = getFieldValue(urlVars[0], vm, pd) || String(exV[urlVars[0]] || '');
+          const rawFallback = String(exV[urlVars[0]] || '');
+          // Ensure fallback is also just a slug, never a full URL
+          const fallbackSlug = rawFallback.startsWith('http')
+            ? (() => { try { return new URL(rawFallback).pathname.split('/').filter(Boolean).pop() || ''; } catch { return ''; } })()
+            : rawFallback;
+          const paramVal = getFieldValue(urlVars[0], vm, pd) || fallbackSlug;
           if (paramVal) {
             cardComponents.push({ type: 'button', sub_type: 'url', index: String(bi), parameters: [{ type: 'text', text: paramVal }] });
           }
