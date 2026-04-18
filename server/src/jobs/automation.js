@@ -12,7 +12,7 @@ let productDetectionInterval;
 let productRefreshInterval;
 let templateStatusInterval;
 const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000;
-const SIX_HOURS_MS = 6 * 60 * 60 * 1000;
+const SIX_HOURS_MS = 60 * 1000; // DEMO: 1 minute (change back to 6 * 60 * 60 * 1000 for production
 const TWENTY_SIX_HOURS_MS = 26 * 60 * 60 * 1000;
 
 /**
