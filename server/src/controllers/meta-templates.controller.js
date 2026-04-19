@@ -24,17 +24,31 @@ function getCreds(channelId) {
 }
 
 /**
- * Sanitize text before sending to Meta API.
+ * Sanitize template BODY TEXT before sending to Meta API.
  * Meta rejects: multiple consecutive spaces, 3+ consecutive newlines,
- * leading/trailing whitespace per line, and trailing spaces at end of string.
+ * leading/trailing whitespace per line, and more than 2 total line breaks.
  */
 function sanitizeMetaText(text) {
   if (!text) return text;
   return text
     .split('\n')
-    .map(line => line.replace(/ {2,}/g, ' ').trimEnd())  // collapse multi-space, trim trailing spaces per line
+    .map(line => line.replace(/ {2,}/g, ' ').trimEnd())
     .join('\n')
     .replace(/\n{3,}/g, '\n\n')  // max 2 consecutive newlines
+    .trim();
+}
+
+/**
+ * Sanitize a VARIABLE VALUE before injecting it as a template parameter.
+ * Variable values must NEVER contain newlines — Meta counts them against the
+ * hydrated body's 2-line-break limit, causing error #132018.
+ * Replaces \n with " | " so title+price stays readable on one line.
+ */
+function sanitizeVarValue(text) {
+  if (!text) return text;
+  return text
+    .replace(/\n/g, ' | ')          // newlines in variable values → " | "
+    .replace(/ {2,}/g, ' ')         // collapse multi-space
     .trim();
 }
 
@@ -43,7 +57,7 @@ function sanitizeMetaText(text) {
 const FIELD_EXAMPLES = {
   product_title:       'Blue Cotton Kurti',
   product_price:       '₹799',
-  product_title_price: 'Blue Cotton Kurti\n₹799',   // compact: title + newline + price in one var
+  product_title_price: 'Blue Cotton Kurti | ₹799',   // compact: title + price in one var (no \n — Meta hydrated body limit)
   product_link:        'blue-cotton-kurti',
   customer_name:       'Priya Sharma',
   cart_total:          '₹1,499',
@@ -68,7 +82,7 @@ function getVarExample(varNum, varMap) {
 function buildBodyExample(text, varMap, exampleValues = {}) {
   const vars = [...(text || '').matchAll(/\{\{(\d+)\}\}/g)].map(m => m[1]);
   if (!vars.length) return null;
-  return { body_text: [vars.map(v => sanitizeMetaText(String(exampleValues[v] || '').trim() || getVarExample(v, varMap)))] };
+  return { body_text: [vars.map(v => sanitizeVarValue(String(exampleValues[v] || '').trim() || getVarExample(v, varMap)))] };
 }
 
 /**
@@ -673,7 +687,7 @@ export async function buildAutoProductCards(channelId, cleanName, count = 4, off
       source: 'auto',
       image_id: imageId, file_handle: fileHandle, media_id: mediaId,
       var_map:        { '1': 'product_title_price', '2': 'product_link' },
-      example_values: { '1': `${title}\n${price}`, '2': slug },
+      example_values: { '1': `${title} | ${price}`, '2': slug },
       product_data:   { title, price, link, image_url: imageUrl },
       selected_fetch_image: imageUrl,
       fetched_images: [{ url: imageUrl, alt: title }],
@@ -815,10 +829,11 @@ function getFieldValue(varNum, varMap, productCard) {
     case 'product_title':       return productCard?.title  || '';
     case 'product_price':       return productCard?.price  || '';
     case 'product_title_price': {
-      // Compact: title + newline + price in a single variable
+      // Compact: title + separator + price in a single variable.
+      // MUST NOT use \n — Meta counts all newlines against the 2-line-break hydrated body limit.
       const t = productCard?.title || '';
       const p = productCard?.price || '';
-      return t && p ? `${t}\n${p}` : (t || p);
+      return t && p ? `${t} | ${p}` : (t || p);
     }
     case 'product_link': {
       const link = productCard?.link || productCard?.url || productCard?.product_url || '';
@@ -863,7 +878,7 @@ export function buildSendMessagePayload(tpl, productConfig, recipientPhone = '{{
     const vars = [...tpl.body.matchAll(/\{\{(\d+)\}\}/g)].map(m => m[1]);
     if (vars.length > 0) {
       const firstCard = (productConfig?.cards || [])[0] || {};
-      components.push({ type: 'body', parameters: vars.map(v => ({ type: 'text', text: sanitizeMetaText(getFieldValue(v, stdVarMap, firstCard)) })) });
+      components.push({ type: 'body', parameters: vars.map(v => ({ type: 'text', text: sanitizeVarValue(getFieldValue(v, stdVarMap, firstCard)) })) });
     }
   }
 
@@ -899,11 +914,12 @@ export function buildSendMessagePayload(tpl, productConfig, recipientPhone = '{{
       }
 
       // Body text parameters — resolve each {{N}} via var_map against merged product data
+      // Use sanitizeVarValue (not sanitizeMetaText) — variable values must never contain \n
       if (card.body?.trim()) {
         const vars = [...card.body.matchAll(/\{\{(\d+)\}\}/g)].map(m => m[1]);
         if (vars.length > 0) {
           const params = vars.map(v => {
-            const val = sanitizeMetaText(getFieldValue(v, vm, pd) || String(exV[v] || ''));
+            const val = sanitizeVarValue(getFieldValue(v, vm, pd) || String(exV[v] || ''));
             return { type: 'text', text: val };
           });
           cardComponents.push({ type: 'body', parameters: params });
