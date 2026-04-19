@@ -3,6 +3,17 @@ import { whatsappService } from '../services/whatsapp.service.js';
 import { saveChatMessage } from './chat.controller.js';
 import { buildSendMessagePayload, LANG_MAP } from './meta-templates.controller.js';
 
+// Sanitize text before sending to Meta — collapse multi-space, trim newlines
+function sanitizeMetaText(text) {
+  if (!text) return text;
+  return text
+    .split('\n')
+    .map(line => line.replace(/ {2,}/g, ' ').trimEnd())
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 export const campaignsController = {
   async getCampaigns(req, res, next) {
     try {
@@ -259,12 +270,16 @@ export const campaignsController = {
               if (pd.link || pd.url)   variables.product_url   = pd.link || pd.url;
             } catch (_) {}
           }
-          resolvedText = baseText;
+          // Sanitize all variable values before substitution
+          for (const k of Object.keys(variables)) {
+            if (typeof variables[k] === 'string') variables[k] = sanitizeMetaText(variables[k]);
+          }
+          resolvedText = sanitizeMetaText(baseText);
           for (const [k, v] of Object.entries(variables)) {
             resolvedText = resolvedText.replace(new RegExp(`\\{\\{${k}\\}\\}`, 'g'), v);
           }
           try {
-            const result = await whatsappService.sendMessage(target.phone, [{ type: 'body', text: baseText }], variables);
+            const result = await whatsappService.sendMessage(target.phone, [{ type: 'body', text: sanitizeMetaText(baseText) }], variables);
             wamid = result.messageId || null;
             resolvedText = result.resolvedText || resolvedText;
           } catch (e) {

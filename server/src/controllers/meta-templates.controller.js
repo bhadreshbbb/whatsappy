@@ -23,6 +23,21 @@ function getCreds(channelId) {
   return null;
 }
 
+/**
+ * Sanitize text before sending to Meta API.
+ * Meta rejects: multiple consecutive spaces, 3+ consecutive newlines,
+ * leading/trailing whitespace per line, and trailing spaces at end of string.
+ */
+function sanitizeMetaText(text) {
+  if (!text) return text;
+  return text
+    .split('\n')
+    .map(line => line.replace(/ {2,}/g, ' ').trimEnd())  // collapse multi-space, trim trailing spaces per line
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')  // max 2 consecutive newlines
+    .trim();
+}
+
 // ── Variable example values — Meta reviewers see these; use realistic strings ──
 // Mapped from the var_map field options so Meta understands what each {{N}} is.
 const FIELD_EXAMPLES = {
@@ -53,7 +68,7 @@ function getVarExample(varNum, varMap) {
 function buildBodyExample(text, varMap, exampleValues = {}) {
   const vars = [...(text || '').matchAll(/\{\{(\d+)\}\}/g)].map(m => m[1]);
   if (!vars.length) return null;
-  return { body_text: [vars.map(v => String(exampleValues[v] || '').trim() || getVarExample(v, varMap))] };
+  return { body_text: [vars.map(v => sanitizeMetaText(String(exampleValues[v] || '').trim() || getVarExample(v, varMap)))] };
 }
 
 /**
@@ -100,7 +115,7 @@ function buildMetaComponents(tpl, { preserveVarNumbers = false } = {}) {
 
     // REQUIRED carousel-level body (Meta mandates a top-level BODY for carousel templates)
     // If the user left it blank, use a sensible default so Meta doesn't reject.
-    const bodyText = tpl.body?.trim() || 'Check out our latest products for you!';
+    const bodyText = sanitizeMetaText(tpl.body?.trim() || 'Check out our latest products for you!');
     const bodyComp = { type: 'BODY', text: bodyText };
     const bodyEx = buildBodyExample(bodyText, stdVarMap);
     if (bodyEx) bodyComp.example = bodyEx;
@@ -124,8 +139,9 @@ function buildMetaComponents(tpl, { preserveVarNumbers = false } = {}) {
 
       // 2. BODY — use real example_values so Meta reviewers see meaningful content
       if (card.body?.trim()) {
-        const comp = { type: 'BODY', text: card.body };
-        const ex = buildBodyExample(card.body, vm, exV);
+        const cleanBody = sanitizeMetaText(card.body);
+        const comp = { type: 'BODY', text: cleanBody };
+        const ex = buildBodyExample(cleanBody, vm, exV);
         if (ex) comp.example = ex;
         cardComponents.push(comp);
       }
@@ -171,20 +187,22 @@ function buildMetaComponents(tpl, { preserveVarNumbers = false } = {}) {
   if (tpl.header_type === 'IMAGE') {
     components.push({ type: 'HEADER', format: 'IMAGE' });
   } else if (tpl.header_type === 'TEXT' && tpl.header_text?.trim()) {
-    const hVars = [...tpl.header_text.matchAll(/\{\{(\d+)\}\}/g)].map(m => m[1]);
-    const comp = { type: 'HEADER', format: 'TEXT', text: tpl.header_text };
+    const cleanHeader = sanitizeMetaText(tpl.header_text);
+    const hVars = [...cleanHeader.matchAll(/\{\{(\d+)\}\}/g)].map(m => m[1]);
+    const comp = { type: 'HEADER', format: 'TEXT', text: cleanHeader };
     if (hVars.length) comp.example = { header_text: hVars.map(v => getVarExample(v, stdVarMap)) };
     components.push(comp);
   }
 
   if (tpl.body?.trim()) {
-    const comp = { type: 'BODY', text: tpl.body };
-    const ex = buildBodyExample(tpl.body, stdVarMap);
+    const cleanBody = sanitizeMetaText(tpl.body);
+    const comp = { type: 'BODY', text: cleanBody };
+    const ex = buildBodyExample(cleanBody, stdVarMap);
     if (ex) comp.example = ex;
     components.push(comp);
   }
 
-  if (tpl.footer?.trim()) components.push({ type: 'FOOTER', text: tpl.footer });
+  if (tpl.footer?.trim()) components.push({ type: 'FOOTER', text: sanitizeMetaText(tpl.footer) });
 
   if (tpl.buttons?.length) {
     const buttons = tpl.buttons.map(b => {
@@ -845,7 +863,7 @@ export function buildSendMessagePayload(tpl, productConfig, recipientPhone = '{{
     const vars = [...tpl.body.matchAll(/\{\{(\d+)\}\}/g)].map(m => m[1]);
     if (vars.length > 0) {
       const firstCard = (productConfig?.cards || [])[0] || {};
-      components.push({ type: 'body', parameters: vars.map(v => ({ type: 'text', text: getFieldValue(v, stdVarMap, firstCard) })) });
+      components.push({ type: 'body', parameters: vars.map(v => ({ type: 'text', text: sanitizeMetaText(getFieldValue(v, stdVarMap, firstCard)) })) });
     }
   }
 
@@ -885,7 +903,7 @@ export function buildSendMessagePayload(tpl, productConfig, recipientPhone = '{{
         const vars = [...card.body.matchAll(/\{\{(\d+)\}\}/g)].map(m => m[1]);
         if (vars.length > 0) {
           const params = vars.map(v => {
-            const val = getFieldValue(v, vm, pd) || String(exV[v] || '');
+            const val = sanitizeMetaText(getFieldValue(v, vm, pd) || String(exV[v] || ''));
             return { type: 'text', text: val };
           });
           cardComponents.push({ type: 'body', parameters: params });
