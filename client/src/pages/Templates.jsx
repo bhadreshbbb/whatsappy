@@ -303,7 +303,21 @@ export default function Templates() {
         {templates.map(tpl => {
           const sc = STATUS_CFG[tpl.meta_status] || STATUS_CFG['DRAFT'];
           const Icon = sc.icon;
-          const configCards = tpl.product_config?.cards?.filter(c => c.title || c.image_id) || [];
+          // Show cards from product_config if set, else fall back to carousel_cards
+          // Accept any card that has title, image_id, media_id, or any image URL
+          const rawConfigCards = tpl.product_config?.cards?.length
+            ? tpl.product_config.cards
+            : (tpl.is_carousel && tpl.carousel_cards?.length ? tpl.carousel_cards.map(c => ({
+                title:         c.product_data?.title || c.example_values?.['1']?.split('\n')[0] || '',
+                price:         c.product_data?.price || c.example_values?.['1']?.split('\n')[1] || '',
+                link:          c.product_data?.link  || '',
+                image_id:      c.image_id    || '',
+                media_id:      c.media_id    || '',
+                _hot_image_url: c.product_data?.image_url || c._hot_image_url || '',
+              })) : []);
+          const configCards = rawConfigCards.filter(c =>
+            c.title || c.image_id || c.media_id || c._hot_image_url || c.image_url
+          );
           return (
             <div key={tpl.id} className="bg-white/[0.03] border border-white/10 rounded-2xl p-5 hover:border-white/15 transition-all group">
               <div className="flex items-start gap-4">
