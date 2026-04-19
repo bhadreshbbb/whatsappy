@@ -194,68 +194,105 @@ export const analyticsController = {
       const since     = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
       const limit     = Math.min(parseInt(req.query.limit) || 50, 200);
 
-      const visitors = (db.website_visitors || []).filter(v =>
-        v.channel_id === channelId && v.phone && v.visited_at >= since
-      );
-
-      const pageViews = (db.page_views || []).filter(p => p.channel_id === channelId && p.viewed_at >= since);
-      const carts     = (db.cart_events || []).filter(c => c.channel_id === channelId);
-
-      // Build a phone → session count map across ALL time (not just `since`) to detect repeats
-      const allVisitorsForChannel = (db.website_visitors || []).filter(v =>
+      // All identified visitors for this channel (all time, for repeat detection)
+      const allWithPhone = (db.website_visitors || []).filter(v =>
         v.channel_id === channelId && v.phone
       );
-      const phoneSessionCount = {};
-      allVisitorsForChannel.forEach(v => {
-        phoneSessionCount[v.phone] = (phoneSessionCount[v.phone] || 0) + 1;
+
+      // Group ALL sessions by phone so same user on different devices = 1 entry
+      const phoneMap = new Map();
+      allWithPhone.forEach(v => {
+        if (!phoneMap.has(v.phone)) phoneMap.set(v.phone, []);
+        phoneMap.get(v.phone).push(v);
       });
 
-      const contacts = visitors.map(v => {
-        // All page views for this visitor
-        const pvs = pageViews.filter(p => p.session_id === v.session_id);
-        const avgScroll   = pvs.length ? Math.round(pvs.reduce((s,p)=>s+(p.max_scroll_pct||0),0)/pvs.length) : 0;
-        const totalTime   = pvs.reduce((s,p)=>s+(p.duration_sec||0),0) + (v.total_time_sec||0);
-        const avgEngage   = v.engagement_score || (pvs.length ? Math.round(pvs.reduce((s,p)=>s+(p.engagement_score||0),0)/pvs.length) : 0);
-        const cartCount   = carts.filter(c=>(c.session_id===v.session_id||(v.phone&&c.phone===v.phone))).length;
-        const pageCount   = v.total_page_views || pvs.length;
+      // Only keep phones that had activity within `since` window
+      const pageViews = (db.page_views || []).filter(p => p.channel_id === channelId);
+      const carts     = (db.cart_events || []).filter(c => c.channel_id === channelId);
+      const purchases = (db.purchase_history || []).filter(p => p.channel_id === channelId);
 
-        // Power score (0–100):
-        // engagement (40%) + cart intent (25%) + time on site (20%) + pages visited (15%)
-        const engScore    = Math.min(avgEngage, 100) * 0.40;
-        const cartScore   = Math.min(cartCount * 25, 100) * 0.25;
-        const timeScore   = Math.min(totalTime / 3, 100) * 0.20;   // 300s = max
-        const pageScore   = Math.min(pageCount * 10, 100) * 0.15;  // 10 pages = max
-        const powerScore  = Math.round(engScore + cartScore + timeScore + pageScore);
+      const contacts = [];
 
-        return {
-          id:             v.id,
-          session_id:     v.session_id,
-          phone:          v.phone,
-          name:           v.name || '',
-          city:           v.city || '',
-          state:          v.state || '',
-          device:         v.device_type || '',
-          language:       v.language || '',
-          status:         v.status || 'active',
-          is_repeat:      (phoneSessionCount[v.phone] || 1) > 1,
-          visit_count:    phoneSessionCount[v.phone] || v.visit_count || 1,
-          total_purchase_count: v.total_purchase_count || 0,
-          utm_source:     v.utm_source   || null,
-          utm_medium:     v.utm_medium   || null,
-          utm_campaign:   v.utm_campaign || null,
+      for (const [phone, sessions] of phoneMap.entries()) {
+        // Only include if any session falls within the time window
+        const hasRecent = sessions.some(s => (s.visited_at || '') >= since);
+        if (!hasRecent) continue;
+
+        // Sort sessions newest first; canonical = most recent
+        sessions.sort((a, b) => new Date(b.visited_at) - new Date(a.visited_at));
+        const canonical = sessions[0];
+
+        // Pick best available name/city/device (first non-empty across sessions)
+        const name     = sessions.map(s => s.name).find(Boolean) || '';
+        const city     = sessions.map(s => s.city).find(Boolean) || '';
+        const state    = sessions.map(s => s.state).find(Boolean) || '';
+        const device   = sessions.map(s => s.device_type).find(Boolean) || '';
+        const language = sessions.map(s => s.language).find(Boolean) || '';
+
+        // Best status (most advanced in funnel)
+        const STATUS_RANK = { purchased: 6, abandoned_checkout: 5, abandoned_cart: 4, product_view: 3, active: 2, unknown: 1 };
+        const status = sessions.reduce((best, s) => {
+          return (STATUS_RANK[s.status] || 0) > (STATUS_RANK[best] || 0) ? s.status : best;
+        }, 'active');
+
+        // Aggregate page views across ALL sessions for this phone
+        const allSessionIds = new Set(sessions.map(s => s.session_id).filter(Boolean));
+        const pvs = pageViews.filter(p => allSessionIds.has(p.session_id) || p.phone === phone);
+        const recentPvs = pvs.filter(p => (p.viewed_at || '') >= since);
+
+        const avgScroll  = pvs.length ? Math.round(pvs.reduce((s,p)=>s+(p.max_scroll_pct||0),0)/pvs.length) : 0;
+        const totalTime  = sessions.reduce((s,v)=>s+(v.total_time_sec||0),0)
+                         + pvs.reduce((s,p)=>s+(p.duration_sec||0),0);
+        const avgEngage  = pvs.length ? Math.round(pvs.reduce((s,p)=>s+(p.engagement_score||0),0)/pvs.length) : (canonical.engagement_score||0);
+        const cartCount  = carts.filter(c => allSessionIds.has(c.session_id) || c.phone === phone).length;
+        const pageCount  = sessions.reduce((s,v)=>s+(v.total_page_views||0),0) || pvs.length;
+        const purchaseCount = purchases.filter(p => p.phone === phone).length;
+
+        // UTM — first touch wins
+        const utm_source   = sessions.map(s=>s.utm_source).find(Boolean) || null;
+        const utm_medium   = sessions.map(s=>s.utm_medium).find(Boolean) || null;
+        const utm_campaign = sessions.map(s=>s.utm_campaign).find(Boolean) || null;
+
+        // Power score
+        const engScore  = Math.min(avgEngage, 100) * 0.40;
+        const cartScore = Math.min(cartCount * 25, 100) * 0.25;
+        const timeScore = Math.min(totalTime / 3, 100) * 0.20;
+        const pageScore = Math.min(pageCount * 10, 100) * 0.15;
+        const powerScore = Math.round(engScore + cartScore + timeScore + pageScore);
+
+        const topPages = [...pvs]
+          .sort((a,b)=>b.engagement_score-a.engagement_score)
+          .slice(0,3)
+          .map(p=>({ url:p.url, title:p.page_title, score:p.engagement_score }));
+
+        contacts.push({
+          id:             canonical.id,
+          session_id:     canonical.session_id,
+          phone,
+          name,
+          city,
+          state,
+          device,
+          language,
+          status,
+          is_repeat:      sessions.length > 1,
+          visit_count:    sessions.length,
+          total_purchase_count: purchaseCount,
+          utm_source,
+          utm_medium,
+          utm_campaign,
           power_score:    powerScore,
           engagement_score: avgEngage,
           avg_scroll_pct: avgScroll,
           total_time_sec: totalTime,
           page_views:     pageCount,
           cart_events:    cartCount,
-          last_seen:      v.visited_at,
-          created_at:     v.created_at,
-          top_pages:      pvs.sort((a,b)=>b.engagement_score-a.engagement_score).slice(0,3).map(p=>({ url:p.url, title:p.page_title, score:p.engagement_score })),
-        };
-      });
+          last_seen:      canonical.visited_at,
+          created_at:     sessions[sessions.length-1].created_at || canonical.created_at,
+          top_pages:      topPages,
+        });
+      }
 
-      // Sort by power score desc
       contacts.sort((a, b) => b.power_score - a.power_score);
 
       res.json({ contacts: contacts.slice(0, limit), total: contacts.length });

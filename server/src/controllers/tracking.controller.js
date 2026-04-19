@@ -149,7 +149,9 @@ export const trackingController = {
       // Prefer geo (accurate) over browser locale (can be wrong e.g. VPN users)
       const resolvedLanguage = geoLang || browserLang || 'en';
 
-      const visitorIdx = db.website_visitors.findIndex(v => v.channel_id === (channelId || 'demo') && v.session_id === sessionId);
+      let visitorIdx = db.website_visitors.findIndex(v => v.channel_id === (channelId || 'demo') && v.session_id === sessionId);
+      // If session not found but this session_id matches a known phone's session, link it
+      const existingPhone = visitorIdx >= 0 ? db.website_visitors[visitorIdx].phone : null;
       const visitor = {
         id: visitorIdx >= 0 ? db.website_visitors[visitorIdx].id : (db.website_visitors.length || 0) + 1,
         channel_id: channelId || 'demo',
@@ -178,6 +180,20 @@ export const trackingController = {
 
       if (visitorIdx >= 0) db.website_visitors[visitorIdx] = { ...db.website_visitors[visitorIdx], ...visitor };
       else db.website_visitors.push(visitor);
+
+      // If visitor already has a phone, keep is_repeat / visit_count consistent
+      const knownPhone = existingPhone || (visitorIdx >= 0 ? db.website_visitors[visitorIdx]?.phone : null);
+      if (knownPhone) {
+        const samePhoneSessions = db.website_visitors.filter(v => v.channel_id === (channelId||'demo') && v.phone === knownPhone);
+        if (samePhoneSessions.length > 1) {
+          const vCount = samePhoneSessions.length;
+          const pCount = (db.purchase_history||[]).filter(p=>p.channel_id===(channelId||'demo')&&p.phone===knownPhone).length;
+          samePhoneSessions.forEach(v => {
+            const vi = db.website_visitors.findIndex(x=>x.id===v.id);
+            if (vi>=0) { db.website_visitors[vi].is_repeat=true; db.website_visitors[vi].visit_count=vCount; db.website_visitors[vi].total_purchase_count=pCount; }
+          });
+        }
+      }
 
       // ── Auto-sync Shopify catalog from scraped carousel ──
       if (shopify_carousel) {
@@ -232,19 +248,31 @@ export const trackingController = {
         db.website_visitors[idx].email = email || db.website_visitors[idx].email;
         db.website_visitors[idx].name  = name  || db.website_visitors[idx].name;
 
-        // Repeat visitor detection
+        // Identity resolution: mark ALL sessions for this phone as same user
         if (phone) {
-          const priorSessions = db.website_visitors.filter(v =>
-            v.channel_id === cid && v.phone === phone && v.session_id !== sessionId
+          const allPhoneSessions = db.website_visitors.filter(v =>
+            v.channel_id === cid && v.phone === phone
           );
-          if (priorSessions.length > 0) {
-            const purchaseCount = (db.purchase_history || []).filter(p =>
-              p.channel_id === cid && p.phone === phone
-            ).length;
-            db.website_visitors[idx].is_repeat          = true;
-            db.website_visitors[idx].visit_count         = priorSessions.length + 1;
-            db.website_visitors[idx].total_purchase_count = purchaseCount;
+          const visitCount = allPhoneSessions.length;
+          const purchaseCount = (db.purchase_history || []).filter(p =>
+            p.channel_id === cid && p.phone === phone
+          ).length;
+          if (visitCount > 1) {
+            // Mark every session for this phone as repeat with correct counts
+            allPhoneSessions.forEach(v => {
+              const vi = db.website_visitors.findIndex(x => x.id === v.id);
+              if (vi >= 0) {
+                db.website_visitors[vi].is_repeat           = true;
+                db.website_visitors[vi].visit_count          = visitCount;
+                db.website_visitors[vi].total_purchase_count = purchaseCount;
+              }
+            });
           }
+          // Backfill phone on all events for all sessions of this phone
+          const allSessionIds = new Set(allPhoneSessions.map(v => v.session_id).filter(Boolean));
+          db.cart_events.forEach(c => { if (allSessionIds.has(c.session_id) && !c.phone) c.phone = phone; });
+          db.product_views.forEach(v => { if (allSessionIds.has(v.session_id) && !v.phone) v.phone = phone; });
+          db.page_views && db.page_views.forEach(p => { if (allSessionIds.has(p.session_id) && !p.phone) p.phone = phone; });
         }
         db.save();
       }
@@ -646,20 +674,30 @@ export const trackingController = {
         if (auto_product_url)   db.website_visitors[vIdx].last_product_url   = auto_product_url;
         if (auto_product_price) db.website_visitors[vIdx].last_product_price = auto_product_price;
 
-        // ── Repeat visitor detection ──────────────────────────────────────────
+        // ── Identity resolution: mark ALL sessions for this phone as same user ──
         if (phone) {
           const allPhoneSessions = db.website_visitors.filter(v =>
-            v.channel_id === cid && v.phone === phone && v.session_id !== sessionId
+            v.channel_id === cid && v.phone === phone
           );
-          if (allPhoneSessions.length > 0) {
-            const visitCount = allPhoneSessions.length + 1;
-            const purchaseCount = (db.purchase_history || []).filter(p =>
-              p.channel_id === cid && p.phone === phone
-            ).length;
-            db.website_visitors[vIdx].is_repeat         = true;
-            db.website_visitors[vIdx].visit_count        = visitCount;
-            db.website_visitors[vIdx].total_purchase_count = purchaseCount;
+          const visitCount = allPhoneSessions.length;
+          const purchaseCount = (db.purchase_history || []).filter(p =>
+            p.channel_id === cid && p.phone === phone
+          ).length;
+          if (visitCount > 1) {
+            allPhoneSessions.forEach(v => {
+              const vi = db.website_visitors.findIndex(x => x.id === v.id);
+              if (vi >= 0) {
+                db.website_visitors[vi].is_repeat           = true;
+                db.website_visitors[vi].visit_count          = visitCount;
+                db.website_visitors[vi].total_purchase_count = purchaseCount;
+              }
+            });
           }
+          // Backfill phone on all events across all sessions of this phone
+          const allSessionIds = new Set(allPhoneSessions.map(v => v.session_id).filter(Boolean));
+          db.cart_events.forEach(c => { if (allSessionIds.has(c.session_id) && !c.phone) c.phone = phone; });
+          db.product_views.forEach(v => { if (allSessionIds.has(v.session_id) && !v.phone) v.phone = phone; });
+          db.page_views && db.page_views.forEach(p => { if (allSessionIds.has(p.session_id) && !p.phone) p.phone = phone; });
         }
       } else {
         // ── CREATE visitor on-the-fly when identify arrives before trackVisitor ──
