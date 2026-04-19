@@ -18,10 +18,11 @@ async function request(path, opts = {}) {
 }
 
 export const visitorsApi = {
-  list:     (params = {}) => request('/visitors?' + new URLSearchParams(params).toString()),
-  stats:    ()            => request('/visitors/stats'),
-  get:      (id)          => request(`/visitors/${id}`),
-  getCarts: (id)          => request(`/visitors/${id}/carts`),
+  list:        (params = {}) => request('/visitors?' + new URLSearchParams(params).toString()),
+  stats:       ()            => request('/visitors/stats'),
+  get:         (id)          => request(`/visitors/${id}`),
+  getCarts:    (id)          => request(`/visitors/${id}/carts`),
+  getActivity: (id)          => request(`/visitors/${id}/activity`),
 };
 
 export const campaignsApi = {

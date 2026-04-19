@@ -13,6 +13,19 @@ import {
 } from "lucide-react";
 import { analyticsApi, visitorsApi } from "../api";
 
+/* ─── helpers ─────────────────────────────────────────────────────────────── */
+function timeAgo(iso) {
+  if (!iso) return '—';
+  const s = Math.floor((Date.now() - new Date(iso)) / 1000);
+  if (s < 60)   return `${s}s ago`;
+  if (s < 3600) return `${Math.floor(s/60)}m ago`;
+  if (s < 86400) return `${Math.floor(s/3600)}h ago`;
+  return new Date(iso).toLocaleDateString('en', { day: 'numeric', month: 'short' });
+}
+function shortUrl(u) {
+  try { const p = new URL(u); return p.hostname.replace('www.','') + p.pathname.slice(0,30); } catch { return (u||'').slice(0,40); }
+}
+
 const COLORS = ["#22c55e","#3b82f6","#f97316","#a855f7","#ec4899","#14b8a6","#f59e0b","#64748b","#ef4444","#06b6d4"];
 
 /* ─── Tooltip ─────────────────────────────────────────────────────────────── */
@@ -186,12 +199,253 @@ const TABS = [
   { id: 'brand',      label: 'Brand Intel ✦', icon: BrainCircuit },
   { id: 'overview',   label: 'Overview',      icon: BarChart2    },
   { id: 'pages',      label: 'Pages',         icon: Eye          },
-  { id: 'contacts',   label: 'Contacts',      icon: Phone        },
+  { id: 'users',      label: 'Users',         icon: Users        },
   { id: 'repeat',     label: 'Repeat Customers', icon: Repeat    },
   { id: 'cities',     label: 'Cities',        icon: MapPin       },
   { id: 'devices',    label: 'Devices',       icon: Smartphone   },
   { id: 'engagement', label: 'Engagement',    icon: Activity     },
 ];
+
+/* ─── UserProfile ─────────────────────────────────────────────────────────── */
+const EVENT_META = {
+  page_view:           { icon: Globe,         color: "#60a5fa", label: "Page View"          },
+  product_view:        { icon: Package,       color: "#a855f7", label: "Product Viewed"     },
+  add_to_cart:         { icon: ShoppingCart,  color: "#fb923c", label: "Added to Cart"      },
+  checkout_started:    { icon: MousePointer,  color: "#f59e0b", label: "Checkout Started"   },
+  checkout_completed:  { icon: CheckCircle,   color: "#4ade80", label: "Checkout Completed" },
+  purchase:            { icon: Trophy,        color: "#4ade80", label: "Purchase"           },
+  campaign_send:       { icon: Megaphone,     color: "#c084fc", label: "Campaign Sent"      },
+  search:              { icon: Search,        color: "#38bdf8", label: "Search"             },
+};
+
+function EventCard({ event }) {
+  const meta = EVENT_META[event.type] || { icon: Zap, color: "#64748b", label: event.type };
+  const Icon = meta.icon;
+
+  return (
+    <div className="flex gap-3 group">
+      {/* Timeline dot */}
+      <div className="flex flex-col items-center flex-shrink-0">
+        <div className="w-8 h-8 rounded-full flex items-center justify-center z-10"
+          style={{ background: `${meta.color}18`, border: `2px solid ${meta.color}40` }}>
+          <Icon size={13} style={{ color: meta.color }} />
+        </div>
+        <div className="flex-1 w-px mt-1" style={{ background: "rgba(255,255,255,0.06)" }} />
+      </div>
+
+      {/* Card */}
+      <div className="flex-1 mb-4 rounded-xl overflow-hidden"
+        style={{ border: "1px solid rgba(255,255,255,0.07)", background: "rgba(255,255,255,0.02)" }}>
+        {/* Header */}
+        <div className="flex items-center justify-between px-3 py-2"
+          style={{ borderBottom: "1px solid rgba(255,255,255,0.05)", background: "rgba(255,255,255,0.02)" }}>
+          <span className="text-xs font-semibold" style={{ color: meta.color }}>{meta.label}</span>
+          <span className="text-[10px]" style={{ color: "#475569" }}>
+            {event.time ? new Date(event.time).toLocaleString('en', { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' }) : '—'}
+          </span>
+        </div>
+
+        {/* Body */}
+        <div className="px-3 py-2.5">
+          {/* page_view */}
+          {event.type === 'page_view' && (
+            <div className="space-y-1">
+              <p className="text-xs text-white font-medium">{event.title || shortUrl(event.url)}</p>
+              {event.url && (
+                <a href={event.url} target="_blank" rel="noreferrer"
+                  className="text-[10px] font-mono break-all hover:underline" style={{ color: "#3b82f6" }}>{event.url}</a>
+              )}
+              <div className="flex gap-3 mt-1.5 flex-wrap">
+                {event.duration_sec > 0  && <span className="text-[10px]" style={{ color: "#64748b" }}>⏱ {fmt(event.duration_sec)}</span>}
+                {event.max_scroll_pct > 0 && <span className="text-[10px]" style={{ color: "#64748b" }}>📜 {event.max_scroll_pct}% scroll</span>}
+                {event.engagement_score > 0 && <span className="text-[10px]" style={{ color: "#64748b" }}>⚡ {event.engagement_score} score</span>}
+                {event.referrer && <span className="text-[10px] truncate" style={{ color: "#64748b" }}>↩ {shortUrl(event.referrer)}</span>}
+              </div>
+            </div>
+          )}
+
+          {/* product_view / add_to_cart */}
+          {(event.type === 'product_view' || event.type === 'add_to_cart' || event.type === 'checkout_started') && (
+            <div className="flex gap-3">
+              {event.product_image && (
+                <img src={event.product_image} alt="" className="w-16 h-16 rounded-lg object-cover flex-shrink-0"
+                  style={{ border: "1px solid rgba(255,255,255,0.08)" }} onError={e => e.target.style.display='none'} />
+              )}
+              <div className="min-w-0 flex-1">
+                <p className="text-xs text-white font-semibold leading-tight">{event.product_name || '—'}</p>
+                {event.product_price && <p className="text-sm font-bold mt-0.5" style={{ color: "#4ade80" }}>{event.product_price}</p>}
+                {event.total_amount > 0 && <p className="text-xs mt-0.5" style={{ color: "#94a3b8" }}>Cart total: ₹{event.total_amount}</p>}
+                {event.product_url && (
+                  <a href={event.product_url} target="_blank" rel="noreferrer"
+                    className="text-[10px] font-mono mt-1 block hover:underline truncate" style={{ color: "#3b82f6" }}>{event.product_url}</a>
+                )}
+                {event.cart_url && (
+                  <a href={event.cart_url} target="_blank" rel="noreferrer"
+                    className="text-[10px] mt-0.5 flex items-center gap-1 hover:underline" style={{ color: "#60a5fa" }}>🛒 View Cart</a>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* checkout_completed / purchase */}
+          {(event.type === 'purchase' || event.type === 'checkout_completed') && (
+            <div>
+              {event.order_id && <p className="text-xs font-mono text-white">Order #{event.order_id}</p>}
+              {event.total_amount > 0 && <p className="text-lg font-bold" style={{ color: "#4ade80" }}>₹{Number(event.total_amount).toLocaleString()}</p>}
+              {event.products?.length > 0 && (
+                <div className="mt-2 flex gap-2 flex-wrap">
+                  {event.products.slice(0, 4).map((p, i) => (
+                    <div key={i} className="flex items-center gap-1.5 px-2 py-1 rounded-lg"
+                      style={{ background: "rgba(74,222,128,0.07)", border: "1px solid rgba(74,222,128,0.15)" }}>
+                      {p.image && <img src={p.image} alt="" className="w-5 h-5 rounded object-cover" onError={e => e.target.style.display='none'} />}
+                      <span className="text-[10px] text-white">{p.name || p.title || '—'}</span>
+                      {p.price && <span className="text-[10px]" style={{ color: "#4ade80" }}>{p.price}</span>}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* campaign_send */}
+          {event.type === 'campaign_send' && (
+            <div>
+              {event.campaign_name && <p className="text-xs text-white font-medium">{event.campaign_name}</p>}
+              {event.template_name  && <p className="text-[10px] mt-0.5" style={{ color: "#94a3b8" }}>Template: {event.template_name}</p>}
+              <span className="inline-block mt-1.5 text-[9px] px-1.5 py-0.5 rounded font-bold"
+                style={{ background: event.status === 'sent' ? "rgba(74,222,128,0.1)" : "rgba(239,68,68,0.1)",
+                         color: event.status === 'sent' ? "#4ade80" : "#f87171",
+                         border: `1px solid ${event.status === 'sent' ? "rgba(74,222,128,0.2)" : "rgba(239,68,68,0.2)"}` }}>
+                {event.status?.toUpperCase()}
+              </span>
+              {event.cards_sent?.length > 0 && (
+                <div className="mt-2 flex gap-2 overflow-x-auto pb-1">
+                  {event.cards_sent.map((c, i) => (
+                    <div key={i} className="flex-shrink-0 p-2 rounded-lg text-center"
+                      style={{ background: "rgba(168,85,247,0.07)", border: "1px solid rgba(168,85,247,0.15)", minWidth: 80 }}>
+                      {c.image && <img src={c.image} alt="" className="w-12 h-12 rounded object-cover mx-auto mb-1" onError={e => e.target.style.display='none'} />}
+                      <p className="text-[9px] text-white font-medium leading-tight">{c.title || '—'}</p>
+                      {c.price && <p className="text-[9px]" style={{ color: "#4ade80" }}>{c.price}</p>}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* search */}
+          {event.type === 'search' && (
+            <p className="text-xs">
+              <span className="text-white font-medium">"{event.query}"</span>
+              {event.results_count != null && <span className="text-slate-500 ml-2">{event.results_count} results</span>}
+            </p>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function UserProfile({ contact: c, activity, loading, onBack }) {
+  const allSessions = activity?.allSessions || [];
+  const timeline = activity?.timeline || [];
+
+  const ss =
+    c.status === 'purchased'          ? { color: "#4ade80", label: "Purchased"         } :
+    c.status === 'abandoned_cart'     ? { color: "#fb923c", label: "Abandoned Cart"    } :
+    c.status === 'abandoned_checkout' ? { color: "#f87171", label: "Checkout Abandoned"} :
+    c.status === 'product_view'       ? { color: "#60a5fa", label: "Product View"      } :
+                                        { color: "#94a3b8", label: "Active"            };
+
+  return (
+    <div className="space-y-5">
+      {/* Back */}
+      <button onClick={onBack} className="flex items-center gap-2 text-xs font-semibold transition-colors"
+        style={{ color: "#64748b" }}
+        onMouseEnter={e => e.currentTarget.style.color = "#e2e8f0"}
+        onMouseLeave={e => e.currentTarget.style.color = "#64748b"}>
+        ← Back to Users
+      </button>
+
+      {/* Profile header */}
+      <div className="card p-5">
+        <div className="flex items-start gap-4 flex-wrap">
+          {/* Avatar */}
+          <div className="w-14 h-14 rounded-2xl flex items-center justify-center text-2xl font-bold flex-shrink-0"
+            style={{ background: c.phone ? "rgba(59,130,246,0.15)" : "rgba(100,116,139,0.15)", color: c.phone ? "#60a5fa" : "#94a3b8" }}>
+            {(c.name || c.phone || '?')[0].toUpperCase()}
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 flex-wrap">
+              <h3 className="text-base font-bold text-white">{c.name || 'Anonymous User'}</h3>
+              <span className="text-[10px] px-2 py-0.5 rounded-full font-bold"
+                style={{ background: `${ss.color}18`, border: `1px solid ${ss.color}40`, color: ss.color }}>
+                {ss.label}
+              </span>
+              {c.is_repeat && (
+                <span className="text-[10px] px-2 py-0.5 rounded-full font-bold"
+                  style={{ background: "rgba(168,85,247,0.12)", border: "1px solid rgba(168,85,247,0.3)", color: "#c084fc" }}>
+                  🔁 Repeat Customer
+                </span>
+              )}
+            </div>
+            <div className="flex flex-wrap gap-x-4 gap-y-1 mt-2">
+              {c.phone    && <span className="text-xs font-mono" style={{ color: "#4ade80" }}>📞 {c.phone}</span>}
+              {c.city     && <span className="text-xs" style={{ color: "#94a3b8" }}>📍 {c.city}{c.state ? `, ${c.state}` : ''}</span>}
+              {c.language && <span className="text-xs" style={{ color: "#94a3b8" }}>🌐 {c.language}</span>}
+              {c.device   && <span className="text-xs" style={{ color: "#94a3b8" }}>{c.device === 'mobile' ? '📱' : c.device === 'desktop' ? '🖥' : '📲'} {c.device}</span>}
+            </div>
+          </div>
+          <div className="flex gap-6 text-center">
+            <div><p className="text-lg font-bold text-white">{c.page_views || 0}</p><p className="text-[10px]" style={{ color: "#64748b" }}>Page Views</p></div>
+            <div><p className="text-lg font-bold" style={{ color: "#fb923c" }}>{c.cart_events || 0}</p><p className="text-[10px]" style={{ color: "#64748b" }}>Carts</p></div>
+            <div><p className="text-lg font-bold" style={{ color: "#4ade80" }}>{allSessions.length}</p><p className="text-[10px]" style={{ color: "#64748b" }}>Visits</p></div>
+            <div><ScoreBadge score={c.power_score} /><p className="text-[10px] mt-1" style={{ color: "#64748b" }}>Power</p></div>
+          </div>
+        </div>
+
+        {/* Session dots */}
+        {allSessions.length > 1 && (
+          <div className="mt-4 pt-4" style={{ borderTop: "1px solid rgba(255,255,255,0.06)" }}>
+            <p className="text-[10px] font-semibold uppercase tracking-wide mb-2" style={{ color: "#475569" }}>
+              Visit History — {allSessions.length} sessions
+            </p>
+            <div className="flex gap-2 flex-wrap">
+              {allSessions.map((s, i) => {
+                const sc = s.status === 'purchased' ? "#4ade80" : s.status === 'abandoned_cart' ? "#fb923c" : s.status === 'product_view' ? "#60a5fa" : "#94a3b8";
+                return (
+                  <div key={i} className="text-[9px] px-2 py-1 rounded-lg"
+                    style={{ background: `${sc}12`, border: `1px solid ${sc}30`, color: sc }}>
+                    Visit {allSessions.length - i} · {s.status?.replace(/_/g,' ') || 'active'} ·{' '}
+                    {s.visited_at ? new Date(s.visited_at).toLocaleDateString('en', { day:'numeric', month:'short' }) : '?'}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Timeline */}
+      <div className="card p-5">
+        <h3 className="text-sm font-semibold text-white mb-5 flex items-center gap-2">
+          <Activity size={14} style={{ color: "#60a5fa" }} />
+          Full Activity Timeline
+          <span className="text-xs font-normal ml-auto" style={{ color: "#475569" }}>{timeline.length} events</span>
+        </h3>
+        {loading ? (
+          <div className="space-y-3">{[...Array(5)].map((_, i) => <div key={i} className="skeleton h-20 rounded-xl" />)}</div>
+        ) : timeline.length === 0 ? (
+          <p className="text-center py-8 text-sm" style={{ color: "#475569" }}>No activity recorded yet.</p>
+        ) : (
+          <div>
+            {timeline.map((ev, i) => <EventCard key={i} event={ev} />)}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
 
 /* ═══════════════════════════════════════════════════════════════════════════ */
 export default function Analytics() {
@@ -207,6 +461,14 @@ export default function Analytics() {
   const [engagement, setEngagement] = useState(null);
   const [repeatVis,  setRepeatVis]  = useState(null);
   const [repeatLoading, setRepeatLoading] = useState(false);
+
+  // Users tab
+  const [userDetail,         setUserDetail]         = useState(null);
+  const [userActivity,       setUserActivity]       = useState(null);
+  const [userActivityLoading,setUserActivityLoading]= useState(false);
+  const [ctRepeat,  setCtRepeat]  = useState('');
+  const [ctAnon,    setCtAnon]    = useState('');
+  const [ctLang,    setCtLang]    = useState('');
 
   // Global filters
   const [search,       setSearch]       = useState('');
@@ -267,6 +529,17 @@ export default function Analytics() {
     analyticsApi.repeatVisitors().then(d => { setRepeatVis(d); setRepeatLoading(false); }).catch(() => setRepeatLoading(false));
   }, [tab, repeatVis]);
 
+  const openUserDetail = useCallback(async (contact) => {
+    setUserDetail(contact);
+    setUserActivity(null);
+    setUserActivityLoading(true);
+    try {
+      const data = await visitorsApi.getActivity(contact.id || contact.visitor_id);
+      setUserActivity(data);
+    } catch (_) {}
+    setUserActivityLoading(false);
+  }, []);
+
   const toggleSort = (col, cur, dir, setCol, setDir) => {
     if (cur === col) setDir(d => d === 'desc' ? 'asc' : 'desc');
     else { setCol(col); setDir('desc'); }
@@ -325,18 +598,24 @@ export default function Analytics() {
     if (ctSearch) arr = arr.filter(c =>
       (c.phone || '').includes(ctSearch) ||
       (c.name || '').toLowerCase().includes(ctSearch.toLowerCase()) ||
-      (c.city || '').toLowerCase().includes(ctSearch.toLowerCase())
+      (c.city || '').toLowerCase().includes(ctSearch.toLowerCase()) ||
+      (c.language || '').toLowerCase().includes(ctSearch.toLowerCase())
     );
     if (ctStatus !== 'all') arr = arr.filter(c => c.status === ctStatus);
     if (ctCity) arr = arr.filter(c => (c.city || '').toLowerCase().includes(ctCity.toLowerCase()));
     if (ctDevice) arr = arr.filter(c => c.device === ctDevice);
     if (ctMinScore) arr = arr.filter(c => c.power_score >= +ctMinScore);
+    if (ctRepeat === 'yes') arr = arr.filter(c => c.is_repeat);
+    if (ctRepeat === 'no')  arr = arr.filter(c => !c.is_repeat);
+    if (ctAnon === 'yes') arr = arr.filter(c => !c.phone);
+    if (ctAnon === 'no')  arr = arr.filter(c => !!c.phone);
+    if (ctLang) arr = arr.filter(c => (c.language || '').toLowerCase().startsWith(ctLang.toLowerCase()));
     arr.sort((a, b) => {
       const va = a[ctSortBy] ?? 0, vb = b[ctSortBy] ?? 0;
       return ctSortDir === 'desc' ? vb - va : va - vb;
     });
     return arr;
-  }, [contacts, ctSearch, ctStatus, ctCity, ctDevice, ctMinScore, ctSortBy, ctSortDir]);
+  }, [contacts, ctSearch, ctStatus, ctCity, ctDevice, ctMinScore, ctRepeat, ctAnon, ctLang, ctSortBy, ctSortDir]);
 
   const ctHot   = (contacts?.contacts || []).filter(c => c.power_score >= 80).length;
   const ctCarts = (contacts?.contacts || []).filter(c => c.cart_events > 0).length;
@@ -646,47 +925,81 @@ export default function Analytics() {
         </div>
       )}
 
-      {/* ════════════════════ CONTACTS ════════════════════ */}
-      {tab === 'contacts' && (
+      {/* ════════════════════ USERS ════════════════════ */}
+      {tab === 'users' && !userDetail && (
         <div className="space-y-4">
           {/* Stats */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            <StatCard label="Total Contacts"  value={(contacts?.total || 0).toLocaleString()}  icon={Users}      color="blue"   />
-            <StatCard label="Hot (score ≥80)" value={ctHot}                                    icon={Flame}      color="orange" />
-            <StatCard label="With Cart"       value={ctCarts}                                   icon={TrendingUp} color="purple" />
-            <StatCard label="Avg Power Score" value={ctAvg}                                     icon={Star}       color="green"  />
+            <StatCard label="Total Users"      value={(contacts?.total || 0).toLocaleString()} icon={Users}     color="blue"   />
+            <StatCard label="Identified"       value={(contacts?.contacts || []).filter(c => c.phone).length} icon={CheckCircle} color="green" />
+            <StatCard label="Anonymous"        value={(contacts?.contacts || []).filter(c => !c.phone).length} icon={UserCheck} color="purple" />
+            <StatCard label="Repeat Customers" value={(contacts?.contacts || []).filter(c => c.is_repeat).length} icon={Repeat} color="orange" />
           </div>
 
           {/* Filters */}
-          <FilterBar>
-            <SearchInput value={ctSearch} onChange={setCtSearch} placeholder="Name, phone, city…" />
-            <FilterSelect value={ctStatus} onChange={setCtStatus}>
-              <option value="all">All Status</option>
-              <option value="active">Active</option>
-              <option value="product_view">Product View</option>
-              <option value="abandoned_cart">Abandoned Cart</option>
-              <option value="purchased">Purchased</option>
-            </FilterSelect>
-            <FilterSelect value={ctDevice} onChange={setCtDevice}>
-              <option value="">All Devices</option>
-              <option value="mobile">Mobile</option>
-              <option value="desktop">Desktop</option>
-              <option value="tablet">Tablet</option>
-            </FilterSelect>
-            <FilterSelect value={ctMinScore} onChange={setCtMinScore}>
-              <option value="">Any Score</option>
-              <option value="80">Hot (80+)</option>
-              <option value="60">High (60+)</option>
-              <option value="40">Medium (40+)</option>
-            </FilterSelect>
-            {ctCity && (
-              <span className="flex items-center gap-1 text-xs px-2 py-1 rounded-lg"
-                style={{ background: "rgba(59,130,246,0.1)", border: "1px solid rgba(59,130,246,0.2)", color: "#60a5fa" }}>
-                {ctCity} <button onClick={() => setCtCity('')}><X size={10} /></button>
+          <div className="card p-4 space-y-3">
+            <div className="flex flex-wrap gap-2 items-center">
+              <SearchInput value={ctSearch} onChange={setCtSearch} placeholder="Name, phone, city, language…" />
+              <FilterSelect value={ctStatus} onChange={setCtStatus}>
+                <option value="all">All Status</option>
+                <option value="active">🟢 Active</option>
+                <option value="product_view">🔵 Product View</option>
+                <option value="abandoned_cart">🟠 Abandoned Cart</option>
+                <option value="abandoned_checkout">🔴 Checkout Abandoned</option>
+                <option value="purchased">✅ Purchased</option>
+                <option value="followup_complete">📬 Followup Complete</option>
+              </FilterSelect>
+              <FilterSelect value={ctDevice} onChange={setCtDevice}>
+                <option value="">All Devices</option>
+                <option value="mobile">📱 Mobile</option>
+                <option value="desktop">🖥 Desktop</option>
+                <option value="tablet">📲 Tablet</option>
+              </FilterSelect>
+              <FilterSelect value={ctMinScore} onChange={setCtMinScore}>
+                <option value="">Any Score</option>
+                <option value="80">🔥 Hot (80+)</option>
+                <option value="60">High (60+)</option>
+                <option value="40">Medium (40+)</option>
+                <option value="20">Low (20+)</option>
+              </FilterSelect>
+              <FilterSelect value={ctRepeat} onChange={setCtRepeat}>
+                <option value="">All Customers</option>
+                <option value="yes">🔁 Repeat only</option>
+                <option value="no">🆕 First-time only</option>
+              </FilterSelect>
+              <FilterSelect value={ctAnon} onChange={setCtAnon}>
+                <option value="">All (anon + identified)</option>
+                <option value="no">✅ Identified (has phone)</option>
+                <option value="yes">👤 Anonymous only</option>
+              </FilterSelect>
+              <FilterSelect value={ctLang} onChange={setCtLang}>
+                <option value="">All Languages</option>
+                <option value="en">🇬🇧 English</option>
+                <option value="hi">🇮🇳 Hindi</option>
+                <option value="gu">Gujarati</option>
+                <option value="ta">Tamil</option>
+                <option value="te">Telugu</option>
+                <option value="mr">Marathi</option>
+                <option value="bn">Bengali</option>
+              </FilterSelect>
+              {ctCity && (
+                <span className="flex items-center gap-1 text-xs px-2 py-1 rounded-lg"
+                  style={{ background: "rgba(59,130,246,0.1)", border: "1px solid rgba(59,130,246,0.2)", color: "#60a5fa" }}>
+                  📍 {ctCity} <button onClick={() => setCtCity('')}><X size={10} /></button>
+                </span>
+              )}
+              <span className="text-xs ml-auto font-semibold" style={{ color: "#475569" }}>
+                {filteredContacts.length} / {(contacts?.contacts || []).length} users
               </span>
+            </div>
+            {(ctSearch || ctStatus !== 'all' || ctDevice || ctMinScore || ctRepeat || ctAnon || ctLang || ctCity) && (
+              <button onClick={() => { setCtSearch(''); setCtStatus('all'); setCtDevice(''); setCtMinScore(''); setCtRepeat(''); setCtAnon(''); setCtLang(''); setCtCity(''); }}
+                className="text-[10px] px-2 py-1 rounded-lg flex items-center gap-1"
+                style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)', color: '#f87171' }}>
+                <X size={9} /> Clear all filters
+              </button>
             )}
-            <span className="text-xs ml-auto" style={{ color: "#475569" }}>{filteredContacts.length} contacts</span>
-          </FilterBar>
+          </div>
 
           {/* Table */}
           <div className="card">
@@ -696,69 +1009,87 @@ export default function Analytics() {
                   <thead>
                     <tr style={{ borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
                       {[
-                        { label: 'Contact',    col: 'name'             },
+                        { label: 'User',       col: 'name'             },
                         { label: 'Power',      col: 'power_score'      },
                         { label: 'Engage',     col: 'engagement_score' },
-                        { label: 'Scroll',     col: 'avg_scroll_pct'   },
-                        { label: 'Time',       col: 'total_time_sec'   },
                         { label: 'Pages',      col: 'page_views'       },
+                        { label: 'Time',       col: 'total_time_sec'   },
                         { label: 'Carts',      col: 'cart_events'      },
                         { label: 'Status',     col: 'status'           },
                         { label: 'City',       col: 'city'             },
                         { label: 'Device',     col: 'device'           },
                         { label: 'Last Seen',  col: 'last_seen'        },
-                      ].map(c => (
-                        <SortTh key={c.col} col={c.col} label={c.label}
-                          sortBy={ctSortBy} sortDir={ctSortDir}
-                          onSort={col => toggleSort(col, ctSortBy, ctSortDir, setCtSortBy, setCtSortDir)} />
-                      ))}
+                        { label: '',           col: ''                 },
+                      ].map(c => c.col
+                        ? <SortTh key={c.col} col={c.col} label={c.label} sortBy={ctSortBy} sortDir={ctSortDir}
+                            onSort={col => toggleSort(col, ctSortBy, ctSortDir, setCtSortBy, setCtSortDir)} />
+                        : <th key="action" className="py-3 px-3" />
+                      )}
                     </tr>
                   </thead>
                   <tbody>
                     {filteredContacts.length === 0 && (
-                      <tr><td colSpan={11} className="text-center py-12" style={{ color: "#475569" }}>No contacts match your filters.</td></tr>
+                      <tr><td colSpan={11} className="text-center py-12" style={{ color: "#475569" }}>No users match your filters.</td></tr>
                     )}
-                    {filteredContacts.slice(0, 150).map((c, i) => {
-                      const statusStyle =
-                        c.status === 'purchased'      ? { bg: "rgba(34,197,94,0.1)",   border: "rgba(34,197,94,0.25)",   color: "#4ade80"  } :
-                        c.status === 'abandoned_cart' ? { bg: "rgba(249,115,22,0.1)",  border: "rgba(249,115,22,0.25)",  color: "#fb923c"  } :
-                        c.status === 'product_view'   ? { bg: "rgba(59,130,246,0.1)",  border: "rgba(59,130,246,0.25)",  color: "#60a5fa"  } :
-                                                        { bg: "rgba(100,116,139,0.1)", border: "rgba(100,116,139,0.25)", color: "#94a3b8"  };
+                    {filteredContacts.slice(0, 200).map((c, i) => {
+                      const ss =
+                        c.status === 'purchased'           ? { bg: "rgba(34,197,94,0.1)",   border: "rgba(34,197,94,0.25)",   color: "#4ade80"  } :
+                        c.status === 'abandoned_cart'      ? { bg: "rgba(249,115,22,0.1)",  border: "rgba(249,115,22,0.25)",  color: "#fb923c"  } :
+                        c.status === 'abandoned_checkout'  ? { bg: "rgba(239,68,68,0.1)",   border: "rgba(239,68,68,0.25)",   color: "#f87171"  } :
+                        c.status === 'product_view'        ? { bg: "rgba(59,130,246,0.1)",  border: "rgba(59,130,246,0.25)",  color: "#60a5fa"  } :
+                                                             { bg: "rgba(100,116,139,0.1)", border: "rgba(100,116,139,0.25)", color: "#94a3b8"  };
                       return (
-                        <tr key={i} className="transition-colors"
+                        <tr key={i} className="transition-colors cursor-pointer"
                           style={{ borderBottom: "1px solid rgba(255,255,255,0.03)" }}
                           onMouseEnter={e => e.currentTarget.style.background = "rgba(255,255,255,0.02)"}
                           onMouseLeave={e => e.currentTarget.style.background = ""}>
                           <td className="py-3 px-3">
-                            <p className="font-medium text-white">{c.name || '—'}</p>
-                            <p className="font-mono text-[10px] mt-0.5" style={{ color: "#4ade80" }}>{c.phone}</p>
+                            <div className="flex items-center gap-2">
+                              <div className="w-7 h-7 rounded-full flex items-center justify-center text-[10px] font-bold flex-shrink-0"
+                                style={{ background: c.phone ? "rgba(59,130,246,0.15)" : "rgba(100,116,139,0.15)", color: c.phone ? "#60a5fa" : "#94a3b8" }}>
+                                {(c.name || c.phone || '?')[0].toUpperCase()}
+                              </div>
+                              <div>
+                                <p className="font-medium text-white">{c.name || <span style={{ color: "#475569" }}>Anonymous</span>}</p>
+                                <p className="font-mono text-[10px] mt-0.5" style={{ color: c.phone ? "#4ade80" : "#475569" }}>
+                                  {c.phone || 'No phone'}
+                                  {c.is_repeat && <span className="ml-1 px-1 rounded text-[8px] font-bold" style={{ background: "rgba(168,85,247,0.15)", color: "#c084fc" }}>🔁</span>}
+                                </p>
+                              </div>
+                            </div>
                           </td>
                           <td className="py-3 px-3"><ScoreBadge score={c.power_score} /></td>
-                          <td className="py-3 px-3">
-                            <MiniBar pct={c.engagement_score} color="#a855f7" width={50} />
-                          </td>
-                          <td className="py-3 px-3 font-mono" style={{ color: "#94a3b8" }}>{c.avg_scroll_pct}%</td>
-                          <td className="py-3 px-3 font-mono" style={{ color: "#94a3b8" }}>{fmt(c.total_time_sec)}</td>
+                          <td className="py-3 px-3"><MiniBar pct={c.engagement_score} color="#a855f7" width={48} /></td>
                           <td className="py-3 px-3 font-mono text-center text-white">{c.page_views}</td>
-                          <td className="py-3 px-3 font-mono text-center" style={{ color: c.cart_events > 0 ? "#fb923c" : "#64748b" }}>{c.cart_events}</td>
+                          <td className="py-3 px-3 font-mono" style={{ color: "#94a3b8" }}>{fmt(c.total_time_sec)}</td>
+                          <td className="py-3 px-3 font-mono text-center" style={{ color: c.cart_events > 0 ? "#fb923c" : "#64748b" }}>{c.cart_events || 0}</td>
                           <td className="py-3 px-3">
                             <span className="text-[10px] px-1.5 py-0.5 rounded font-medium"
-                              style={{ background: statusStyle.bg, border: `1px solid ${statusStyle.border}`, color: statusStyle.color }}>
-                              {(c.status || 'active').replace('_', ' ')}
+                              style={{ background: ss.bg, border: `1px solid ${ss.border}`, color: ss.color }}>
+                              {(c.status || 'active').replace(/_/g, ' ')}
                             </span>
                           </td>
                           <td className="py-3 px-3">
-                            <button onClick={() => setCtCity(c.city || '')}
-                              className="text-xs transition-colors" style={{ color: "#94a3b8" }}
+                            <button onClick={() => setCtCity(c.city || '')} className="text-xs transition-colors" style={{ color: "#94a3b8" }}
                               onMouseEnter={e => e.currentTarget.style.color = "#60a5fa"}
-                              onMouseLeave={e => e.currentTarget.style.color = "#94a3b8"}
-                              title="Filter by this city">
+                              onMouseLeave={e => e.currentTarget.style.color = "#94a3b8"}>
                               {c.city || '—'}
                             </button>
                           </td>
-                          <td className="py-3 px-3 text-xs" style={{ color: "#64748b" }}>{c.device || '—'}</td>
+                          <td className="py-3 px-3 text-xs" style={{ color: "#64748b" }}>
+                            {c.device === 'mobile' ? '📱' : c.device === 'desktop' ? '🖥' : c.device === 'tablet' ? '📲' : ''} {c.device || '—'}
+                          </td>
                           <td className="py-3 px-3 whitespace-nowrap text-xs" style={{ color: "#64748b" }}>
-                            {c.last_seen ? new Date(c.last_seen).toLocaleDateString('en', { month: 'short', day: 'numeric' }) : '—'}
+                            {c.last_seen ? timeAgo(c.last_seen) : '—'}
+                          </td>
+                          <td className="py-3 px-3">
+                            <button onClick={() => openUserDetail(c)}
+                              className="text-[10px] px-2.5 py-1 rounded-lg font-semibold transition-all"
+                              style={{ background: "rgba(59,130,246,0.1)", border: "1px solid rgba(59,130,246,0.2)", color: "#60a5fa" }}
+                              onMouseEnter={e => { e.currentTarget.style.background = "rgba(59,130,246,0.2)"; }}
+                              onMouseLeave={e => { e.currentTarget.style.background = "rgba(59,130,246,0.1)"; }}>
+                              View →
+                            </button>
                           </td>
                         </tr>
                       );
@@ -769,6 +1100,16 @@ export default function Analytics() {
             )}
           </div>
         </div>
+      )}
+
+      {/* ════════════════════ USER PROFILE ════════════════════ */}
+      {tab === 'users' && userDetail && (
+        <UserProfile
+          contact={userDetail}
+          activity={userActivity}
+          loading={userActivityLoading}
+          onBack={() => { setUserDetail(null); setUserActivity(null); }}
+        />
       )}
 
       {/* ════════════════════ CITIES ════════════════════ */}
