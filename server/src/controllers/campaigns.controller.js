@@ -208,17 +208,31 @@ export const campaignsController = {
         let resolvedText = '';
 
         // ── PATH A: Meta template send (carousel / approved template) ─────────
+        let cardsSent = [];
         if (metaTpl) {
           const sendPayload = buildSendMessagePayload(metaTpl, metaTpl.product_config, target.phone, metaLangCode);
           console.log(`[Campaign Send] Meta template "${metaTpl.name}" → ${target.phone}`);
           console.log(JSON.stringify(sendPayload, null, 2));
+
+          // Build resolved text from actual product cards for chat inbox
+          cardsSent = (metaTpl.product_config?.cards || []).map(c => ({
+            title:    c.title    || '',
+            price:    c.price    || '',
+            link:     c.link     || '',
+            media_id: c.media_id || '',
+            image:    c._hot_image_url || c.image || '',
+          }));
+          resolvedText = cardsSent.length
+            ? `[Carousel: ${metaTpl.name}]\n` + cardsSent.map((c, i) =>
+                `Card ${i + 1}: ${c.title || '—'}${c.price ? ' • ' + c.price : ''}${c.link ? '\n' + c.link : ''}`
+              ).join('\n')
+            : `[Template: ${metaTpl.name}]`;
+
           try {
             const result = await whatsappService.sendTemplateMessage(target.phone, sendPayload);
             wamid = result.messageId || null;
-            resolvedText = result.resolvedText || `[Template: ${metaTpl.name}]`;
           } catch (e) {
             console.error('[Campaign] Meta template send error:', e.message);
-            resolvedText = `[Template: ${metaTpl.name}]`;
           }
 
         // ── PATH B: Regular text/template message ─────────────────────────────
@@ -273,6 +287,7 @@ export const campaignsController = {
           status: wamid ? 'sent' : 'failed',
           sent_at: new Date().toISOString(),
           is_meta_template: !!metaTpl,
+          cards_sent: cardsSent.length ? cardsSent : undefined,
         });
 
         target.whatsapp_sent    = 1;

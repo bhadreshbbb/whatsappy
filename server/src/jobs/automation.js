@@ -964,7 +964,15 @@ async function sendMultiple(db, cam, events, type) {
 
         const sendResult = await whatsappService.sendTemplateMessage(evt.phone, sendPayload);
 
-        saveChatMessage(db, evt.phone, sendResult.resolvedText || `[Carousel: ${metaTpl.name}]`, channelId, {
+        // Build human-readable text from actual cards (not the generic '[Carousel: name]')
+        const sentCards = (metaTpl.product_config?.cards || []);
+        const carouselText = sentCards.length
+          ? `[Carousel: ${metaTpl.name}]\n` + sentCards.map((c, i) =>
+              `Card ${i + 1}: ${c.title || '—'}${c.price ? ' • ' + c.price : ''}${c.link ? '\n' + c.link : ''}`
+            ).join('\n')
+          : `[Carousel: ${metaTpl.name}]`;
+
+        saveChatMessage(db, evt.phone, carouselText, channelId, {
           wamid: sendResult.messageId || null,
           campaignName: cam.name,
           templateName: metaTpl.name,
@@ -982,6 +990,14 @@ async function sendMultiple(db, cam, events, type) {
           status: sendResult.messageId ? 'sent' : 'failed',
           sent_at: new Date().toISOString(),
           is_meta_template: true,
+          cards_sent: sentCards.map(c => ({
+            title:    c.title    || '',
+            price:    c.price    || '',
+            link:     c.link     || '',
+            media_id: c.media_id || '',
+            image:    c._hot_image_url || c.image || '',
+          })),
+          payload_sent: JSON.stringify(sendPayload),
         });
 
         if (type === 'upsell') {
