@@ -1800,8 +1800,17 @@ export default function Campaigns() {
                        <span className="text-[10px] text-green-400 font-bold">{rate}% rate</span>
                     </div>
                     <button onClick={async() => {
-                       await campaignsApi.send(c.id); load();
-                       alert('Mock message sent and conversion tracked! Check visitors page to see updated status.');
+                       const result = await campaignsApi.send(c.id);
+                       console.group(`%c[Campaign Send] "${c.name}" — sent:${result?.sent ?? 0} skipped:${result?.skipped ?? 0}`, 'color:#22c55e;font-weight:bold');
+                       if (result?.payloads?.length) {
+                         result.payloads.forEach((p, i) => {
+                           console.log(`%cMessage ${i+1} → ${p.phone} (${p.template})`, 'color:#60a5fa;font-weight:bold');
+                           console.log('%cMeta API Payload:', 'color:#f59e0b', JSON.stringify(p.payload, null, 2));
+                         });
+                       }
+                       if (result?.errors?.length) console.error('[Campaign Errors]', result.errors);
+                       console.groupEnd();
+                       load();
                     }} className="p-2 bg-white/5 rounded-lg hover:text-green-400 border border-white/5 transition-all"><Play size={14}/></button>
                  </div>
               </div>
