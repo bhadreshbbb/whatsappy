@@ -858,7 +858,16 @@ function isBlockedByStatus(visitorStatus, campaignType) {
 async function sendMultiple(db, cam, events, type) {
   const channelId = process.env.CHANNEL_ID || 'demo';
 
-  for (const evt of events) {
+  // Deduplicate by phone — same user can appear in multiple sessions/events
+  const seenPhones = new Set();
+  const dedupedEvents = events.filter(evt => {
+    if (!evt.phone) return true;
+    if (seenPhones.has(evt.phone)) return false;
+    seenPhones.add(evt.phone);
+    return true;
+  });
+
+  for (const evt of dedupedEvents) {
     try {
       // ── LIVE STATUS GUARD: re-fetch visitor status at send time ──
       // The user may have changed status SINCE this batch was assembled.

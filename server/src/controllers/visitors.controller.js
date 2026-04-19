@@ -50,17 +50,23 @@ export const visitorsController = {
 
       const visitors = db.website_visitors.filter(v => v.channel_id === channelId);
       const fiveMinAgo = new Date(Date.now() - 5 * 60 * 1000);
-      
+
       const carts = db.cart_events.filter(c => c.channel_id === channelId);
       const campaigns = db.abandoned_cart_campaigns.filter(c => c.channel_id === channelId);
 
+      // Unique user counts: deduplicate by phone
+      const uniquePhones = new Set(visitors.filter(v => v.phone).map(v => v.phone));
+      const anonCount    = visitors.filter(v => !v.phone).length;
+      const activePhones = new Set(visitors.filter(v => v.phone && new Date(v.visited_at) >= fiveMinAgo).map(v => v.phone));
+      const activeAnon   = visitors.filter(v => !v.phone && new Date(v.visited_at) >= fiveMinAgo).length;
+
       res.json({
-        total: visitors.length,
-        active: visitors.filter(v => new Date(v.visited_at) >= fiveMinAgo).length,
-        withPhone: visitors.filter(v => v.phone).length,
+        total:      uniquePhones.size + anonCount,
+        active:     activePhones.size + activeAnon,
+        withPhone:  uniquePhones.size,
         cartEvents: carts.length,
-        recovered: carts.filter(c => c.recovered).length,
-        totalSent: campaigns.reduce((acc, c) => acc + (c.total_sent || 0), 0)
+        recovered:  carts.filter(c => c.recovered).length,
+        totalSent:  campaigns.reduce((acc, c) => acc + (c.total_sent || 0), 0)
       });
     } catch (error) {
       next(error);

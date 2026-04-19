@@ -15,12 +15,20 @@ export const analyticsController = {
       const thisWeek  = new Date(Date.now() - 7  * 24 * 60 * 60 * 1000);
       const thisMonth = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
 
+      // Count unique users: phones deduplicated + anonymous sessions
+      const uniqueUser = (arr) => {
+        const phones = new Set();
+        let anon = 0;
+        arr.forEach(v => { if (v.phone) phones.add(v.phone); else anon++; });
+        return phones.size + anon;
+      };
+
       res.json({
         visitors: {
-          total:      visitors.length,
-          today:      visitors.filter(v => new Date(v.visited_at) >= today).length,
-          this_week:  visitors.filter(v => new Date(v.visited_at) >= thisWeek).length,
-          this_month: visitors.filter(v => new Date(v.visited_at) >= thisMonth).length,
+          total:      uniqueUser(visitors),
+          today:      uniqueUser(visitors.filter(v => new Date(v.visited_at) >= today)),
+          this_week:  uniqueUser(visitors.filter(v => new Date(v.visited_at) >= thisWeek)),
+          this_month: uniqueUser(visitors.filter(v => new Date(v.visited_at) >= thisMonth)),
         },
         carts: {
           total:       carts.length,
@@ -57,38 +65,64 @@ export const analyticsController = {
       const visitors = allVisitors.filter(v => new Date(v.visited_at) >= since);
       const carts    = allCarts.filter(c => new Date(c.created_at) >= since);
 
-      // byDay
+      // byDay — count unique users per day (phone dedup within each day)
       const byDayMap = {}; const cartByDayMap = {};
       for (let i = 0; i < days; i++) {
         const d = new Date(Date.now() - (days - 1 - i) * 24 * 60 * 60 * 1000);
         const key = d.toISOString().slice(0, 10);
-        byDayMap[key] = 0; cartByDayMap[key] = 0;
+        byDayMap[key] = { phones: new Set(), anon: 0 };
+        cartByDayMap[key] = 0;
       }
-      visitors.forEach(v => { const k = (v.visited_at||'').slice(0,10); if (k in byDayMap) byDayMap[k]++; });
+      visitors.forEach(v => {
+        const k = (v.visited_at||'').slice(0,10);
+        if (!(k in byDayMap)) return;
+        if (v.phone) byDayMap[k].phones.add(v.phone);
+        else byDayMap[k].anon++;
+      });
       carts.forEach(c => { const k = (c.created_at||'').slice(0,10); if (k in cartByDayMap) cartByDayMap[k]++; });
 
-      // Cities
+      // Cities — deduplicate by phone
+      const citySeenPhone = new Set();
       const cityCount = {};
-      allVisitors.forEach(v => { const c = v.city || 'Unknown'; cityCount[c] = (cityCount[c]||0)+1; });
+      allVisitors.forEach(v => {
+        const userKey = v.phone ? v.phone : `anon:${v.session_id}`;
+        const cityKey = `${v.city||'Unknown'}|||${userKey}`;
+        if (citySeenPhone.has(cityKey)) return;
+        citySeenPhone.add(cityKey);
+        const c = v.city || 'Unknown';
+        cityCount[c] = (cityCount[c]||0)+1;
+      });
       const topCities = Object.entries(cityCount).map(([city,cnt])=>({city,cnt}))
         .sort((a,b)=>b.cnt-a.cnt).slice(0,10);
 
-      // ── Funnel status breakdown (all-time for channel) ──
+      // ── Funnel status — best status per unique user ──
+      const phoneStatus = {};
+      const STATUS_RANK = { purchased: 6, abandoned_checkout: 5, abandoned_cart: 4, cart_followup_complete: 3, product_view: 2, active: 1 };
+      allVisitors.forEach(v => {
+        const key = v.phone || `anon:${v.session_id}`;
+        const cur = STATUS_RANK[phoneStatus[key]] || 0;
+        const nxt = STATUS_RANK[v.status] || 0;
+        if (nxt > cur) phoneStatus[key] = v.status;
+      });
+      const statusVals = Object.values(phoneStatus);
       const funnel = {
-        active:              allVisitors.filter(v => v.status === 'active').length,
-        product_view:        allVisitors.filter(v => v.status === 'product_view').length,
-        abandoned_cart:      allVisitors.filter(v => v.status === 'abandoned_cart').length,
-        abandoned_checkout:  allVisitors.filter(v => v.status === 'abandoned_checkout').length,
-        followup_complete:   allVisitors.filter(v => v.status === 'followup_complete').length,
-        purchased:           allVisitors.filter(v => v.status === 'purchased').length,
+        active:              statusVals.filter(s => s === 'active').length,
+        product_view:        statusVals.filter(s => s === 'product_view').length,
+        abandoned_cart:      statusVals.filter(s => s === 'abandoned_cart').length,
+        abandoned_checkout:  statusVals.filter(s => s === 'abandoned_checkout').length,
+        followup_complete:   statusVals.filter(s => s === 'followup_complete' || s === 'cart_followup_complete').length,
+        purchased:           statusVals.filter(s => s === 'purchased').length,
       };
 
+      // Unique visitor count for the period
+      const periodPhones = new Set(visitors.filter(v=>v.phone).map(v=>v.phone));
+      const periodAnon   = visitors.filter(v=>!v.phone).length;
       res.json({
-        visitors:     visitors.length,
+        visitors:     periodPhones.size + periodAnon,
         cartEvents:   carts.length,
         recovered:    carts.filter(c=>c.recovered).length,
         messagesSent: execs.filter(e => campaigns.find(c=>c.id===e.campaign_id)).length,
-        byDay:     Object.entries(byDayMap).map(([day,visitors])=>({day,visitors})),
+        byDay:     Object.entries(byDayMap).map(([day,v])=>({day, visitors: v.phones.size + v.anon})),
         cartByDay: Object.entries(cartByDayMap).map(([day,carts])=>({day,carts})),
         topCities,
         campaignPerf: campaigns.map(c=>({ name:c.name, total_sent:c.total_sent||0, total_recovered:c.total_recovered||0 })),
@@ -109,14 +143,15 @@ export const analyticsController = {
         p.channel_id === channelId && p.viewed_at >= since
       );
 
-      // Group by URL
+      // Group by URL — deduplicate unique visitors by phone (same phone = same user)
       const byUrl = {};
       pageViews.forEach(p => {
         const url = p.url || 'Unknown';
-        if (!byUrl[url]) byUrl[url] = { url, title: p.page_title || '', sessions: new Set(), views: 0,
+        if (!byUrl[url]) byUrl[url] = { url, title: p.page_title || '', phones: new Set(), anonSessions: new Set(), views: 0,
           totalDuration: 0, totalScroll: 0, totalEngagement: 0, exits: 0, scrollCount: 0 };
         byUrl[url].views++;
-        byUrl[url].sessions.add(p.session_id);
+        if (p.phone) byUrl[url].phones.add(p.phone);
+        else         byUrl[url].anonSessions.add(p.session_id);
         byUrl[url].totalDuration    += p.duration_sec    || 0;
         byUrl[url].totalScroll      += p.max_scroll_pct  || 0;
         byUrl[url].totalEngagement  += p.engagement_score|| 0;
@@ -124,20 +159,25 @@ export const analyticsController = {
         if ((p.max_scroll_pct || 0) > 0) byUrl[url].scrollCount++;
       });
 
-      const pages = Object.values(byUrl).map(p => ({
-        url:              p.url,
-        title:            p.title,
-        views:            p.views,
-        unique_visitors:  p.sessions.size,
-        avg_duration_sec: p.views ? Math.round(p.totalDuration / p.views) : 0,
-        avg_scroll_pct:   p.views ? Math.round(p.totalScroll   / p.views) : 0,
-        avg_engagement:   p.views ? Math.round(p.totalEngagement/p.views) : 0,
-        exit_rate:        p.views ? Math.round((p.exits / p.views) * 100) : 0,
-        bounce_rate:      p.sessions.size ? Math.round(
-          ([...p.sessions].filter(sid =>
-            pageViews.filter(pv => pv.session_id === sid).length === 1
-          ).length / p.sessions.size) * 100) : 0,
-      })).sort((a, b) => b.views - a.views);
+      const pages = Object.values(byUrl).map(p => {
+        const uniqueCount = p.phones.size + p.anonSessions.size;
+        return {
+          url:              p.url,
+          title:            p.title,
+          views:            p.views,
+          unique_visitors:  uniqueCount,
+          avg_duration_sec: p.views ? Math.round(p.totalDuration / p.views) : 0,
+          avg_scroll_pct:   p.views ? Math.round(p.totalScroll   / p.views) : 0,
+          avg_engagement:   p.views ? Math.round(p.totalEngagement/p.views) : 0,
+          exit_rate:        p.views ? Math.round((p.exits / p.views) * 100) : 0,
+          bounce_rate:      uniqueCount ? Math.round(
+            ([...p.phones].filter(phone =>
+              pageViews.filter(pv => pv.phone === phone && pv.url === p.url).length === 1
+            ).length + [...p.anonSessions].filter(sid =>
+              pageViews.filter(pv => pv.session_id === sid).length === 1
+            ).length) / uniqueCount * 100) : 0,
+        };
+      }).sort((a, b) => b.views - a.views);
 
       console.log('[Analytics/pages] channel:', channelId, '| days:', days, '| total_views:', pageViews.length, '| pages:', pages.length);
       if (pages.length > 0) {
@@ -161,9 +201,14 @@ export const analyticsController = {
         v.channel_id === channelId && v.visited_at >= since
       );
 
+      // Deduplicate by phone per city — same phone = same user even across sessions
+      const seenPhoneCity = new Set();
       const byCity = {};
       visitors.forEach(v => {
         const key = `${v.city||'Unknown'}|||${v.state||''}|||${v.country||''}`;
+        const userKey = v.phone ? `${key}|||${v.phone}` : `${key}|||anon:${v.session_id}`;
+        if (seenPhoneCity.has(userKey)) return; // skip duplicate sessions for same phone+city
+        seenPhoneCity.add(userKey);
         if (!byCity[key]) byCity[key] = {
           city: v.city||'Unknown', state: v.state||'', country: v.country||'',
           visitors: 0, with_phone: 0, carts: 0, purchases: 0, total_engagement: 0, score_count: 0
@@ -307,9 +352,19 @@ export const analyticsController = {
       const days      = parseInt(req.query.days) || 30;
       const since     = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
 
-      const visitors = (db.website_visitors || []).filter(v =>
+      const allSessions = (db.website_visitors || []).filter(v =>
         v.channel_id === channelId && v.visited_at >= since
       );
+
+      // Deduplicate by phone — same user on multiple devices should count once per device type
+      // For identified users, keep the most recent session per phone
+      const seenPhone = new Set();
+      const visitors = allSessions.filter(v => {
+        if (!v.phone) return true; // anonymous: keep all
+        if (seenPhone.has(v.phone)) return false;
+        seenPhone.add(v.phone);
+        return true;
+      });
 
       const count = (arr, key) => {
         const m = {};

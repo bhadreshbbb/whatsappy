@@ -189,10 +189,14 @@ export const campaignsController = {
         } catch (_) {}
       }
 
+      // Deduplicate by phone — never send the same campaign twice to the same number
+      const sentPhones = new Set();
       let sent = 0;
 
       for (const target of targetEvents) {
         if (!target.phone) continue;
+        if (sentPhones.has(target.phone)) continue;
+        sentPhones.add(target.phone);
         // Rate-limit: skip if sent within last hour for non-cart campaigns
         if (campaign.campaign_type !== 'abandoned_cart' && target.whatsapp_sent_at) {
           const hoursSince = (Date.now() - new Date(target.whatsapp_sent_at).getTime()) / 3600000;
@@ -336,14 +340,22 @@ export const campaignsController = {
       const utmPhones   = new Set(utmVisitors.map(v => v.phone).filter(Boolean));
       const utmSessions = new Set(utmVisitors.map(v => v.session_id).filter(Boolean));
 
-      const clicks    = utmVisitors.length;
-      const purchases = utmVisitors.filter(v => v.status === 'purchased').length;
+      // Unique clicks: count unique phones (or sessions for anon)
+      const clickPhones = new Set(utmVisitors.filter(v=>v.phone).map(v=>v.phone));
+      const clickAnon   = new Set(utmVisitors.filter(v=>!v.phone).map(v=>v.session_id));
+      const clicks    = clickPhones.size + clickAnon.size;
+      // Unique purchasers by phone
+      const purchases = new Set(utmVisitors.filter(v => v.status === 'purchased' && v.phone).map(v=>v.phone)).size
+                      + utmVisitors.filter(v => v.status === 'purchased' && !v.phone).length;
 
-      // Cart events from UTM visitors (match by phone or session)
-      const addToCarts = (db.cart_events || []).filter(c =>
-        c.channel_id === channelId &&
-        (utmPhones.has(c.phone) || utmSessions.has(c.session_id))
-      ).length;
+      // Unique cart adders by phone from UTM visitors
+      const cartPhones = new Set(
+        (db.cart_events || []).filter(c =>
+          c.channel_id === channelId &&
+          (utmPhones.has(c.phone) || utmSessions.has(c.session_id))
+        ).map(c => c.phone || c.session_id)
+      );
+      const addToCarts = cartPhones.size;
 
       // Execution stats
       const executions = (db.abandoned_cart_executions || []).filter(e => String(e.campaign_id) === String(id));
