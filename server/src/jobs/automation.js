@@ -160,12 +160,22 @@ async function applyCardsToAutoProductTemplates(channelId, productConfigCards) {
       }
 
       // Use the offset-provided batch directly — the cycle in buildAutoProductCards already
-      // ensures we get a different set of products each tick. No fresh-product reordering
-      // needed (that was causing top-viewed products to always win over mid/low-viewed ones).
-      const pool = matchedCards.length > 0 ? matchedCards : productConfigCards;
-      console.log(`[ProductDetect] "${tpl.name}" — applying ${pool.length} product(s) from cycle window`);
+      // ensures we get a different set of products each tick.
+      const rawPool = matchedCards.length > 0 ? matchedCards : productConfigCards;
 
-      const cards = Array.from({ length: cardCount }, (_, i) => pool[i % pool.length]);
+      // Deduplicate by URL so no product appears twice in the same carousel
+      const seenUrls = new Set();
+      const pool = rawPool.filter(c => {
+        const key = (c.link || c.image_url || c.title || '').trim().toLowerCase();
+        if (!key || seenUrls.has(key)) return false;
+        seenUrls.add(key);
+        return true;
+      });
+      console.log(`[ProductDetect] "${tpl.name}" — ${pool.length} unique products from cycle window (${rawPool.length} raw)`);
+
+      // Never repeat: use only as many cards as we have unique products
+      const uniqueCount = Math.min(cardCount, pool.length);
+      const cards = pool.slice(0, uniqueCount);
 
       if (!tpl.product_config) tpl.product_config = {};
       tpl.product_config.cards             = cards;
@@ -236,18 +246,27 @@ export function startAutomation() {
             continue;
           }
 
-          const productConfigCards = result.productConfigCards || [];
+          const rawCards = result.productConfigCards || [];
           // Track largest pool seen across all templates (for offset math)
           if ((result.candidatesTotal || 0) > candidatesTotal) candidatesTotal = result.candidatesTotal;
 
-          if (!productConfigCards.length) {
+          if (!rawCards.length) {
             console.log(`[ProductDetect] "${tpl.name}" — 0 valid products this tick, skipping`);
             continue;
           }
 
-          const newCards = Array.from({ length: cardCount }, (_, i) =>
-            productConfigCards[i % productConfigCards.length]
-          );
+          // Deduplicate by URL so the same product never appears twice in one message
+          const seen = new Set();
+          const productConfigCards = rawCards.filter(c => {
+            const key = (c.link || c.image_url || c.title || '').trim().toLowerCase();
+            if (!key || seen.has(key)) return false;
+            seen.add(key);
+            return true;
+          });
+
+          // Only use as many cards as we have unique products — never repeat
+          const uniqueCount = Math.min(cardCount, productConfigCards.length);
+          const newCards = productConfigCards.slice(0, uniqueCount);
 
           if (!tpl.product_config) tpl.product_config = {};
           tpl.product_config.cards             = newCards;

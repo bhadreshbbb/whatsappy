@@ -201,6 +201,15 @@ export const analyticsController = {
       const pageViews = (db.page_views || []).filter(p => p.channel_id === channelId && p.viewed_at >= since);
       const carts     = (db.cart_events || []).filter(c => c.channel_id === channelId);
 
+      // Build a phone → session count map across ALL time (not just `since`) to detect repeats
+      const allVisitorsForChannel = (db.website_visitors || []).filter(v =>
+        v.channel_id === channelId && v.phone
+      );
+      const phoneSessionCount = {};
+      allVisitorsForChannel.forEach(v => {
+        phoneSessionCount[v.phone] = (phoneSessionCount[v.phone] || 0) + 1;
+      });
+
       const contacts = visitors.map(v => {
         // All page views for this visitor
         const pvs = pageViews.filter(p => p.session_id === v.session_id);
@@ -228,8 +237,8 @@ export const analyticsController = {
           device:         v.device_type || '',
           language:       v.language || '',
           status:         v.status || 'active',
-          is_repeat:      v.is_repeat || false,
-          visit_count:    v.visit_count || 1,
+          is_repeat:      (phoneSessionCount[v.phone] || 1) > 1,
+          visit_count:    phoneSessionCount[v.phone] || v.visit_count || 1,
           total_purchase_count: v.total_purchase_count || 0,
           utm_source:     v.utm_source   || null,
           utm_medium:     v.utm_medium   || null,
