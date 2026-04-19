@@ -801,6 +801,39 @@ function CreateModal({ onClose, onCreated }) {
                         </FilterCard>
                       </div>
 
+                      {/* Contact preview list */}
+                      {matchedContacts.length > 0 && (
+                        <div className="rounded-xl overflow-hidden" style={{ border: '1px solid rgba(255,255,255,0.06)' }}>
+                          <div className="px-3 py-2 text-[10px] font-semibold text-slate-400 uppercase tracking-wide"
+                            style={{ background: 'rgba(255,255,255,0.03)', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                            Preview — first {Math.min(matchedContacts.length, 8)} of {matchedContacts.length}
+                          </div>
+                          {matchedContacts.slice(0, 8).map((c, i) => (
+                            <div key={i} className="flex items-center justify-between px-3 py-2 text-xs"
+                              style={{ borderBottom: i < Math.min(matchedContacts.length, 8) - 1 ? '1px solid rgba(255,255,255,0.04)' : 'none' }}>
+                              <div className="flex items-center gap-2 min-w-0">
+                                <div className="w-6 h-6 rounded-full flex items-center justify-center text-[9px] font-bold flex-shrink-0"
+                                  style={{ background: 'rgba(59,130,246,0.15)', color: '#60a5fa' }}>
+                                  {(c.name || c.phone || '?')[0].toUpperCase()}
+                                </div>
+                                <div className="min-w-0">
+                                  <div className="text-white font-medium truncate">{c.name || 'Unknown'}</div>
+                                  <div className="text-slate-500 text-[10px]">{c.phone || '—'}</div>
+                                </div>
+                              </div>
+                              <span className="text-[9px] px-1.5 py-0.5 rounded-full font-medium flex-shrink-0 ml-2"
+                                style={{
+                                  background: c.status === 'purchased' ? 'rgba(74,222,128,0.1)' : c.status === 'abandoned_cart' ? 'rgba(251,146,60,0.1)' : 'rgba(148,163,184,0.08)',
+                                  border: c.status === 'purchased' ? '1px solid rgba(74,222,128,0.2)' : c.status === 'abandoned_cart' ? '1px solid rgba(251,146,60,0.2)' : '1px solid rgba(148,163,184,0.12)',
+                                  color: c.status === 'purchased' ? '#4ade80' : c.status === 'abandoned_cart' ? '#fb923c' : '#94a3b8',
+                                }}>
+                                {(c.status || 'visitor').replace(/_/g, ' ')}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
                       {/* Active filter tags */}
                       {activeFilterCount > 0 && (
                         <div className="flex flex-wrap gap-1.5 pt-1">
@@ -826,13 +859,32 @@ function CreateModal({ onClose, onCreated }) {
                 </div>
 
                 {/* Automation Delay */}
-                <div>
-                   <label className="label">Automation Delay (Hours)</label>
-                   <div className="flex items-center gap-6">
-                      <input type="range" min="0" max="48" value={delayHrs} onChange={e=>setDelay(e.target.value)} className="flex-1 accent-green-500"/>
-                      <span className="text-xl font-bold text-green-400 w-12">{delayHrs}h</span>
-                   </div>
-                   <p className="text-[10px] text-slate-600 mt-2 italic">Recommendation: {(type.id==='abandoned_cart' || type.id==='abandoned_checkout')?'1 hour':'Instant (0h)'} is best for conversion.</p>
+                <div className="p-4 rounded-2xl" style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)' }}>
+                  <label className="text-xs font-semibold text-slate-300 flex items-center gap-2 mb-3">
+                    <Clock size={13} className="text-green-400" /> Automation Delay
+                  </label>
+                  <div className="flex flex-wrap gap-2 mb-3">
+                    {[0, 1, 2, 6, 12, 24, 48].map(h => (
+                      <button key={h} onClick={() => setDelay(h)}
+                        className="text-xs px-3 py-1.5 rounded-xl font-semibold transition-all"
+                        style={Number(delayHrs) === h
+                          ? { background: 'rgba(74,222,128,0.15)', border: '1px solid rgba(74,222,128,0.4)', color: '#4ade80' }
+                          : { background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.07)', color: '#475569' }}>
+                        {h === 0 ? '⚡ Instant' : `${h}h`}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="flex items-center gap-4">
+                    <input type="range" min="0" max="48" value={delayHrs} onChange={e => setDelay(Number(e.target.value))} className="flex-1 accent-green-500" />
+                    <span className="text-xl font-bold text-green-400 min-w-[52px] text-right">
+                      {Number(delayHrs) === 0 ? 'Now' : `${delayHrs}h`}
+                    </span>
+                  </div>
+                  <p className="text-[10px] text-slate-600 mt-2 italic">
+                    {Number(delayHrs) === 0
+                      ? 'Campaign sends immediately when triggered.'
+                      : `Recommendation: ${(type.id === 'abandoned_cart' || type.id === 'abandoned_checkout') ? '1 hour' : 'Instant (0h)'} is best for conversion.`}
+                  </p>
                 </div>
 
                 <div className="pt-2 flex gap-4">
