@@ -719,6 +719,30 @@ async function runAutomation() {
         await sendMultiple(db, cam, targets, 'broadcast');
       }
 
+      // ── Product Recommendation: carousel Meta template + audience filter rules ─
+      else if (cam.campaign_type === 'product_recommendation') {
+        let filterDef = { logic: 'AND', rules: [] };
+        try { filterDef = JSON.parse(cam.filters || '{}'); } catch (_) {}
+        const { logic = 'AND', rules = [] } = filterDef;
+
+        const targets = db.website_visitors.filter(v => {
+          if (v.channel_id !== channelId || !v.phone || v.is_opted_out) return false;
+          if (v.whatsapp_sent_at) {
+            const hoursSince = (Date.now() - new Date(v.whatsapp_sent_at).getTime()) / 3600000;
+            if (hoursSince < (cam.delay_hours || 24)) return false;
+          }
+          if (cam.is_one_time) {
+            const alreadySent = db.abandoned_cart_executions.find(x => x.campaign_id === cam.id && x.phone === v.phone);
+            if (alreadySent) return false;
+          }
+          if (!rules.length) return true;
+          const results = rules.map(r => applyRule(v, r));
+          return logic === 'AND' ? results.every(Boolean) : results.some(Boolean);
+        }).slice(0, 5);
+
+        await sendMultiple(db, cam, targets, 'broadcast');
+      }
+
       // ── Custom campaign: audience filtered via rules, sends meta template if linked ──
       else if (cam.campaign_type === 'custom') {
         let filterDef = { logic: 'AND', rules: [] };

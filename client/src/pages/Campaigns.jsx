@@ -82,6 +82,17 @@ const CAMPAIGN_TYPES = [
     defaultDelay: 24, // Typically 24 hours after purchase
     targetSegment: "purchased",
   },
+  {
+    id: "product_recommendation",
+    icon: "🎯",
+    label: "Product Recommendation",
+    description: "Send a carousel of product recommendations to any audience segment. Requires a Meta carousel template.",
+    color: "green",
+    autoTarget: false,
+    defaultDelay: 0,
+    targetSegment: "all",
+    carouselOnly: true,
+  },
 ];
 
 const LANGUAGES = [
@@ -349,6 +360,15 @@ function CreateModal({ onClose, onCreated }) {
         }
         setStep(2);
     } else if (step === 2) {
+        // Product Recommendation requires a carousel Meta template
+        if (type?.carouselOnly) {
+          if (!metaTemplateId) {
+            setValidationErr("• Please select a carousel Meta template. Product Recommendation campaigns only work with carousel templates.");
+            return;
+          }
+          setStep(3); return;
+        }
+
         // If a Meta carousel template is selected, that's sufficient — no regular template needed
         if (metaTemplateId) { setStep(3); return; }
 
@@ -490,45 +510,62 @@ function CreateModal({ onClose, onCreated }) {
                       </div>
                    </div>
 
-                   {/* ── Meta Templates (all) ───────────────────────────────── */}
+                   {/* ── Meta Templates ────────────────────────────────────── */}
                    <div className="space-y-2">
                      <label className="label flex items-center gap-2">
-                       <span className="text-orange-400">📋</span> Meta Template
+                       <span className="text-orange-400">📋</span>
+                       {type?.carouselOnly ? 'Carousel Meta Template' : 'Meta Template'}
+                       {type?.carouselOnly && <span className="text-[10px] text-red-400 font-bold">Required</span>}
                      </label>
-                     <p className="text-[10px] text-slate-500 -mt-1">Select any created Meta template. Only APPROVED templates can deliver messages.</p>
+                     <p className="text-[10px] text-slate-500 -mt-1">
+                       {type?.carouselOnly
+                         ? 'Select a carousel template. Only APPROVED templates will deliver. Payload format matches the Meta carousel API exactly.'
+                         : 'Select any created Meta template. Only APPROVED templates can deliver messages.'}
+                     </p>
                      <div className="space-y-2">
-                       <button
-                         onClick={() => setMetaTplId("")}
-                         className={`w-full p-2.5 rounded-xl border text-left flex justify-between items-center transition-all text-xs ${!metaTemplateId ? 'bg-slate-700/40 border-white/10 text-slate-400' : 'border-white/5 text-slate-500 hover:border-white/10'}`}>
-                         <span>None — use regular template below</span>
-                         {!metaTemplateId && <CheckCircle size={12} className="text-slate-400"/>}
-                       </button>
-                       {metaTemplates.length === 0 && (
-                         <p className="text-[10px] text-slate-500 px-1">No Meta templates found. Create one in the Templates page.</p>
+                       {!type?.carouselOnly && (
+                         <button
+                           onClick={() => setMetaTplId("")}
+                           className={`w-full p-2.5 rounded-xl border text-left flex justify-between items-center transition-all text-xs ${!metaTemplateId ? 'bg-slate-700/40 border-white/10 text-slate-400' : 'border-white/5 text-slate-500 hover:border-white/10'}`}>
+                           <span>None — use regular template below</span>
+                           {!metaTemplateId && <CheckCircle size={12} className="text-slate-400"/>}
+                         </button>
                        )}
-                       {metaTemplates.map(t => {
-                         const statusColor = t.meta_status === 'APPROVED' ? 'text-green-400' : t.meta_status === 'PENDING' ? 'text-yellow-400' : 'text-red-400';
-                         return (
-                           <button key={t.id} onClick={() => setMetaTplId(t.id)}
-                             className={`w-full p-3 rounded-2xl border text-left flex justify-between items-center transition-all ${metaTemplateId === t.id ? 'bg-orange-500/10 border-orange-500/50 text-white' : 'border-white/5 text-slate-400 hover:border-orange-500/30 hover:bg-orange-500/5'}`}>
-                             <div>
-                               <p className="text-xs font-bold">{t.name}</p>
-                               <div className="flex items-center gap-2 mt-0.5 flex-wrap">
-                                 <span className={`text-[10px] font-semibold ${statusColor}`}>{t.meta_status || 'DRAFT'}</span>
-                                 {t.is_carousel && <span className="text-[10px] text-orange-400">· {t.carousel_cards?.length} cards</span>}
-                                 {t.auto_product_mode && <span className="text-[10px] text-orange-300">· Auto-products</span>}
-                                 <span className="text-[10px] text-slate-500">· {t.language?.toUpperCase()}</span>
-                               </div>
-                             </div>
-                             {metaTemplateId === t.id && <CheckCircle size={14} className="text-orange-400"/>}
-                           </button>
+                       {(() => {
+                         const filtered = type?.carouselOnly
+                           ? metaTemplates.filter(t => t.is_carousel)
+                           : metaTemplates;
+                         if (filtered.length === 0) return (
+                           <p className="text-[10px] text-slate-500 px-1">
+                             {type?.carouselOnly
+                               ? 'No carousel Meta templates found. Create one in the Templates page.'
+                               : 'No Meta templates found. Create one in the Templates page.'}
+                           </p>
                          );
-                       })}
+                         return filtered.map(t => {
+                           const statusColor = t.meta_status === 'APPROVED' ? 'text-green-400' : t.meta_status === 'PENDING' ? 'text-yellow-400' : 'text-red-400';
+                           return (
+                             <button key={t.id} onClick={() => setMetaTplId(t.id)}
+                               className={`w-full p-3 rounded-2xl border text-left flex justify-between items-center transition-all ${metaTemplateId === t.id ? 'bg-orange-500/10 border-orange-500/50 text-white' : 'border-white/5 text-slate-400 hover:border-orange-500/30 hover:bg-orange-500/5'}`}>
+                               <div>
+                                 <p className="text-xs font-bold">{t.name}</p>
+                                 <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+                                   <span className={`text-[10px] font-semibold ${statusColor}`}>{t.meta_status || 'DRAFT'}</span>
+                                   {t.is_carousel && <span className="text-[10px] text-orange-400">· {t.carousel_cards?.length} cards</span>}
+                                   {t.auto_product_mode && <span className="text-[10px] text-orange-300">· Auto-products</span>}
+                                   <span className="text-[10px] text-slate-500">· {t.language?.toUpperCase()}</span>
+                                 </div>
+                               </div>
+                               {metaTemplateId === t.id && <CheckCircle size={14} className="text-orange-400"/>}
+                             </button>
+                           );
+                         });
+                       })()}
                      </div>
                    </div>
 
-                   {/* ── Regular templates (hidden when Meta template selected) ─── */}
-                   {!metaTemplateId && (
+                   {/* ── Regular templates (hidden when Meta template selected or carouselOnly) ─── */}
+                   {!metaTemplateId && !type?.carouselOnly && (
                    (type.id === 'abandoned_cart' || type.id === 'abandoned_checkout' || type.id === 'product_view') ? (
                      <div className="space-y-4">
                         <label className="label">Select 4-Stage Templates</label>

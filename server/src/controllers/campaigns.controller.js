@@ -145,7 +145,7 @@ export const campaignsController = {
         return true;
       };
 
-      if (campaign.campaign_type === 'custom') {
+      if (campaign.campaign_type === 'custom' || campaign.campaign_type === 'product_recommendation') {
         let filterDef = { logic: 'AND', rules: [] };
         try { filterDef = JSON.parse(campaign.filters || '{}'); } catch (_) {}
         const { logic = 'AND', rules = [] } = filterDef;
