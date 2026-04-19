@@ -730,7 +730,7 @@ async function runAutomation() {
           if (isFollowup) {
             const lastSent = new Date(executions[executions.length - 1].sent_at).getTime();
             const hoursSince = (Date.now() - lastSent) / 3600000;
-            if (hoursSince < (cam.delay_hours || 24)) return false;
+            if (hoursSince < (cam.delay_hours != null ? cam.delay_hours : 24)) return false;
           }
           return isInitial || isFollowup;
         }).slice(0, 5);
@@ -748,7 +748,7 @@ async function runAutomation() {
           if (v.channel_id !== channelId || !v.phone || v.is_opted_out) return false;
           if (v.whatsapp_sent_at) {
             const hoursSince = (Date.now() - new Date(v.whatsapp_sent_at).getTime()) / 3600000;
-            if (hoursSince < (cam.delay_hours || 24)) return false;
+            if (hoursSince < (cam.delay_hours != null ? cam.delay_hours : 24)) return false;
           }
           if (cam.is_one_time) {
             const alreadySent = db.abandoned_cart_executions.find(x => x.campaign_id === cam.id && x.phone === v.phone);
@@ -773,7 +773,7 @@ async function runAutomation() {
           // Delay gate: skip if sent too recently
           if (v.whatsapp_sent_at) {
             const hoursSince = (Date.now() - new Date(v.whatsapp_sent_at).getTime()) / 3600000;
-            if (hoursSince < (cam.delay_hours || 24)) return false;
+            if (hoursSince < (cam.delay_hours != null ? cam.delay_hours : 24)) return false;
           }
           // De-dup: skip if already sent by this campaign and it's one-time
           if (cam.is_one_time) {

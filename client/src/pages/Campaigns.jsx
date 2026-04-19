@@ -5,7 +5,7 @@ import {
   Zap, Clock, CheckCircle, Globe, MessageSquare, ShoppingCart,
   Eye, TrendingDown, Package, Users, Settings, ToggleLeft, Gift, Layout,
   Filter, Sliders, UserCheck, Search, Target, ChevronRight, AlertCircle,
-  Flame, Smartphone, Monitor, Repeat,
+  Flame, Smartphone, Monitor, Repeat, Send,
 } from "lucide-react";
 import { campaignsApi, templatesApi, analyticsApi } from "../api";
 
@@ -1601,6 +1601,10 @@ export default function Campaigns() {
   const [analyticsMap, setAnalyticsMap] = useState({});   // campaignId → analytics data
   const [analyticsOpen, setAnalyticsOpen] = useState({}); // campaignId → bool (panel open)
   const [analyticsLoading, setAnalyticsLoading] = useState({});
+  const [testModal, setTestModal] = useState(null);  // { id, name } | null
+  const [testPhone, setTestPhone] = useState('');
+  const [testSending, setTestSending] = useState(false);
+  const [testResult, setTestResult] = useState(null); // last result for display
 
   const CH = () => ({ 'x-channel-id': localStorage.getItem('channelId') || 'demo' });
 
@@ -1619,6 +1623,28 @@ export default function Campaigns() {
     const next = !analyticsOpen[campaignId];
     setAnalyticsOpen(p => ({ ...p, [campaignId]: next }));
     if (next && !analyticsMap[campaignId]) loadAnalytics(campaignId);
+  };
+
+  const handleSendTest = async () => {
+    if (!testModal || !testPhone.trim()) return;
+    setTestSending(true);
+    setTestResult(null);
+    try {
+      const result = await campaignsApi.sendTest(testModal.id, testPhone.trim());
+      setTestResult(result);
+      console.group(`%c[Test Send] Campaign "${testModal.name}" → ${testPhone.trim()}`, 'color:#a78bfa;font-weight:bold');
+      console.log('%cResult:', 'color:#60a5fa', result);
+      if (result?.payload) {
+        console.log('%cMeta API Payload:', 'color:#f59e0b', JSON.stringify(result.payload, null, 2));
+      }
+      if (result?.error) console.error('[Test Send Error]', result.error);
+      if (result?.wamid) console.log('%c✓ wamid:', 'color:#4ade80', result.wamid);
+      console.groupEnd();
+    } catch (e) {
+      setTestResult({ success: false, error: e.message });
+      console.error('[Test Send]', e);
+    }
+    setTestSending(false);
   };
 
   const load = async () => {
@@ -1799,20 +1825,66 @@ export default function Campaigns() {
                        </div>
                        <span className="text-[10px] text-green-400 font-bold">{rate}% rate</span>
                     </div>
-                    <button onClick={async() => {
-                       const result = await campaignsApi.send(c.id);
-                       console.group(`%c[Campaign Send] "${c.name}" — sent:${result?.sent ?? 0} skipped:${result?.skipped ?? 0}`, 'color:#22c55e;font-weight:bold');
-                       if (result?.payloads?.length) {
-                         result.payloads.forEach((p, i) => {
-                           console.log(`%cMessage ${i+1} → ${p.phone} (${p.template})`, 'color:#60a5fa;font-weight:bold');
-                           console.log('%cMeta API Payload:', 'color:#f59e0b', JSON.stringify(p.payload, null, 2));
-                         });
-                       }
-                       if (result?.errors?.length) console.error('[Campaign Errors]', result.errors);
-                       console.groupEnd();
-                       load();
-                    }} className="p-2 bg-white/5 rounded-lg hover:text-green-400 border border-white/5 transition-all"><Play size={14}/></button>
+                    <div className="flex items-center gap-1.5">
+                       {/* Test Send button */}
+                       <button
+                         title="Send test message to a specific number"
+                         onClick={() => {
+                           if (testModal?.id === c.id) { setTestModal(null); setTestResult(null); }
+                           else { setTestModal({ id: c.id, name: c.name }); setTestPhone(''); setTestResult(null); }
+                         }}
+                         className="p-2 rounded-lg border transition-all text-xs"
+                         style={{ background: testModal?.id === c.id ? 'rgba(167,139,250,0.15)' : 'rgba(255,255,255,0.05)', borderColor: testModal?.id === c.id ? 'rgba(167,139,250,0.4)' : 'rgba(255,255,255,0.08)', color: testModal?.id === c.id ? '#a78bfa' : '#64748b' }}>
+                         <Send size={13}/>
+                       </button>
+                       {/* Broadcast send button */}
+                       <button onClick={async() => {
+                          const result = await campaignsApi.send(c.id);
+                          console.group(`%c[Campaign Send] "${c.name}" — sent:${result?.sent ?? 0} skipped:${result?.skipped ?? 0}`, 'color:#22c55e;font-weight:bold');
+                          if (result?.payloads?.length) {
+                            result.payloads.forEach((p, i) => {
+                              console.log(`%cMessage ${i+1} → ${p.phone} (${p.template})`, 'color:#60a5fa;font-weight:bold');
+                              console.log('%cMeta API Payload:', 'color:#f59e0b', JSON.stringify(p.payload, null, 2));
+                            });
+                          }
+                          if (result?.errors?.length) console.error('[Campaign Errors]', result.errors);
+                          console.groupEnd();
+                          load();
+                       }} title="Send to all matched contacts" className="p-2 bg-white/5 rounded-lg hover:text-green-400 border border-white/5 transition-all"><Play size={14}/></button>
+                    </div>
                  </div>
+
+                 {/* ── Test Send Panel ── */}
+                 {testModal?.id === c.id && (
+                   <div className="mt-3 rounded-xl p-3 space-y-2" style={{ background: 'rgba(167,139,250,0.07)', border: '1px solid rgba(167,139,250,0.2)' }}>
+                     <p className="text-[10px] font-semibold" style={{ color: '#a78bfa' }}>Send Test Message</p>
+                     <div className="flex gap-2">
+                       <input
+                         type="tel"
+                         placeholder="91XXXXXXXXXX"
+                         value={testPhone}
+                         onChange={e => { setTestPhone(e.target.value); setTestResult(null); }}
+                         onKeyDown={e => e.key === 'Enter' && handleSendTest()}
+                         className="flex-1 text-[11px] px-2.5 py-1.5 rounded-lg outline-none"
+                         style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(167,139,250,0.25)', color: '#e2e8f0' }}
+                       />
+                       <button
+                         onClick={handleSendTest}
+                         disabled={testSending || !testPhone.trim()}
+                         className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-semibold transition-all"
+                         style={{ background: testSending ? 'rgba(167,139,250,0.1)' : 'rgba(167,139,250,0.2)', border: '1px solid rgba(167,139,250,0.3)', color: '#a78bfa', opacity: (!testPhone.trim() || testSending) ? 0.5 : 1 }}>
+                         {testSending ? <Repeat size={11} className="animate-spin"/> : <Send size={11}/>}
+                         {testSending ? 'Sending…' : 'Send'}
+                       </button>
+                     </div>
+                     {testResult && (
+                       <div className="text-[10px] px-2.5 py-1.5 rounded-lg" style={{ background: testResult.success ? 'rgba(74,222,128,0.08)' : 'rgba(248,113,113,0.08)', border: `1px solid ${testResult.success ? 'rgba(74,222,128,0.2)' : 'rgba(248,113,113,0.2)'}`, color: testResult.success ? '#4ade80' : '#f87171' }}>
+                         {testResult.success ? `✓ Sent! wamid: ${testResult.wamid}` : `✗ ${testResult.error || 'Failed'}`}
+                       </div>
+                     )}
+                     <p className="text-[9px]" style={{ color: '#475569' }}>Full payload logged in browser console (F12)</p>
+                   </div>
+                 )}
               </div>
             </div>
           );

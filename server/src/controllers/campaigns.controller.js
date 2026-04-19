@@ -205,6 +205,7 @@ export const campaignsController = {
       let sent = 0;
       let skipped = 0;
       const errors = [];
+      const payloads = []; // collect every Meta API payload for frontend console logging
 
       for (const target of targetEvents) {
         if (!target.phone) continue;
@@ -227,6 +228,7 @@ export const campaignsController = {
           const sendPayload = buildSendMessagePayload(metaTpl, metaTpl.product_config, target.phone, metaLangCode, campaign.id);
           console.log(`[Campaign Send] Meta template "${metaTpl.name}" → ${target.phone}`);
           console.log(JSON.stringify(sendPayload, null, 2));
+          payloads.push({ phone: target.phone, template: metaTpl.name, payload: sendPayload });
 
           // Build resolved text from actual product cards for chat inbox
           cardsSent = (metaTpl.product_config?.cards || []).map(c => ({
@@ -331,7 +333,61 @@ export const campaignsController = {
       campaign.last_run_at = new Date().toISOString();
       db.save();
 
-      res.json({ success: true, sent, skipped, errors: errors.length ? errors : undefined });
+      res.json({ success: true, sent, skipped, errors: errors.length ? errors : undefined, payloads });
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  async sendTestMessage(req, res, next) {
+    try {
+      const db = getDb();
+      const { id } = req.params;
+      const { phone } = req.body;
+      if (!phone) return res.status(400).json({ error: 'phone is required' });
+
+      const campaign = db.abandoned_cart_campaigns.find(c => c.id == id);
+      if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
+
+      const metaTpl = campaign.meta_template_id
+        ? (db.meta_templates || []).find(t => String(t.id) === String(campaign.meta_template_id))
+        : null;
+
+      const tplLang = metaTpl?.language || campaign.target_language || 'en';
+      const metaLangCode = LANG_MAP[tplLang] || tplLang;
+
+      const result = { phone, campaign: campaign.name, template: null, payload: null, wamid: null, success: false, error: null };
+
+      if (!metaTpl) {
+        result.error = 'No Meta template linked to this campaign — link a Meta template first';
+        console.warn(`[TestSend] Campaign "${campaign.name}" has no meta_template_id`);
+        return res.json(result);
+      }
+
+      const sendPayload = buildSendMessagePayload(metaTpl, metaTpl.product_config, phone, metaLangCode, campaign.id);
+      result.template = metaTpl.name;
+      result.payload  = sendPayload;
+
+      console.log(`\n[TestSend] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+      console.log(`[TestSend] Campaign : "${campaign.name}"`);
+      console.log(`[TestSend] Template : "${metaTpl.name}" (${metaLangCode})`);
+      console.log(`[TestSend] To       : ${phone}`);
+      console.log(`[TestSend] Payload  :`);
+      console.log(JSON.stringify(sendPayload, null, 2));
+
+      try {
+        const apiResult = await whatsappService.sendTemplateMessage(phone, sendPayload);
+        result.wamid    = apiResult.messageId || null;
+        result.success  = !!result.wamid;
+        console.log(`[TestSend] ✓ wamid: ${result.wamid}`);
+      } catch (e) {
+        result.error   = e.message;
+        result.success = false;
+        console.error(`[TestSend] ✗ Error: ${e.message}`);
+      }
+
+      console.log(`[TestSend] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`);
+      res.json(result);
     } catch (error) {
       next(error);
     }

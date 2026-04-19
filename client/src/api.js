@@ -32,7 +32,8 @@ export const campaignsApi = {
   update:     (id, data)     => request(`/campaigns/${id}`,      { method:'PUT',    body: JSON.stringify(data) }),
   delete:     (id)           => request(`/campaigns/${id}`,      { method:'DELETE' }),
   toggle:     (id)           => request(`/campaigns/${id}/status`,{ method:'POST',   body: JSON.stringify({}) }),
-  send:       (id)           => request(`/campaigns/${id}/send`, { method:'POST',   body: JSON.stringify({}) }),
+  send:       (id)           => request(`/campaigns/${id}/send`,      { method:'POST', body: JSON.stringify({}) }),
+  sendTest:   (id, phone)   => request(`/campaigns/${id}/send-test`, { method:'POST', body: JSON.stringify({ phone }) }),
   executions: (id)           => request(`/campaigns/${id}/executions`),
 };
 
