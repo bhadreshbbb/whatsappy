@@ -419,26 +419,23 @@ function CreateModal({ onClose, onCreated }) {
         filters: audRules.length > 0 ? JSON.stringify({ logic: 'AND', rules: audRules }) : null,
       });
 
-      // Instant campaign → fire send immediately and log full payload to console
+      // Instant campaign → fire send in background (don't await — modal closes immediately)
       if (Number(delayHrs) === 0 && campaign?.id) {
-        console.group(`%c[Instant Campaign Created] "${campaign.name}" — firing now…`, 'color:#a78bfa;font-weight:bold');
-        console.log('%cCampaign:', 'color:#94a3b8', campaign);
-        try {
-          const result = await campaignsApi.send(campaign.id);
-          console.log(`%cResult — sent:${result?.sent ?? 0}  skipped:${result?.skipped ?? 0}`, 'color:#22c55e;font-weight:bold');
+        const cName = campaign.name;
+        const cId   = campaign.id;
+        campaignsApi.send(cId).then(result => {
+          console.group(`%c[Instant Campaign] "${cName}" — sent:${result?.sent ?? 0}  skipped:${result?.skipped ?? 0}`, 'color:#a78bfa;font-weight:bold');
           if (result?.payloads?.length) {
             result.payloads.forEach((p, i) => {
               console.log(`%cMessage ${i+1} → ${p.phone} (${p.template})`, 'color:#60a5fa;font-weight:bold');
               console.log('%cMeta API Payload:', 'color:#f59e0b', JSON.stringify(p.payload, null, 2));
             });
           } else {
-            console.warn('%cNo messages sent — check that contacts have phone numbers and the Meta template is linked & APPROVED', 'color:#f59e0b');
+            console.warn('%cNo messages sent — check contacts have phones and Meta template is APPROVED', 'color:#f59e0b');
           }
           if (result?.errors?.length) console.error('[Errors]', result.errors);
-        } catch (e) {
-          console.error('[Instant Campaign Send Failed]', e);
-        }
-        console.groupEnd();
+          console.groupEnd();
+        }).catch(e => console.error('[Instant Campaign Send Failed]', e));
       }
 
       onCreated(); onClose();
@@ -1081,13 +1078,12 @@ function CustomCampaignModal({ onClose, onCreated }) {
         filters: JSON.stringify({ logic: 'AND', rules }),
       });
 
-      // Instant campaign → fire send immediately and log full payload to console
+      // Instant campaign → fire send in background (don't await — modal closes immediately)
       if (Number(delayHrs) === 0 && campaign?.id) {
-        console.group(`%c[Instant Campaign Created] "${campaign.name}" — firing now…`, 'color:#a78bfa;font-weight:bold');
-        console.log('%cCampaign:', 'color:#94a3b8', campaign);
-        try {
-          const result = await campaignsApi.send(campaign.id);
-          console.log(`%cResult — sent:${result?.sent ?? 0}  skipped:${result?.skipped ?? 0}`, 'color:#22c55e;font-weight:bold');
+        const cName = campaign.name;
+        const cId   = campaign.id;
+        campaignsApi.send(cId).then(result => {
+          console.group(`%c[Instant Campaign] "${cName}" — sent:${result?.sent ?? 0}  skipped:${result?.skipped ?? 0}`, 'color:#a78bfa;font-weight:bold');
           if (result?.payloads?.length) {
             result.payloads.forEach((p, i) => {
               console.log(`%cMessage ${i+1} → ${p.phone} (${p.template})`, 'color:#60a5fa;font-weight:bold');
@@ -1097,10 +1093,8 @@ function CustomCampaignModal({ onClose, onCreated }) {
             console.warn('%cNo messages sent — check contacts have phones and Meta template is APPROVED', 'color:#f59e0b');
           }
           if (result?.errors?.length) console.error('[Errors]', result.errors);
-        } catch (e) {
-          console.error('[Instant Campaign Send Failed]', e);
-        }
-        console.groupEnd();
+          console.groupEnd();
+        }).catch(e => console.error('[Instant Campaign Send Failed]', e));
       }
 
       onCreated(); onClose();
