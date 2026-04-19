@@ -11,5 +11,6 @@ router.delete('/:id', campaignsController.deleteCampaign);
 router.post('/:id/send', campaignsController.sendCampaign);
 router.post('/:id/status', campaignsController.updateStatus);
 router.get('/:id/executions', campaignsController.getExecutions);
+router.get('/:id/analytics', campaignsController.getCampaignAnalytics);
 
 export { router as campaignsRoutes };

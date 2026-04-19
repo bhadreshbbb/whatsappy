@@ -941,8 +941,8 @@ async function sendMultiple(db, cam, events, type) {
           }
         }
 
-        // Build the exact /messages carousel payload with language override
-        const sendPayload = buildSendMessagePayload(metaTpl, metaTpl.product_config, evt.phone, metaLangCode);
+        // Build the exact /messages carousel payload with language override + UTM tracking
+        const sendPayload = buildSendMessagePayload(metaTpl, metaTpl.product_config, evt.phone, metaLangCode, cam.id);
 
         // ── FULL MESSAGE PAYLOAD LOG ─────────────────────────────────────────
         const pc = metaTpl.product_config;

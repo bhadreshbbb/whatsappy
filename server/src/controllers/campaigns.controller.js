@@ -210,7 +210,7 @@ export const campaignsController = {
         // ── PATH A: Meta template send (carousel / approved template) ─────────
         let cardsSent = [];
         if (metaTpl) {
-          const sendPayload = buildSendMessagePayload(metaTpl, metaTpl.product_config, target.phone, metaLangCode);
+          const sendPayload = buildSendMessagePayload(metaTpl, metaTpl.product_config, target.phone, metaLangCode, campaign.id);
           console.log(`[Campaign Send] Meta template "${metaTpl.name}" → ${target.phone}`);
           console.log(JSON.stringify(sendPayload, null, 2));
 
@@ -321,6 +321,37 @@ export const campaignsController = {
     } catch (error) {
       next(error);
     }
+  },
+
+  async getCampaignAnalytics(req, res, next) {
+    try {
+      const db = getDb();
+      const { id } = req.params;
+      const channelId = req.headers['x-channel-id'] || 'demo';
+
+      // Visitors who clicked through from this campaign (UTM attribution)
+      const utmVisitors = (db.website_visitors || []).filter(v =>
+        v.channel_id === channelId && String(v.utm_campaign) === String(id)
+      );
+      const utmPhones   = new Set(utmVisitors.map(v => v.phone).filter(Boolean));
+      const utmSessions = new Set(utmVisitors.map(v => v.session_id).filter(Boolean));
+
+      const clicks    = utmVisitors.length;
+      const purchases = utmVisitors.filter(v => v.status === 'purchased').length;
+
+      // Cart events from UTM visitors (match by phone or session)
+      const addToCarts = (db.cart_events || []).filter(c =>
+        c.channel_id === channelId &&
+        (utmPhones.has(c.phone) || utmSessions.has(c.session_id))
+      ).length;
+
+      // Execution stats
+      const executions = (db.abandoned_cart_executions || []).filter(e => String(e.campaign_id) === String(id));
+      const totalSent  = executions.length;
+      const msgClicked = executions.filter(e => e.clicked).length;
+
+      res.json({ clicks, add_to_carts: addToCarts, purchases, total_sent: totalSent, msg_clicked: msgClicked });
+    } catch (error) { next(error); }
   },
 
   async getExecutions(req, res, next) {

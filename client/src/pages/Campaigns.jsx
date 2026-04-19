@@ -1525,6 +1525,28 @@ export default function Campaigns() {
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [showCustom, setShowCustom] = useState(false);
+  const [analyticsMap, setAnalyticsMap] = useState({});   // campaignId → analytics data
+  const [analyticsOpen, setAnalyticsOpen] = useState({}); // campaignId → bool (panel open)
+  const [analyticsLoading, setAnalyticsLoading] = useState({});
+
+  const CH = () => ({ 'x-channel-id': localStorage.getItem('channelId') || 'demo' });
+
+  const loadAnalytics = async (campaignId) => {
+    if (analyticsLoading[campaignId]) return;
+    setAnalyticsLoading(p => ({ ...p, [campaignId]: true }));
+    try {
+      const res = await fetch(`/api/campaigns/${campaignId}/analytics`, { headers: CH() });
+      const data = await res.json();
+      setAnalyticsMap(p => ({ ...p, [campaignId]: data }));
+    } catch (_) {}
+    finally { setAnalyticsLoading(p => ({ ...p, [campaignId]: false })); }
+  };
+
+  const toggleAnalytics = (campaignId) => {
+    const next = !analyticsOpen[campaignId];
+    setAnalyticsOpen(p => ({ ...p, [campaignId]: next }));
+    if (next && !analyticsMap[campaignId]) loadAnalytics(campaignId);
+  };
 
   const load = async () => {
     const c = await campaignsApi.list();
@@ -1573,6 +1595,7 @@ export default function Campaigns() {
 
         {campaigns.map(c => {
           const isCustom = c.campaign_type === 'custom';
+          const isProdRec = c.campaign_type === 'product_recommendation';
           const type = CAMPAIGN_TYPES.find(t=>t.id===c.campaign_type) || CAMPAIGN_TYPES[0];
           const rate = c.total_sent > 0 ? ((c.total_recovered/c.total_sent)*100).toFixed(1) : "0.0";
           let filters = null;
@@ -1625,15 +1648,67 @@ export default function Campaigns() {
                 </div>
               )}
               
-              <div className="grid grid-cols-2 gap-4 mb-6">
+              <div className="grid grid-cols-2 gap-4 mb-4">
                  <div>
-                    <p className="text-[9px] text-slate-500 uppercase">Massages Sent</p>
+                    <p className="text-[9px] text-slate-500 uppercase">Messages Sent</p>
                     <p className="text-lg font-bold text-white">{c.total_sent}</p>
                  </div>
                  <div>
                     <p className="text-[9px] text-slate-500 uppercase">Auto-Converted</p>
                     <p className="text-lg font-bold text-green-400">{c.total_recovered}</p>
                  </div>
+              </div>
+
+              {/* ── Analytics Panel ── */}
+              <div className="mb-4">
+                <button onClick={() => toggleAnalytics(c.id)}
+                  className="w-full flex items-center justify-between px-3 py-2 rounded-xl text-[10px] font-semibold transition-all"
+                  style={{ background: analyticsOpen[c.id] ? "rgba(59,130,246,0.1)" : "rgba(255,255,255,0.03)", border: `1px solid ${analyticsOpen[c.id] ? "rgba(59,130,246,0.3)" : "rgba(255,255,255,0.06)"}`, color: analyticsOpen[c.id] ? "#60a5fa" : "#64748b" }}>
+                  <span className="flex items-center gap-1.5"><TrendingDown size={11}/> Campaign Analytics</span>
+                  <ChevronDown size={11} style={{ transform: analyticsOpen[c.id] ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }}/>
+                </button>
+
+                {analyticsOpen[c.id] && (
+                  <div className="mt-2 rounded-xl overflow-hidden" style={{ border: "1px solid rgba(59,130,246,0.15)" }}>
+                    {analyticsLoading[c.id] ? (
+                      <div className="flex items-center justify-center gap-2 py-4 text-xs" style={{ color: "#64748b" }}>
+                        <Repeat size={12} className="animate-spin"/> Loading…
+                      </div>
+                    ) : analyticsMap[c.id] ? (() => {
+                      const a = analyticsMap[c.id];
+                      const cr = a.clicks > 0 ? ((a.add_to_carts / a.clicks) * 100).toFixed(0) : 0;
+                      const pr = a.clicks > 0 ? ((a.purchases / a.clicks) * 100).toFixed(0) : 0;
+                      return (
+                        <div className="p-3 space-y-3">
+                          <div className="grid grid-cols-3 gap-2 text-center">
+                            {[
+                              { label: 'Site Clicks', value: a.clicks,       color: '#60a5fa', icon: '🖱️' },
+                              { label: 'Add to Cart', value: a.add_to_carts, color: '#fb923c', icon: '🛒' },
+                              { label: 'Purchases',   value: a.purchases,    color: '#4ade80', icon: '✅' },
+                            ].map(s => (
+                              <div key={s.label} className="py-2 rounded-lg" style={{ background: "rgba(255,255,255,0.03)" }}>
+                                <div className="text-base">{s.icon}</div>
+                                <div className="text-sm font-bold mt-0.5" style={{ color: s.color }}>{s.value}</div>
+                                <div className="text-[9px] uppercase tracking-wide mt-0.5" style={{ color: "#475569" }}>{s.label}</div>
+                              </div>
+                            ))}
+                          </div>
+                          <div className="flex items-center gap-3 text-[10px]" style={{ color: "#64748b" }}>
+                            <span>Cart rate: <span style={{ color: "#fb923c" }}>{cr}%</span></span>
+                            <span>·</span>
+                            <span>Purchase rate: <span style={{ color: "#4ade80" }}>{pr}%</span></span>
+                            <button onClick={() => loadAnalytics(c.id)} className="ml-auto" title="Refresh" style={{ color: "#475569" }}><Repeat size={10}/></button>
+                          </div>
+                          {a.clicks === 0 && (
+                            <p className="text-[10px] text-center" style={{ color: "#334155" }}>
+                              UTM links active — data appears when users click from WhatsApp
+                            </p>
+                          )}
+                        </div>
+                      );
+                    })() : null}
+                  </div>
+                )}
               </div>
 
               <div className="pt-4 border-t border-white/5 space-y-4">
@@ -1651,8 +1726,8 @@ export default function Campaigns() {
                        </div>
                        <span className="text-[10px] text-green-400 font-bold">{rate}% rate</span>
                     </div>
-                    <button onClick={async() => { 
-                       await campaignsApi.send(c.id); load(); 
+                    <button onClick={async() => {
+                       await campaignsApi.send(c.id); load();
                        alert('Mock message sent and conversion tracked! Check visitors page to see updated status.');
                     }} className="p-2 bg-white/5 rounded-lg hover:text-green-400 border border-white/5 transition-all"><Play size={14}/></button>
                  </div>

@@ -106,7 +106,16 @@ export const trackingController = {
   async trackVisitor(req, res, next) {
     try {
       const db = getDb();
-      const { channelId, sessionId, url, language, pageViews, pageTitle, screen_res, timezone: tz, shopify_carousel } = req.body;
+      const { channelId, sessionId, url, language, pageViews, pageTitle, screen_res, timezone: tz, shopify_carousel,
+              utm_source, utm_medium, utm_campaign } = req.body;
+      // Also parse UTM from the page URL itself (covers direct clicks from WhatsApp)
+      let _utmSource = utm_source || null, _utmMedium = utm_medium || null, _utmCampaign = utm_campaign || null;
+      try {
+        const _u = new URL(url || '');
+        _utmSource   = _utmSource   || _u.searchParams.get('utm_source')   || null;
+        _utmMedium   = _utmMedium   || _u.searchParams.get('utm_medium')   || null;
+        _utmCampaign = _utmCampaign || _u.searchParams.get('utm_campaign') || null;
+      } catch (_) {}
       // Device type: use client-sent value, fall back to server-side UA detection
       const _clientDevice = req.body.deviceType;
       const _ua = (req.headers['user-agent'] || '').toLowerCase();
@@ -152,6 +161,10 @@ export const trackingController = {
         page_views: pageViews || 1,
         shopify_carousel: shopify_carousel || '[]',
         status: visitorIdx >= 0 ? db.website_visitors[visitorIdx].status : 'active',
+        // UTM attribution — keep first-touch (don't overwrite if already set)
+        utm_source:   _utmSource   || (visitorIdx >= 0 ? db.website_visitors[visitorIdx].utm_source   : null) || null,
+        utm_medium:   _utmMedium   || (visitorIdx >= 0 ? db.website_visitors[visitorIdx].utm_medium   : null) || null,
+        utm_campaign: _utmCampaign || (visitorIdx >= 0 ? db.website_visitors[visitorIdx].utm_campaign : null) || null,
         // ── Geo & Environment Enrichment ──
         city: geo.city || null,
         state: geo.state || null,

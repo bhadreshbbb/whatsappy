@@ -828,7 +828,7 @@ function getFieldValue(varNum, varMap, productCard) {
  */
 export const LANG_MAP = { en: 'en_US', hi: 'hi', gu: 'gu', ta: 'ta', te: 'te', mr: 'mr', bn: 'bn', ar: 'ar', ur: 'ur' };
 
-export function buildSendMessagePayload(tpl, productConfig, recipientPhone = '{{RECIPIENT_PHONE}}', languageOverride = null) {
+export function buildSendMessagePayload(tpl, productConfig, recipientPhone = '{{RECIPIENT_PHONE}}', languageOverride = null, campaignId = null) {
   // languageOverride: Meta language code e.g. 'en_US', 'hi', 'gu' — from campaign target_language
   // Falls back to the template's own stored language
   const langCode = languageOverride
@@ -912,10 +912,17 @@ export function buildSendMessagePayload(tpl, productConfig, recipientPhone = '{{
               ? (() => { try { return new URL(rawFallback).pathname.split('/').filter(Boolean).pop() || ''; } catch { return ''; } })()
               : rawFallback;
             paramVal = slug || fallbackSlug;
+            // Append UTM to slug so Meta builds: staticPrefix + slug?utm_...
+            if (paramVal && campaignId) {
+              paramVal += `?utm_source=whatsapp&utm_medium=carousel&utm_campaign=${campaignId}`;
+            }
           } else {
             // Entire URL is the variable — send the full product URL so the button is clickable
             paramVal = fullLink || getFieldValue(urlVars[0], vm, pd) || String(exV[urlVars[0]] || '');
-            // If we only have a slug (no protocol), prepend nothing — it's stored as-is by Meta
+            if (paramVal && campaignId) {
+              const sep = paramVal.includes('?') ? '&' : '?';
+              paramVal += `${sep}utm_source=whatsapp&utm_medium=carousel&utm_campaign=${campaignId}`;
+            }
           }
 
           if (paramVal) {
