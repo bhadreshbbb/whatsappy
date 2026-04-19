@@ -284,14 +284,15 @@ function CreateModal({ onClose, onCreated }) {
   const [fCarts,  setFCarts]  = useState('');
   const [fPages,  setFPages]  = useState('');
   const [fEngage, setFEngage] = useState('');
+  const [fRepeat, setFRepeat] = useState('');
 
   const audFilters = { status: fStatus, city: fCity, device: fDevice, lang: fAudLang,
-                       score: fScore, carts: fCarts, pages: fPages, engage: fEngage };
+                       score: fScore, carts: fCarts, pages: fPages, engage: fEngage, repeat: fRepeat };
   const activeFilterCount = Object.values(audFilters).filter(Boolean).length;
   const allCities = useMemo(() =>
     [...new Set(contacts.map(c => c.city).filter(Boolean))].sort(), [contacts]);
   const matchedContacts = useMemo(() => applyFilters(contacts, audFilters),
-    [contacts, fStatus, fCity, fDevice, fAudLang, fScore, fCarts, fPages, fEngage]);
+    [contacts, fStatus, fCity, fDevice, fAudLang, fScore, fCarts, fPages, fEngage, fRepeat]);
 
   const CH = () => ({ 'x-channel-id': localStorage.getItem('channelId') || 'demo' });
   const META_LANG_MAP = { en: 'en_US', hi: 'hi', gu: 'gu', ta: 'ta', te: 'te', mr: 'mr', bn: 'bn', ar: 'ar' };
@@ -713,7 +714,7 @@ function CreateModal({ onClose, onCreated }) {
                           </span>
                         </div>
                         {activeFilterCount > 0 && (
-                          <button onClick={() => { setFStatus(''); setFCity(''); setFDevice(''); setFAudLang(''); setFScore(''); setFCarts(''); setFPages(''); setFEngage(''); }}
+                          <button onClick={() => { setFStatus(''); setFCity(''); setFDevice(''); setFAudLang(''); setFScore(''); setFCarts(''); setFPages(''); setFEngage(''); setFRepeat(''); }}
                             className="text-[10px] px-2 py-1 rounded-lg flex items-center gap-1"
                             style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)', color: '#f87171' }}>
                             <X size={9} /> Clear
@@ -799,6 +800,14 @@ function CreateModal({ onClose, onCreated }) {
                             <option value="85">85+ (Very high)</option>
                           </select>
                         </FilterCard>
+
+                        <FilterCard label="Repeat Customer" icon={Repeat} active={!!fRepeat}>
+                          <select value={fRepeat} onChange={e => setFRepeat(e.target.value)} className="input w-full text-xs py-1.5">
+                            <option value="">All</option>
+                            <option value="yes">🔁 Repeat only</option>
+                            <option value="no">🆕 First-time only</option>
+                          </select>
+                        </FilterCard>
                       </div>
 
                       {/* Contact preview list */}
@@ -846,6 +855,7 @@ function CreateModal({ onClose, onCreated }) {
                             fCarts   && { label: 'Cart Events',  value: `${fCarts}+`                },
                             fPages   && { label: 'Page Views',   value: `${fPages}+`                },
                             fEngage  && { label: 'Engagement',   value: `${fEngage}+`               },
+                            fRepeat  && { label: 'Customer Type', value: fRepeat === 'yes' ? '🔁 Repeat' : '🆕 First-time' },
                           ].filter(Boolean).map((f, i) => (
                             <span key={i} className="text-[10px] px-2 py-0.5 rounded-full font-medium"
                               style={{ background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.2)', color: '#60a5fa' }}>
@@ -925,6 +935,8 @@ function applyFilters(contacts, f) {
     if (f.carts   && Number(c.cart_events      || 0) < Number(f.carts))   return false;
     if (f.pages   && Number(c.page_views       || 0) < Number(f.pages))   return false;
     if (f.engage  && Number(c.engagement_score || 0) < Number(f.engage))  return false;
+    if (f.repeat === 'yes' && !c.is_repeat)  return false;
+    if (f.repeat === 'no'  && !!c.is_repeat) return false;
     return true;
   });
 }
@@ -970,6 +982,7 @@ function CustomCampaignModal({ onClose, onCreated }) {
   const [fCarts,  setFCarts]  = useState('');
   const [fPages,  setFPages]  = useState('');
   const [fEngage, setFEngage] = useState('');
+  const [fRepeat, setFRepeat] = useState('');
 
   useEffect(() => {
     templatesApi.list().then(setTemplates).catch(() => {});
@@ -990,9 +1003,9 @@ function CustomCampaignModal({ onClose, onCreated }) {
   }, [metaTemplateId]);
 
   const filters = { status: fStatus, city: fCity, device: fDevice, lang: fLang,
-                    score: fScore, carts: fCarts, pages: fPages, engage: fEngage };
+                    score: fScore, carts: fCarts, pages: fPages, engage: fEngage, repeat: fRepeat };
   const matched = useMemo(() => applyFilters(contacts, filters),
-    [contacts, fStatus, fCity, fDevice, fLang, fScore, fCarts, fPages, fEngage]);
+    [contacts, fStatus, fCity, fDevice, fLang, fScore, fCarts, fPages, fEngage, fRepeat]);
 
   const activeTpl = templates.find(t => String(t.id) === String(templateId));
   const filteredTpls = useMemo(() =>
@@ -1402,6 +1415,14 @@ function CustomCampaignModal({ onClose, onCreated }) {
                     <option value="50">50+ (Good)</option>
                     <option value="70">70+ (High)</option>
                     <option value="85">85+ (Very high)</option>
+                  </select>
+                </FilterCard>
+
+                <FilterCard label="Repeat Customer" icon={Repeat} active={!!fRepeat}>
+                  <select value={fRepeat} onChange={e => setFRepeat(e.target.value)} className="input w-full text-sm py-2">
+                    <option value="">All</option>
+                    <option value="yes">🔁 Repeat only</option>
+                    <option value="no">🆕 First-time only</option>
                   </select>
                 </FilterCard>
 

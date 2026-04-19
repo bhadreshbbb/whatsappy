@@ -225,11 +225,27 @@ export const trackingController = {
     try {
       const db = getDb();
       const { channelId, sessionId, phone, email, name } = req.body;
-      const idx = db.website_visitors.findIndex(v => v.channel_id === (channelId || 'demo') && v.session_id === sessionId);
+      const cid = channelId || 'demo';
+      const idx = db.website_visitors.findIndex(v => v.channel_id === cid && v.session_id === sessionId);
       if (idx >= 0) {
         db.website_visitors[idx].phone = phone || db.website_visitors[idx].phone;
         db.website_visitors[idx].email = email || db.website_visitors[idx].email;
-        db.website_visitors[idx].name = name || db.website_visitors[idx].name;
+        db.website_visitors[idx].name  = name  || db.website_visitors[idx].name;
+
+        // Repeat visitor detection
+        if (phone) {
+          const priorSessions = db.website_visitors.filter(v =>
+            v.channel_id === cid && v.phone === phone && v.session_id !== sessionId
+          );
+          if (priorSessions.length > 0) {
+            const purchaseCount = (db.purchase_history || []).filter(p =>
+              p.channel_id === cid && p.phone === phone
+            ).length;
+            db.website_visitors[idx].is_repeat          = true;
+            db.website_visitors[idx].visit_count         = priorSessions.length + 1;
+            db.website_visitors[idx].total_purchase_count = purchaseCount;
+          }
+        }
         db.save();
       }
       res.json({ success: true });
@@ -629,6 +645,22 @@ export const trackingController = {
         if (auto_product_image) db.website_visitors[vIdx].last_product_image = auto_product_image;
         if (auto_product_url)   db.website_visitors[vIdx].last_product_url   = auto_product_url;
         if (auto_product_price) db.website_visitors[vIdx].last_product_price = auto_product_price;
+
+        // ── Repeat visitor detection ──────────────────────────────────────────
+        if (phone) {
+          const allPhoneSessions = db.website_visitors.filter(v =>
+            v.channel_id === cid && v.phone === phone && v.session_id !== sessionId
+          );
+          if (allPhoneSessions.length > 0) {
+            const visitCount = allPhoneSessions.length + 1;
+            const purchaseCount = (db.purchase_history || []).filter(p =>
+              p.channel_id === cid && p.phone === phone
+            ).length;
+            db.website_visitors[vIdx].is_repeat         = true;
+            db.website_visitors[vIdx].visit_count        = visitCount;
+            db.website_visitors[vIdx].total_purchase_count = purchaseCount;
+          }
+        }
       } else {
         // ── CREATE visitor on-the-fly when identify arrives before trackVisitor ──
         const now = new Date().toISOString();

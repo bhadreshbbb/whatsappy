@@ -187,6 +187,7 @@ const TABS = [
   { id: 'overview',   label: 'Overview',      icon: BarChart2    },
   { id: 'pages',      label: 'Pages',         icon: Eye          },
   { id: 'contacts',   label: 'Contacts',      icon: Phone        },
+  { id: 'repeat',     label: 'Repeat Customers', icon: Repeat    },
   { id: 'cities',     label: 'Cities',        icon: MapPin       },
   { id: 'devices',    label: 'Devices',       icon: Smartphone   },
   { id: 'engagement', label: 'Engagement',    icon: Activity     },
@@ -204,6 +205,8 @@ export default function Analytics() {
   const [devices,    setDevices]    = useState(null);
   const [brand,      setBrand]      = useState(null);
   const [engagement, setEngagement] = useState(null);
+  const [repeatVis,  setRepeatVis]  = useState(null);
+  const [repeatLoading, setRepeatLoading] = useState(false);
 
   // Global filters
   const [search,       setSearch]       = useState('');
@@ -257,6 +260,12 @@ export default function Analytics() {
   }, [days]);
 
   useEffect(() => { load(); }, [load]);
+
+  useEffect(() => {
+    if (tab !== 'repeat' || repeatVis !== null) return;
+    setRepeatLoading(true);
+    analyticsApi.repeatVisitors().then(d => { setRepeatVis(d); setRepeatLoading(false); }).catch(() => setRepeatLoading(false));
+  }, [tab, repeatVis]);
 
   const toggleSort = (col, cur, dir, setCol, setDir) => {
     if (cur === col) setDir(d => d === 'desc' ? 'asc' : 'desc');
@@ -763,6 +772,95 @@ export default function Analytics() {
       )}
 
       {/* ════════════════════ CITIES ════════════════════ */}
+      {tab === 'repeat' && (
+        <div className="space-y-5">
+          {/* Summary stats */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <StatCard label="Repeat Customers" value={repeatVis?.length ?? '…'} color="purple" icon={Repeat} />
+            <StatCard label="Total Return Visits" value={repeatVis ? repeatVis.reduce((s, r) => s + r.visit_count, 0) : '…'} color="blue" icon={TrendingUp} />
+            <StatCard label="Total Purchases" value={repeatVis ? repeatVis.reduce((s, r) => s + r.purchase_count, 0) : '…'} color="green" icon={ShoppingCart} />
+            <StatCard label="Total Revenue" value={repeatVis ? `₹${repeatVis.reduce((s, r) => s + r.total_spent, 0).toLocaleString()}` : '…'} color="orange" icon={DollarSign} />
+          </div>
+
+          {/* Table */}
+          <div className="card p-5">
+            <h3 className="text-sm font-semibold text-white mb-4 flex items-center gap-2">
+              <Repeat size={14} style={{ color: "#c084fc" }} /> Repeat Customer Journey
+              <span className="ml-auto text-xs text-slate-500">{repeatVis?.length || 0} customers returned</span>
+            </h3>
+            {repeatLoading ? (
+              <div className="space-y-2">{[...Array(6)].map((_, i) => <div key={i} className="skeleton h-14 rounded-xl" />)}</div>
+            ) : !repeatVis?.length ? (
+              <div className="text-center py-12 text-slate-500 text-sm">No repeat visitors yet — they'll appear here once a user returns with the same phone number.</div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+                      {['Customer', 'Phone', 'Visits', 'Purchases', 'Spent', 'Status Journey', 'Last Seen'].map(h => (
+                        <th key={h} className="text-left pb-3 pr-4 font-semibold" style={{ color: "#475569" }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(repeatVis || []).map((r, i) => (
+                      <tr key={i} style={{ borderBottom: "1px solid rgba(255,255,255,0.04)" }}
+                        className="hover:bg-white/[0.02] transition-colors">
+                        <td className="py-3 pr-4">
+                          <div className="flex items-center gap-2">
+                            <div className="w-7 h-7 rounded-full flex items-center justify-center text-[10px] font-bold flex-shrink-0"
+                              style={{ background: "rgba(168,85,247,0.15)", color: "#c084fc" }}>
+                              {(r.name || r.phone || '?')[0].toUpperCase()}
+                            </div>
+                            <div>
+                              <div className="text-white font-medium">{r.name || 'Unknown'}</div>
+                              <div className="text-slate-500 text-[10px]">{r.city || '—'}</div>
+                            </div>
+                          </div>
+                        </td>
+                        <td className="py-3 pr-4 text-slate-300 font-mono">{r.phone}</td>
+                        <td className="py-3 pr-4">
+                          <span className="font-bold" style={{ color: "#c084fc" }}>{r.visit_count}×</span>
+                        </td>
+                        <td className="py-3 pr-4">
+                          <span className="font-bold" style={{ color: r.purchase_count > 0 ? "#4ade80" : "#64748b" }}>
+                            {r.purchase_count > 0 ? `${r.purchase_count}×` : '—'}
+                          </span>
+                        </td>
+                        <td className="py-3 pr-4">
+                          <span style={{ color: r.total_spent > 0 ? "#fb923c" : "#64748b" }}>
+                            {r.total_spent > 0 ? `₹${r.total_spent.toLocaleString()}` : '—'}
+                          </span>
+                        </td>
+                        <td className="py-3 pr-4">
+                          <div className="flex items-center gap-1 flex-wrap">
+                            {(r.status_journey || []).map((s, j) => {
+                              const color = s === 'purchased' ? "#4ade80" : s === 'abandoned_cart' ? "#fb923c" : s === 'product_view' ? "#60a5fa" : "#94a3b8";
+                              return (
+                                <span key={j}>
+                                  <span className="text-[9px] px-1.5 py-0.5 rounded-full font-medium"
+                                    style={{ background: `${color}18`, border: `1px solid ${color}30`, color }}>
+                                    {s.replace(/_/g, ' ')}
+                                  </span>
+                                  {j < r.status_journey.length - 1 && <span className="text-slate-600 mx-0.5">→</span>}
+                                </span>
+                              );
+                            })}
+                          </div>
+                        </td>
+                        <td className="py-3 text-slate-400 text-[10px]">
+                          {r.last_visit_at ? new Date(r.last_visit_at).toLocaleDateString('en', { day: 'numeric', month: 'short' }) : '—'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {tab === 'cities' && (
         <div className="space-y-4">
           {/* Top cities chart */}

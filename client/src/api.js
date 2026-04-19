@@ -59,8 +59,9 @@ export const analyticsApi = {
   cities:      (days = 30)=> request(`/analytics/cities?days=${days}`),
   contacts:    (days = 30, limit = 50) => request(`/analytics/contacts?days=${days}&limit=${limit}`),
   devices:     (days = 30)=> request(`/analytics/devices?days=${days}`),
-  engagement:  (days = 7)  => request(`/analytics/engagement?days=${days}`),
-  brand:       (days = 30) => request(`/analytics/brand?days=${days}`),
+  engagement:      (days = 7)  => request(`/analytics/engagement?days=${days}`),
+  brand:           (days = 30) => request(`/analytics/brand?days=${days}`),
+  repeatVisitors:  ()          => request('/analytics/repeat-visitors'),
 };
 
 export const settingsApi = {

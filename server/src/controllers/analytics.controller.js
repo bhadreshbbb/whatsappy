@@ -648,4 +648,52 @@ export const analyticsController = {
       });
     } catch (error) { next(error); }
   },
+
+  async getRepeatVisitors(req, res, next) {
+    try {
+      const db = getDb();
+      const channelId = req.headers['x-channel-id'] || 'demo';
+      const visitors  = db.website_visitors.filter(v => v.channel_id === channelId && v.phone);
+      const purchases = db.purchase_history  .filter(p => p.channel_id === channelId);
+
+      // Group sessions by phone
+      const byPhone = {};
+      for (const v of visitors) {
+        if (!byPhone[v.phone]) byPhone[v.phone] = [];
+        byPhone[v.phone].push(v);
+      }
+
+      const result = Object.entries(byPhone)
+        .filter(([, sessions]) => sessions.length > 1)
+        .map(([phone, sessions]) => {
+          const sorted  = sessions.sort((a, b) => new Date(b.visited_at) - new Date(a.visited_at));
+          const latest  = sorted[0];
+          const oldest  = sorted[sorted.length - 1];
+          const myPurchases = purchases.filter(p => p.phone === phone);
+          const totalSpent  = myPurchases.reduce((s, p) => s + Number(p.total_amount || 0), 0);
+          const journey     = sorted.slice().reverse().map(s => s.status || 'active');
+
+          return {
+            phone,
+            name:            latest.name        || null,
+            city:            latest.city        || null,
+            language:        latest.language    || null,
+            device_type:     latest.device_type || null,
+            current_status:  latest.status      || 'active',
+            visit_count:     sessions.length,
+            purchase_count:  myPurchases.length,
+            total_spent:     totalSpent,
+            first_visit_at:  oldest.created_at  || oldest.visited_at,
+            last_visit_at:   latest.visited_at,
+            last_purchase_at: myPurchases.length
+              ? myPurchases.sort((a, b) => new Date(b.purchased_at) - new Date(a.purchased_at))[0].purchased_at
+              : null,
+            status_journey: journey,
+          };
+        })
+        .sort((a, b) => b.visit_count - a.visit_count);
+
+      res.json(result);
+    } catch (error) { next(error); }
+  },
 };
