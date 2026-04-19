@@ -100,10 +100,15 @@ export const visitorsController = {
     try {
       const db = getDb();
       const { id } = req.params;
-      const visitor = db.website_visitors.find(v => v.id == id);
+      const channelId = req.headers['x-channel-id'] || 'demo';
+      // Primary lookup by id; fallback by phone query param (for Repeat tab)
+      let visitor = db.website_visitors.find(v => v.id == id);
+      if (!visitor && req.query.phone) {
+        visitor = db.website_visitors
+          .filter(v => v.channel_id === channelId && v.phone === req.query.phone)
+          .sort((a, b) => new Date(b.visited_at) - new Date(a.visited_at))[0];
+      }
       if (!visitor) return res.status(404).json({ error: 'Visitor not found' });
-
-      const channelId = visitor.channel_id;
       const phone = visitor.phone;
 
       // Collect all session IDs for this phone (across visits)

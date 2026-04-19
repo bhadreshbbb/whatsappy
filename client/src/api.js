@@ -22,7 +22,7 @@ export const visitorsApi = {
   stats:       ()            => request('/visitors/stats'),
   get:         (id)          => request(`/visitors/${id}`),
   getCarts:    (id)          => request(`/visitors/${id}/carts`),
-  getActivity: (id)          => request(`/visitors/${id}/activity`),
+  getActivity: (id, phone)   => request(`/visitors/${id || 0}/activity${phone ? `?phone=${encodeURIComponent(phone)}` : ''}`),
 };
 
 export const campaignsApi = {

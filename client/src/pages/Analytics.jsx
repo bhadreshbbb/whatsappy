@@ -436,7 +436,14 @@ function UserProfile({ contact: c, activity, loading, onBack }) {
         {loading ? (
           <div className="space-y-3">{[...Array(5)].map((_, i) => <div key={i} className="skeleton h-20 rounded-xl" />)}</div>
         ) : timeline.length === 0 ? (
-          <p className="text-center py-8 text-sm" style={{ color: "#475569" }}>No activity recorded yet.</p>
+          <div className="text-center py-10">
+            <Activity size={28} className="mx-auto mb-3 opacity-20" style={{ color: '#60a5fa' }} />
+            <p className="text-sm font-semibold text-white">No events tracked yet</p>
+            <p className="text-xs mt-1 max-w-xs mx-auto" style={{ color: '#475569' }}>
+              Activity appears here once the user browses pages, views products, or adds to cart on your store.
+              Make sure the tracker script is installed and firing events.
+            </p>
+          </div>
         ) : (
           <div>
             {timeline.map((ev, i) => <EventCard key={i} event={ev} />)}
@@ -535,18 +542,18 @@ export default function Analytics() {
   }, [tab, repeatVis]);
 
   const openUserDetail = useCallback(async (contact) => {
-    // If called from Repeat tab, look up full contact record by phone
+    // Resolve full contact record: prefer contacts list (has id) over repeat record
     let resolved = contact;
-    if (!resolved.id && !resolved.visitor_id && resolved.phone) {
+    if ((!resolved.id && !resolved.visitor_id) && resolved.phone) {
       const found = (contacts?.contacts || []).find(c => c.phone === resolved.phone);
-      if (found) resolved = found;
+      if (found) resolved = { ...found, ...contact, id: found.id, session_id: found.session_id };
     }
     setUserDetail(resolved);
     setTab('users');
     setUserActivity(null);
     setUserActivityLoading(true);
     try {
-      const data = await visitorsApi.getActivity(resolved.id || resolved.visitor_id);
+      const data = await visitorsApi.getActivity(resolved.id || resolved.visitor_id, resolved.phone);
       setUserActivity(data);
     } catch (_) {}
     setUserActivityLoading(false);

@@ -219,6 +219,8 @@ export const analyticsController = {
         const powerScore  = Math.round(engScore + cartScore + timeScore + pageScore);
 
         return {
+          id:             v.id,
+          session_id:     v.session_id,
           phone:          v.phone,
           name:           v.name || '',
           city:           v.city || '',
@@ -226,6 +228,12 @@ export const analyticsController = {
           device:         v.device_type || '',
           language:       v.language || '',
           status:         v.status || 'active',
+          is_repeat:      v.is_repeat || false,
+          visit_count:    v.visit_count || 1,
+          total_purchase_count: v.total_purchase_count || 0,
+          utm_source:     v.utm_source   || null,
+          utm_medium:     v.utm_medium   || null,
+          utm_campaign:   v.utm_campaign || null,
           power_score:    powerScore,
           engagement_score: avgEngage,
           avg_scroll_pct: avgScroll,
@@ -233,6 +241,7 @@ export const analyticsController = {
           page_views:     pageCount,
           cart_events:    cartCount,
           last_seen:      v.visited_at,
+          created_at:     v.created_at,
           top_pages:      pvs.sort((a,b)=>b.engagement_score-a.engagement_score).slice(0,3).map(p=>({ url:p.url, title:p.page_title, score:p.engagement_score })),
         };
       });
