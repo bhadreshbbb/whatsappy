@@ -471,6 +471,10 @@ export default function Analytics() {
   const [ctLang,     setCtLang]    = useState('');
   const [ctSegment,  setCtSegment] = useState('all');
 
+  // Repeat tab filters
+  const [rpFilter, setRpFilter] = useState('all');   // 'all' | 'purchased' | 'not_purchased'
+  const [rpSearch, setRpSearch] = useState('');
+
   // Global filters
   const [search,       setSearch]       = useState('');
   const [sortBy,       setSortBy]       = useState('');
@@ -531,15 +535,22 @@ export default function Analytics() {
   }, [tab, repeatVis]);
 
   const openUserDetail = useCallback(async (contact) => {
-    setUserDetail(contact);
+    // If called from Repeat tab, look up full contact record by phone
+    let resolved = contact;
+    if (!resolved.id && !resolved.visitor_id && resolved.phone) {
+      const found = (contacts?.contacts || []).find(c => c.phone === resolved.phone);
+      if (found) resolved = found;
+    }
+    setUserDetail(resolved);
+    setTab('users');
     setUserActivity(null);
     setUserActivityLoading(true);
     try {
-      const data = await visitorsApi.getActivity(contact.id || contact.visitor_id);
+      const data = await visitorsApi.getActivity(resolved.id || resolved.visitor_id);
       setUserActivity(data);
     } catch (_) {}
     setUserActivityLoading(false);
-  }, []);
+  }, [contacts]);
 
   const toggleSort = (col, cur, dir, setCol, setDir) => {
     if (cur === col) setDir(d => d === 'desc' ? 'asc' : 'desc');
@@ -1214,95 +1225,199 @@ export default function Analytics() {
         />
       )}
 
-      {/* ════════════════════ CITIES ════════════════════ */}
-      {tab === 'repeat' && (
-        <div className="space-y-5">
-          {/* Summary stats */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <StatCard label="Repeat Customers" value={repeatVis?.length ?? '…'} color="purple" icon={Repeat} />
-            <StatCard label="Total Return Visits" value={repeatVis ? repeatVis.reduce((s, r) => s + r.visit_count, 0) : '…'} color="blue" icon={TrendingUp} />
-            <StatCard label="Total Purchases" value={repeatVis ? repeatVis.reduce((s, r) => s + r.purchase_count, 0) : '…'} color="green" icon={ShoppingCart} />
-            <StatCard label="Total Revenue" value={repeatVis ? `₹${repeatVis.reduce((s, r) => s + r.total_spent, 0).toLocaleString()}` : '…'} color="orange" icon={DollarSign} />
-          </div>
+      {/* ════════════════════ REPEAT CUSTOMERS ════════════════════ */}
+      {tab === 'repeat' && (() => {
+        const purchased    = (repeatVis || []).filter(r => r.purchase_count > 0);
+        const notPurchased = (repeatVis || []).filter(r => r.purchase_count === 0);
+        const totalRev     = (repeatVis || []).reduce((s, r) => s + r.total_spent, 0);
+        const avgVisits    = repeatVis?.length ? ((repeatVis || []).reduce((s, r) => s + r.visit_count, 0) / repeatVis.length).toFixed(1) : 0;
 
-          {/* Table */}
-          <div className="card p-5">
-            <h3 className="text-sm font-semibold text-white mb-4 flex items-center gap-2">
-              <Repeat size={14} style={{ color: "#c084fc" }} /> Repeat Customer Journey
-              <span className="ml-auto text-xs text-slate-500">{repeatVis?.length || 0} customers returned</span>
-            </h3>
+        const base = rpFilter === 'purchased' ? purchased : rpFilter === 'not_purchased' ? notPurchased : (repeatVis || []);
+        const filteredRepeat = rpSearch
+          ? base.filter(r =>
+              (r.name || '').toLowerCase().includes(rpSearch.toLowerCase()) ||
+              (r.phone || '').includes(rpSearch) ||
+              (r.city || '').toLowerCase().includes(rpSearch.toLowerCase())
+            )
+          : base;
+
+        const tier = v => v >= 7 ? { label: 'Gold', color: '#f59e0b', bg: 'rgba(245,158,11,0.12)' }
+                         : v >= 4 ? { label: 'Silver', color: '#94a3b8', bg: 'rgba(148,163,184,0.12)' }
+                                  : { label: 'Bronze', color: '#fb923c', bg: 'rgba(251,146,60,0.1)' };
+
+        const statusColor = s =>
+          s === 'purchased'          ? '#4ade80' :
+          s === 'abandoned_cart'     ? '#fb923c' :
+          s === 'abandoned_checkout' ? '#f59e0b' :
+          s === 'product_view'       ? '#60a5fa' : '#94a3b8';
+
+        return (
+          <div className="space-y-5">
+            {/* ── KPI row ── */}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              {[
+                { label: 'Repeat Customers',  value: repeatVis?.length ?? '…',                                           icon: Repeat,      color: 'purple' },
+                { label: 'Avg. Visits',        value: repeatVis ? `${avgVisits}×` : '…',                                 icon: TrendingUp,  color: 'blue'   },
+                { label: 'Converted (bought)', value: `${purchased.length} / ${repeatVis?.length || 0}`,                 icon: Trophy,      color: 'green'  },
+                { label: 'Total Revenue',      value: repeatVis ? `₹${totalRev.toLocaleString()}` : '…',                 icon: DollarSign,  color: 'orange' },
+              ].map(k => <StatCard key={k.label} {...k} />)}
+            </div>
+
+            {/* ── Segment toggle + Search ── */}
+            <div className="flex flex-wrap items-center gap-3">
+              {/* Filter pills */}
+              <div className="flex gap-1 p-1 rounded-xl" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.07)' }}>
+                {[
+                  { id: 'all',           label: `All  (${(repeatVis||[]).length})`,         color: '#c084fc' },
+                  { id: 'purchased',     label: `✅ Purchased  (${purchased.length})`,      color: '#4ade80' },
+                  { id: 'not_purchased', label: `⏳ Not Yet  (${notPurchased.length})`,     color: '#fb923c' },
+                ].map(f => (
+                  <button key={f.id} onClick={() => setRpFilter(f.id)}
+                    className="text-xs px-3 py-1.5 rounded-lg font-semibold transition-all"
+                    style={rpFilter === f.id
+                      ? { background: `${f.color}18`, border: `1px solid ${f.color}50`, color: f.color }
+                      : { color: '#475569', border: '1px solid transparent' }}>
+                    {f.label}
+                  </button>
+                ))}
+              </div>
+
+              {/* Search */}
+              <div className="relative flex-1 min-w-48">
+                <Search size={12} style={{ color: '#475569', position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)' }} />
+                <input value={rpSearch} onChange={e => setRpSearch(e.target.value)}
+                  placeholder="Search name, phone, city…"
+                  className="w-full pl-8 pr-3 py-2 rounded-xl text-xs"
+                  style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)', color: '#e2e8f0', outline: 'none' }} />
+              </div>
+
+              <span className="text-xs ml-auto" style={{ color: '#475569' }}>
+                <span className="text-white font-semibold">{filteredRepeat.length}</span> customers
+              </span>
+            </div>
+
+            {/* ── Cards ── */}
             {repeatLoading ? (
-              <div className="space-y-2">{[...Array(6)].map((_, i) => <div key={i} className="skeleton h-14 rounded-xl" />)}</div>
-            ) : !repeatVis?.length ? (
-              <div className="text-center py-12 text-slate-500 text-sm">No repeat visitors yet — they'll appear here once a user returns with the same phone number.</div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {[...Array(6)].map((_, i) => <div key={i} className="skeleton h-48 rounded-2xl" />)}
+              </div>
+            ) : !filteredRepeat.length ? (
+              <div className="card py-16 text-center">
+                <Repeat size={32} className="mx-auto mb-3 opacity-20" style={{ color: '#c084fc' }} />
+                <p className="text-sm font-semibold text-white">No repeat customers yet</p>
+                <p className="text-xs mt-1" style={{ color: '#475569' }}>
+                  {rpFilter !== 'all' || rpSearch ? 'Try adjusting your filters.' : 'They appear once a user returns with the same phone number.'}
+                </p>
+              </div>
             ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-xs">
-                  <thead>
-                    <tr style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
-                      {['Customer', 'Phone', 'Visits', 'Purchases', 'Spent', 'Status Journey', 'Last Seen'].map(h => (
-                        <th key={h} className="text-left pb-3 pr-4 font-semibold" style={{ color: "#475569" }}>{h}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {(repeatVis || []).map((r, i) => (
-                      <tr key={i} style={{ borderBottom: "1px solid rgba(255,255,255,0.04)" }}
-                        className="hover:bg-white/[0.02] transition-colors">
-                        <td className="py-3 pr-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {filteredRepeat.map((r, i) => {
+                  const t = tier(r.visit_count);
+                  const hasPurchased = r.purchase_count > 0;
+                  return (
+                    <div key={i} className="rounded-2xl overflow-hidden transition-all"
+                      style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.07)' }}
+                      onMouseEnter={e => { e.currentTarget.style.border = '1px solid rgba(168,85,247,0.25)'; e.currentTarget.style.boxShadow = '0 0 24px rgba(168,85,247,0.08)'; }}
+                      onMouseLeave={e => { e.currentTarget.style.border = '1px solid rgba(255,255,255,0.07)'; e.currentTarget.style.boxShadow = ''; }}>
+
+                      {/* Card header */}
+                      <div className="flex items-center gap-3 px-4 pt-4 pb-3"
+                        style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                        {/* Avatar */}
+                        <div className="w-10 h-10 rounded-xl flex items-center justify-center text-base font-bold flex-shrink-0"
+                          style={{ background: 'rgba(168,85,247,0.15)', color: '#c084fc', border: '1px solid rgba(168,85,247,0.25)' }}>
+                          {(r.name || r.phone || '?')[0].toUpperCase()}
+                        </div>
+                        <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2">
-                            <div className="w-7 h-7 rounded-full flex items-center justify-center text-[10px] font-bold flex-shrink-0"
-                              style={{ background: "rgba(168,85,247,0.15)", color: "#c084fc" }}>
-                              {(r.name || r.phone || '?')[0].toUpperCase()}
-                            </div>
-                            <div>
-                              <div className="text-white font-medium">{r.name || 'Unknown'}</div>
-                              <div className="text-slate-500 text-[10px]">{r.city || '—'}</div>
-                            </div>
+                            <p className="text-sm font-bold text-white truncate">{r.name || 'Unknown'}</p>
+                            <span className="text-[9px] px-1.5 py-0.5 rounded-full font-bold uppercase tracking-wide flex-shrink-0"
+                              style={{ background: t.bg, color: t.color, border: `1px solid ${t.color}40` }}>
+                              {t.label}
+                            </span>
                           </div>
-                        </td>
-                        <td className="py-3 pr-4 text-slate-300 font-mono">{r.phone}</td>
-                        <td className="py-3 pr-4">
-                          <span className="font-bold" style={{ color: "#c084fc" }}>{r.visit_count}×</span>
-                        </td>
-                        <td className="py-3 pr-4">
-                          <span className="font-bold" style={{ color: r.purchase_count > 0 ? "#4ade80" : "#64748b" }}>
-                            {r.purchase_count > 0 ? `${r.purchase_count}×` : '—'}
-                          </span>
-                        </td>
-                        <td className="py-3 pr-4">
-                          <span style={{ color: r.total_spent > 0 ? "#fb923c" : "#64748b" }}>
-                            {r.total_spent > 0 ? `₹${r.total_spent.toLocaleString()}` : '—'}
-                          </span>
-                        </td>
-                        <td className="py-3 pr-4">
-                          <div className="flex items-center gap-1 flex-wrap">
-                            {(r.status_journey || []).map((s, j) => {
-                              const color = s === 'purchased' ? "#4ade80" : s === 'abandoned_cart' ? "#fb923c" : s === 'product_view' ? "#60a5fa" : "#94a3b8";
-                              return (
-                                <span key={j}>
-                                  <span className="text-[9px] px-1.5 py-0.5 rounded-full font-medium"
-                                    style={{ background: `${color}18`, border: `1px solid ${color}30`, color }}>
-                                    {s.replace(/_/g, ' ')}
-                                  </span>
-                                  {j < r.status_journey.length - 1 && <span className="text-slate-600 mx-0.5">→</span>}
+                          <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+                            {r.phone && <span className="text-[10px] font-mono" style={{ color: '#4ade80' }}>{r.phone}</span>}
+                            {r.city  && <span className="text-[10px]" style={{ color: '#64748b' }}>📍 {r.city}</span>}
+                            {r.language && <span className="text-[10px]" style={{ color: '#64748b' }}>🌐 {r.language}</span>}
+                          </div>
+                        </div>
+                        {/* Purchase badge */}
+                        <span className="text-[10px] px-2 py-1 rounded-xl font-bold flex-shrink-0"
+                          style={hasPurchased
+                            ? { background: 'rgba(74,222,128,0.1)', border: '1px solid rgba(74,222,128,0.25)', color: '#4ade80' }
+                            : { background: 'rgba(251,146,60,0.1)', border: '1px solid rgba(251,146,60,0.2)', color: '#fb923c' }}>
+                          {hasPurchased ? '✅ Purchased' : '⏳ Not Yet'}
+                        </span>
+                      </div>
+
+                      {/* Stats row */}
+                      <div className="grid grid-cols-4 divide-x px-0"
+                        style={{ borderBottom: '1px solid rgba(255,255,255,0.05)', '--tw-divide-opacity': 1, borderColor: 'rgba(255,255,255,0.05)' }}>
+                        {[
+                          { label: 'Visits',    value: `${r.visit_count}×`,                                                    color: '#c084fc' },
+                          { label: 'Purchases', value: r.purchase_count > 0 ? `${r.purchase_count}×` : '—',                    color: r.purchase_count > 0 ? '#4ade80' : '#475569' },
+                          { label: 'Revenue',   value: r.total_spent > 0 ? `₹${r.total_spent.toLocaleString()}` : '—',         color: r.total_spent > 0 ? '#fb923c' : '#475569' },
+                          { label: 'Last Seen', value: r.last_visit_at ? new Date(r.last_visit_at).toLocaleDateString('en', { day: 'numeric', month: 'short' }) : '—', color: '#64748b' },
+                        ].map(s => (
+                          <div key={s.label} className="py-2.5 text-center">
+                            <p className="text-sm font-bold" style={{ color: s.color }}>{s.value}</p>
+                            <p className="text-[9px] uppercase tracking-wide mt-0.5" style={{ color: '#475569' }}>{s.label}</p>
+                          </div>
+                        ))}
+                      </div>
+
+                      {/* Journey pipeline */}
+                      <div className="px-4 py-3">
+                        <p className="text-[9px] uppercase tracking-widest font-semibold mb-2" style={{ color: '#334155' }}>Journey across visits</p>
+                        <div className="flex items-center gap-1 flex-wrap">
+                          {(r.status_journey || []).map((s, j) => {
+                            const c = statusColor(s);
+                            return (
+                              <React.Fragment key={j}>
+                                <span className="text-[9px] px-2 py-0.5 rounded-full font-semibold"
+                                  style={{ background: `${c}15`, border: `1px solid ${c}35`, color: c }}>
+                                  {s.replace(/_/g, ' ')}
                                 </span>
-                              );
-                            })}
+                                {j < r.status_journey.length - 1 && (
+                                  <span style={{ color: '#334155', fontSize: 9 }}>→</span>
+                                )}
+                              </React.Fragment>
+                            );
+                          })}
+                        </div>
+
+                        {/* First / Last visit dates */}
+                        <div className="flex items-center justify-between mt-3">
+                          <div className="text-[9px]" style={{ color: '#334155' }}>
+                            First visit: <span style={{ color: '#64748b' }}>
+                              {r.first_visit_at ? new Date(r.first_visit_at).toLocaleDateString('en', { day: 'numeric', month: 'short', year: 'numeric' }) : '—'}
+                            </span>
                           </div>
-                        </td>
-                        <td className="py-3 text-slate-400 text-[10px]">
-                          {r.last_visit_at ? new Date(r.last_visit_at).toLocaleDateString('en', { day: 'numeric', month: 'short' }) : '—'}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                          {r.last_purchase_at && (
+                            <div className="text-[9px]" style={{ color: '#334155' }}>
+                              Last purchase: <span style={{ color: '#4ade80' }}>
+                                {new Date(r.last_purchase_at).toLocaleDateString('en', { day: 'numeric', month: 'short' })}
+                              </span>
+                            </div>
+                          )}
+                          <button onClick={() => openUserDetail(r)}
+                            className="text-[10px] px-2.5 py-1 rounded-lg font-semibold transition-all"
+                            style={{ background: 'rgba(168,85,247,0.1)', border: '1px solid rgba(168,85,247,0.25)', color: '#c084fc' }}
+                            onMouseEnter={e => { e.currentTarget.style.background = 'rgba(168,85,247,0.2)'; }}
+                            onMouseLeave={e => { e.currentTarget.style.background = 'rgba(168,85,247,0.1)'; }}>
+                            View Profile →
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             )}
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {tab === 'cities' && (
         <div className="space-y-4">
