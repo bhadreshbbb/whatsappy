@@ -847,8 +847,9 @@ const STATUS_ALLOWED = {
 };
 
 function isBlockedByStatus(visitorStatus, campaignType) {
-  if (campaignType === 'custom_broadcast') return false; // Allowed unconditionally (relies on query filters)
-  if (campaignType === 'custom') return false;           // Custom campaigns use their own filter rules
+  if (campaignType === 'custom_broadcast') return false;      // Allowed unconditionally (relies on query filters)
+  if (campaignType === 'custom') return false;                // Custom campaigns use their own filter rules
+  if (campaignType === 'product_recommendation') return false; // Broadcast to any audience regardless of status
   if (!visitorStatus) return false;
   const allowed = STATUS_ALLOWED[visitorStatus];
   if (!allowed) return false; // unknown status — don't block
@@ -954,15 +955,15 @@ async function sendMultiple(db, cam, events, type) {
       // Used when campaign has a linked approved Meta carousel template.
       // This is the correct format for product recommendation campaigns.
       const metaTpl = cam.meta_template_id
-        ? (db.meta_templates || []).find(t => t.id === cam.meta_template_id && t.meta_status === 'APPROVED')
+        ? (db.meta_templates || []).find(t => String(t.id) === String(cam.meta_template_id) && t.meta_status === 'APPROVED')
         : null;
 
       if (metaTpl) {
         // Refresh products if campaign delay has elapsed since last product refresh
         if (metaTpl.auto_product_mode) {
           const lastRefresh = metaTpl.product_config?.last_auto_refresh;
-          const delayMs     = (cam.delay_hours || 24) * 60 * 60 * 1000;
-          const stale       = !lastRefresh || (Date.now() - new Date(lastRefresh).getTime()) >= delayMs;
+          const delayMs     = (cam.delay_hours != null ? cam.delay_hours : 24) * 60 * 60 * 1000;
+          const stale       = !lastRefresh || delayMs === 0 || (Date.now() - new Date(lastRefresh).getTime()) >= delayMs;
           if (stale) {
             console.log(`[SendRefresh] Products stale for "${metaTpl.name}" (delay: ${cam.delay_hours}h) — refreshing…`);
             await refreshTemplateForSend(db, metaTpl, channelId);
