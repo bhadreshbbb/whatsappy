@@ -207,7 +207,7 @@ export function startAutomation() {
   }, 60 * 1000);
 
   // Product detection — every SIX_HOURS_MS (1 min in DEMO).
-  const CYCLE_BATCH = 4;
+  const CYCLE_BATCH = 1; // advance by 1 product per tick for fine-grained rotation
   const CYCLE_COUNT = 10;
   productDetectionInterval = setInterval(async () => {
     try {

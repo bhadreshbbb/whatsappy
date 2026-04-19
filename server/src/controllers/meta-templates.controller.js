@@ -473,12 +473,15 @@ export async function buildAutoProductCards(channelId, cleanName, count = 4, off
   candidates = candidates.slice(0, MAX_POOL);
   const totalCandidates = candidates.length;
 
-  // Round-robin cycle: slice from offset — NO wrap-around so old products don't bleed in.
-  // At offset=8 with 12 products we get [I,J,K,L] only; no A,B,C,D padding.
+  // Round-robin cycle with wrap-around: rotate the list so we always have
+  // enough candidates regardless of pool size.
+  // e.g. 4 products, offset=1 → [B,C,D,A]; offset=2 → [C,D,A,B]; etc.
   if (offset > 0 && totalCandidates > 0) {
     const start = offset % totalCandidates;
-    candidates = candidates.slice(start); // strict window — no padding from position 0
-    console.log(`[AutoCards] Cycle offset=${offset} → #${start + 1}–${Math.min(start + COUNT, totalCandidates)} of ${totalCandidates}`);
+    if (start > 0) {
+      candidates = [...candidates.slice(start), ...candidates.slice(0, start)];
+    }
+    console.log(`[AutoCards] Cycle offset=${offset} → rotated pool starting at #${start + 1} of ${totalCandidates}`);
   }
 
   console.log(`[AutoCards] ${candidates.length} candidates in window (pool=${totalCandidates}, offset=${offset})`);
@@ -669,9 +672,9 @@ export async function buildAutoProductCards(channelId, cleanName, count = 4, off
 
   if (cards.length < 2) {
     if (offset > 0) {
-      // Automation cycle: window at this offset had too few valid products — return gracefully
-      // so automation.js can advance the offset and try the next batch next tick.
-      console.warn(`[AutoCards] Only ${cards.length} valid product(s) at offset=${offset} — returning empty for cycle skip`);
+      // With wrap-around this should be rare, but if the entire catalog has <2 valid products,
+      // return gracefully so automation advances offset and retries next tick.
+      console.warn(`[AutoCards] Only ${cards.length} valid product(s) in full catalog at offset=${offset} — retrying next tick`);
       db.save();
       return { cards, productConfigCards, candidatesTotal: totalCandidates };
     }
@@ -679,7 +682,7 @@ export async function buildAutoProductCards(channelId, cleanName, count = 4, off
     throw new Error(
       `Auto-detect found only ${cards.length} valid product(s) from ${tried} candidates. ` +
       `Need at least 2. Check: (1) shop_url is set in Settings, ` +
-      `(2) laasyna.com/products.json is accessible, ` +
+      `(2) product URLs are accessible, ` +
       `(3) WhatsApp credentials are configured for image upload.`
     );
   }
