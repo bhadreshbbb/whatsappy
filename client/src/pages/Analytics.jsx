@@ -466,9 +466,10 @@ export default function Analytics() {
   const [userDetail,         setUserDetail]         = useState(null);
   const [userActivity,       setUserActivity]       = useState(null);
   const [userActivityLoading,setUserActivityLoading]= useState(false);
-  const [ctRepeat,  setCtRepeat]  = useState('');
-  const [ctAnon,    setCtAnon]    = useState('');
-  const [ctLang,    setCtLang]    = useState('');
+  const [ctRepeat,   setCtRepeat]  = useState('');
+  const [ctAnon,     setCtAnon]    = useState('');
+  const [ctLang,     setCtLang]    = useState('');
+  const [ctSegment,  setCtSegment] = useState('all');
 
   // Global filters
   const [search,       setSearch]       = useState('');
@@ -592,9 +593,27 @@ export default function Analytics() {
   const allStates = useMemo(() =>
     [...new Set((cities?.cities || []).map(c => c.state).filter(Boolean))].sort(), [cities]);
 
+  /* ─── Segment definitions (for Users tab) ─── */
+  const allUsers = contacts?.contacts || [];
+  const USER_SEGMENTS = useMemo(() => [
+    { id: 'all',       label: 'All Users',         icon: Users,        color: "#60a5fa", desc: "Every tracked visitor",            filterFn: () => true },
+    { id: 'hot',       label: 'Hot Users',          icon: Flame,        color: "#f87171", desc: "Power score ≥ 80",                filterFn: c => (c.power_score || 0) >= 80 },
+    { id: 'active',    label: 'Active',             icon: Activity,     color: "#4ade80", desc: "Currently browsing your store",   filterFn: c => c.status === 'active' },
+    { id: 'product',   label: 'Product Viewed',     icon: Package,      color: "#a855f7", desc: "Viewed at least one product",     filterFn: c => c.status === 'product_view' },
+    { id: 'cart',      label: 'Cart Abandoned',     icon: ShoppingCart, color: "#fb923c", desc: "Added to cart but didn't buy",    filterFn: c => c.status === 'abandoned_cart' },
+    { id: 'checkout',  label: 'Checkout Dropped',   icon: MousePointer, color: "#f59e0b", desc: "Started checkout, didn't finish", filterFn: c => c.status === 'abandoned_checkout' },
+    { id: 'purchased', label: 'Purchasers',         icon: Trophy,       color: "#22c55e", desc: "Completed a purchase",           filterFn: c => c.status === 'purchased' },
+    { id: 'repeat',    label: 'Repeat Customers',   icon: Repeat,       color: "#c084fc", desc: "Returned more than once",        filterFn: c => !!c.is_repeat },
+    { id: 'identified',label: 'Identified',         icon: CheckCircle,  color: "#38bdf8", desc: "Has phone number",               filterFn: c => !!c.phone },
+    { id: 'anonymous', label: 'Anonymous',          icon: UserCheck,    color: "#64748b", desc: "No phone captured yet",          filterFn: c => !c.phone },
+    { id: 'mobile',    label: 'Mobile',             icon: Smartphone,   color: "#06b6d4", desc: "Visiting on mobile device",      filterFn: c => c.device === 'mobile' },
+  ], []);
+
   /* ─── Filtered & sorted contacts ─── */
   const filteredContacts = useMemo(() => {
-    let arr = [...(contacts?.contacts || [])];
+    const seg = USER_SEGMENTS.find(s => s.id === ctSegment);
+    let arr = [...allUsers];
+    if (seg && ctSegment !== 'all') arr = arr.filter(seg.filterFn);
     if (ctSearch) arr = arr.filter(c =>
       (c.phone || '').includes(ctSearch) ||
       (c.name || '').toLowerCase().includes(ctSearch.toLowerCase()) ||
@@ -615,7 +634,7 @@ export default function Analytics() {
       return ctSortDir === 'desc' ? vb - va : va - vb;
     });
     return arr;
-  }, [contacts, ctSearch, ctStatus, ctCity, ctDevice, ctMinScore, ctRepeat, ctAnon, ctLang, ctSortBy, ctSortDir]);
+  }, [allUsers, ctSegment, ctSearch, ctStatus, ctCity, ctDevice, ctMinScore, ctRepeat, ctAnon, ctLang, ctSortBy, ctSortDir, USER_SEGMENTS]);
 
   const ctHot   = (contacts?.contacts || []).filter(c => c.power_score >= 80).length;
   const ctCarts = (contacts?.contacts || []).filter(c => c.cart_events > 0).length;
@@ -928,16 +947,99 @@ export default function Analytics() {
       {/* ════════════════════ USERS ════════════════════ */}
       {tab === 'users' && !userDetail && (
         <div className="space-y-4">
-          {/* Stats */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            <StatCard label="Total Users"      value={(contacts?.total || 0).toLocaleString()} icon={Users}     color="blue"   />
-            <StatCard label="Identified"       value={(contacts?.contacts || []).filter(c => c.phone).length} icon={CheckCircle} color="green" />
-            <StatCard label="Anonymous"        value={(contacts?.contacts || []).filter(c => !c.phone).length} icon={UserCheck} color="purple" />
-            <StatCard label="Repeat Customers" value={(contacts?.contacts || []).filter(c => c.is_repeat).length} icon={Repeat} color="orange" />
+
+          {/* ── Segment Selector (Mixpanel / CleverTap style) ── */}
+          <div className="overflow-x-auto pb-1" style={{ scrollbarWidth: 'none' }}>
+            <div className="flex gap-3 min-w-max">
+              {USER_SEGMENTS.map(seg => {
+                const cnt   = allUsers.filter(seg.filterFn).length;
+                const total = allUsers.length || 1;
+                const pct   = Math.round((cnt / total) * 100);
+                const isActive = ctSegment === seg.id;
+                const Icon = seg.icon;
+                return (
+                  <button key={seg.id} onClick={() => setCtSegment(seg.id)}
+                    className="flex-shrink-0 text-left rounded-2xl p-4 transition-all"
+                    style={{
+                      minWidth: 140,
+                      background: isActive ? `${seg.color}14` : "rgba(255,255,255,0.02)",
+                      border: `1.5px solid ${isActive ? seg.color : "rgba(255,255,255,0.07)"}`,
+                      boxShadow: isActive ? `0 0 20px ${seg.color}20` : "none",
+                      transform: isActive ? "translateY(-2px)" : "none",
+                    }}>
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="w-7 h-7 rounded-lg flex items-center justify-center"
+                        style={{ background: `${seg.color}18`, border: `1px solid ${seg.color}35` }}>
+                        <Icon size={13} style={{ color: seg.color }} />
+                      </div>
+                      {isActive && (
+                        <span className="text-[8px] px-1.5 py-0.5 rounded-full font-bold uppercase tracking-wide"
+                          style={{ background: `${seg.color}20`, color: seg.color }}>Active</span>
+                      )}
+                    </div>
+                    <p className="text-xl font-bold text-white tabular-nums">{loading ? '…' : cnt.toLocaleString()}</p>
+                    <p className="text-[11px] font-semibold mt-0.5" style={{ color: isActive ? seg.color : "#94a3b8" }}>{seg.label}</p>
+                    <p className="text-[10px] mt-0.5" style={{ color: "#475569" }}>{seg.desc}</p>
+                    {/* progress bar */}
+                    <div className="mt-2.5 h-1 rounded-full overflow-hidden" style={{ background: "rgba(255,255,255,0.06)" }}>
+                      <div className="h-full rounded-full transition-all"
+                        style={{ width: `${pct}%`, background: `linear-gradient(90deg, ${seg.color}80, ${seg.color})` }} />
+                    </div>
+                    <p className="text-[9px] mt-0.5 font-mono" style={{ color: "#475569" }}>{pct}% of total</p>
+                  </button>
+                );
+              })}
+            </div>
           </div>
 
-          {/* Filters */}
-          <div className="card p-4 space-y-3">
+          {/* ── Funnel strip ── */}
+          {!loading && allUsers.length > 0 && (() => {
+            const steps = [
+              { label: 'Active',         cnt: allUsers.filter(c => c.status === 'active').length,             color: "#4ade80" },
+              { label: 'Product View',   cnt: allUsers.filter(c => c.status === 'product_view').length,       color: "#a855f7" },
+              { label: 'Cart',           cnt: allUsers.filter(c => c.status === 'abandoned_cart').length,     color: "#fb923c" },
+              { label: 'Checkout',       cnt: allUsers.filter(c => c.status === 'abandoned_checkout').length, color: "#f59e0b" },
+              { label: 'Purchased',      cnt: allUsers.filter(c => c.status === 'purchased').length,          color: "#22c55e" },
+            ];
+            const max = Math.max(...steps.map(s => s.cnt), 1);
+            return (
+              <div className="card p-4">
+                <div className="flex items-center justify-between mb-3">
+                  <h4 className="text-xs font-semibold text-white flex items-center gap-1.5">
+                    <TrendingDown size={12} style={{ color: "#fb923c" }} /> User Journey Funnel
+                  </h4>
+                  <span className="text-[10px]" style={{ color: "#475569" }}>{allUsers.length} total users</span>
+                </div>
+                <div className="flex items-end gap-2">
+                  {steps.map((s, i) => {
+                    const pct = Math.round((s.cnt / allUsers.length) * 100);
+                    const barH = Math.max(Math.round((s.cnt / max) * 64), 4);
+                    return (
+                      <button key={s.label} onClick={() => { setCtSegment('all'); setCtStatus(
+                        s.label === 'Active' ? 'active' : s.label === 'Product View' ? 'product_view' :
+                        s.label === 'Cart' ? 'abandoned_cart' : s.label === 'Checkout' ? 'abandoned_checkout' : 'purchased'
+                      ); }}
+                        className="flex-1 flex flex-col items-center gap-1 group">
+                        <span className="text-xs font-bold tabular-nums text-white">{s.cnt}</span>
+                        <div className="w-full rounded-t-lg transition-all group-hover:opacity-80"
+                          style={{ height: barH, background: `linear-gradient(180deg, ${s.color}, ${s.color}70)` }} />
+                        <span className="text-[9px] text-center leading-tight" style={{ color: "#64748b" }}>{s.label}</span>
+                        <span className="text-[9px] font-bold" style={{ color: s.color }}>{pct}%</span>
+                        {i > 0 && (
+                          <span className="text-[8px]" style={{ color: "#ef4444" }}>
+                            ↓ {Math.round((1 - s.cnt / Math.max(steps[i-1].cnt, 1)) * 100)}% drop
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })()}
+
+          {/* ── Filters ── */}
+          <div className="card p-3">
             <div className="flex flex-wrap gap-2 items-center">
               <SearchInput value={ctSearch} onChange={setCtSearch} placeholder="Name, phone, city, language…" />
               <FilterSelect value={ctStatus} onChange={setCtStatus}>
@@ -945,7 +1047,7 @@ export default function Analytics() {
                 <option value="active">🟢 Active</option>
                 <option value="product_view">🔵 Product View</option>
                 <option value="abandoned_cart">🟠 Abandoned Cart</option>
-                <option value="abandoned_checkout">🔴 Checkout Abandoned</option>
+                <option value="abandoned_checkout">🔴 Checkout Dropped</option>
                 <option value="purchased">✅ Purchased</option>
                 <option value="followup_complete">📬 Followup Complete</option>
               </FilterSelect>
@@ -968,9 +1070,9 @@ export default function Analytics() {
                 <option value="no">🆕 First-time only</option>
               </FilterSelect>
               <FilterSelect value={ctAnon} onChange={setCtAnon}>
-                <option value="">All (anon + identified)</option>
-                <option value="no">✅ Identified (has phone)</option>
-                <option value="yes">👤 Anonymous only</option>
+                <option value="">Anon + Identified</option>
+                <option value="no">✅ Has phone</option>
+                <option value="yes">👤 Anonymous</option>
               </FilterSelect>
               <FilterSelect value={ctLang} onChange={setCtLang}>
                 <option value="">All Languages</option>
@@ -988,17 +1090,17 @@ export default function Analytics() {
                   📍 {ctCity} <button onClick={() => setCtCity('')}><X size={10} /></button>
                 </span>
               )}
-              <span className="text-xs ml-auto font-semibold" style={{ color: "#475569" }}>
-                {filteredContacts.length} / {(contacts?.contacts || []).length} users
+              <span className="text-xs ml-auto font-semibold" style={{ color: "#64748b" }}>
+                <span className="text-white">{filteredContacts.length}</span> / {allUsers.length} users
               </span>
+              {(ctSearch || ctStatus !== 'all' || ctDevice || ctMinScore || ctRepeat || ctAnon || ctLang || ctCity || ctSegment !== 'all') && (
+                <button onClick={() => { setCtSearch(''); setCtStatus('all'); setCtDevice(''); setCtMinScore(''); setCtRepeat(''); setCtAnon(''); setCtLang(''); setCtCity(''); setCtSegment('all'); }}
+                  className="text-[10px] px-2 py-1 rounded-lg flex items-center gap-1"
+                  style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)', color: '#f87171' }}>
+                  <X size={9} /> Reset
+                </button>
+              )}
             </div>
-            {(ctSearch || ctStatus !== 'all' || ctDevice || ctMinScore || ctRepeat || ctAnon || ctLang || ctCity) && (
-              <button onClick={() => { setCtSearch(''); setCtStatus('all'); setCtDevice(''); setCtMinScore(''); setCtRepeat(''); setCtAnon(''); setCtLang(''); setCtCity(''); }}
-                className="text-[10px] px-2 py-1 rounded-lg flex items-center gap-1"
-                style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)', color: '#f87171' }}>
-                <X size={9} /> Clear all filters
-              </button>
-            )}
           </div>
 
           {/* Table */}
