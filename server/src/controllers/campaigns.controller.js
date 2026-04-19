@@ -182,7 +182,7 @@ export const campaignsController = {
 
       // ── Resolve linked templates ───────────────────────────────────────────
       const metaTpl = campaign.meta_template_id
-        ? (db.meta_templates || []).find(t => t.id === campaign.meta_template_id)
+        ? (db.meta_templates || []).find(t => String(t.id) === String(campaign.meta_template_id))
         : null;
 
       const templateId = (campaign.template_ids?.length > 0)
@@ -200,23 +200,22 @@ export const campaignsController = {
         } catch (_) {}
       }
 
-      // Deduplicate by phone — never send the same campaign twice to the same number
+      // Deduplicate by phone — never send the same campaign twice to the same number in one batch
       const sentPhones = new Set();
       let sent = 0;
+      let skipped = 0;
+      const errors = [];
 
       for (const target of targetEvents) {
         if (!target.phone) continue;
         if (sentPhones.has(target.phone)) continue;
         sentPhones.add(target.phone);
-        // Rate-limit: skip if sent within last hour for non-cart campaigns
-        if (campaign.campaign_type !== 'abandoned_cart' && target.whatsapp_sent_at) {
-          const hoursSince = (Date.now() - new Date(target.whatsapp_sent_at).getTime()) / 3600000;
-          if (hoursSince < 1) continue;
-        }
 
+        // Language: use campaign setting → template's own language → 'en' fallback
+        const tplLang = metaTpl?.language || 'en';
         const userLang = campaign.target_language === 'per_user'
-          ? (target.language || 'en')
-          : (campaign.target_language || 'en');
+          ? (target.language || tplLang)
+          : (campaign.target_language || tplLang);
         const metaLangCode = LANG_MAP[userLang] || userLang;
 
         let wamid = null;
@@ -243,12 +242,21 @@ export const campaignsController = {
               ).join('\n')
             : `[Template: ${metaTpl.name}]`;
 
+          let sendOk = false;
           try {
             const result = await whatsappService.sendTemplateMessage(target.phone, sendPayload);
             wamid = result.messageId || null;
+            sendOk = !!wamid;
+            if (!sendOk) {
+              const errMsg = `Meta returned no wamid for ${target.phone}`;
+              console.error('[Campaign]', errMsg);
+              errors.push(errMsg);
+            }
           } catch (e) {
             console.error('[Campaign] Meta template send error:', e.message);
+            errors.push(`${target.phone}: ${e.message}`);
           }
+          if (!sendOk) { skipped++; continue; }
 
         // ── PATH B: Regular text/template message ─────────────────────────────
         } else {
@@ -278,13 +286,17 @@ export const campaignsController = {
           for (const [k, v] of Object.entries(variables)) {
             resolvedText = resolvedText.replace(new RegExp(`\\{\\{${k}\\}\\}`, 'g'), v);
           }
+          let sendOk = false;
           try {
             const result = await whatsappService.sendMessage(target.phone, [{ type: 'body', text: sanitizeMetaText(baseText) }], variables);
             wamid = result.messageId || null;
             resolvedText = result.resolvedText || resolvedText;
+            sendOk = !!wamid;
           } catch (e) {
             console.error('[Campaign] Send error:', e.message);
+            errors.push(`${target.phone}: ${e.message}`);
           }
+          if (!sendOk) { skipped++; continue; }
         }
 
         saveChatMessage(db, target.phone, resolvedText, channelId, {
@@ -319,7 +331,7 @@ export const campaignsController = {
       campaign.last_run_at = new Date().toISOString();
       db.save();
 
-      res.json({ success: true, sent });
+      res.json({ success: true, sent, skipped, errors: errors.length ? errors : undefined });
     } catch (error) {
       next(error);
     }
