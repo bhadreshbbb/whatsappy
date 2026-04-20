@@ -86,6 +86,38 @@ function buildBodyExample(text, varMap, exampleValues = {}) {
 }
 
 /**
+ * For NAMED parameter format:
+ * - Derive a clean param name for each {{N}} variable:
+ *   uses variable_labels value if set, else falls back to "param_N"
+ * - Returns { nameFor, namedBody } where:
+ *   nameFor(v) → param name string
+ *   namedBody  → body text with {{N}} replaced by {{param_name}}
+ */
+function buildNamedParams(text, varMap, exampleValues = {}) {
+  const vars = [...new Set([...(text || '').matchAll(/\{\{(\d+)\}\}/g)].map(m => m[1]))].sort((a,b)=>+a-+b);
+  if (!vars.length) return { namedBody: text, params: [] };
+
+  // param name: label (snake_case) or "param_N"
+  const nameFor = v => {
+    const label = (varMap || {})[String(v)];
+    if (label && label !== 'custom') return label.replace(/\s+/g, '_').toLowerCase();
+    const custom = (varMap || {})[`${v}_custom`];
+    if (custom) return custom.replace(/\W+/g, '_').toLowerCase().slice(0, 30);
+    return `param_${v}`;
+  };
+
+  let namedBody = text;
+  const params = vars.map(v => {
+    const name = nameFor(v);
+    namedBody = namedBody.replace(new RegExp(`\\{\\{${v}\\}\\}`, 'g'), `{{${name}}}`);
+    const example = sanitizeVarValue(String(exampleValues[v] || '').trim() || getVarExample(v, varMap));
+    return { param_name: name, example };
+  });
+
+  return { namedBody, params };
+}
+
+/**
  * Build URL button example for Meta.
  * Meta format: example = ["slug-val"]  — just the variable VALUE, not the full URL.
  * e.g.  url: "https://store.com/{{1}}"  →  example: ["blue-cotton-kurti"]
@@ -196,7 +228,9 @@ function buildMetaComponents(tpl, { preserveVarNumbers = false } = {}) {
     return components;
   }
 
-  // ── STANDARD template ────────────────────────────────────────────────────────
+  // ── STANDARD (single product) template — uses NAMED parameter format ─────────
+
+  const exVals = Array.isArray(tpl.example_values) ? {} : (tpl.example_values || {});
 
   if (tpl.header_type === 'IMAGE') {
     const headerComp = { type: 'HEADER', format: 'IMAGE' };
@@ -212,22 +246,20 @@ function buildMetaComponents(tpl, { preserveVarNumbers = false } = {}) {
 
   if (tpl.body?.trim()) {
     const cleanBody = sanitizeMetaText(tpl.body);
-    const comp = { type: 'BODY', text: cleanBody };
-    const exVals = Array.isArray(tpl.example_values) ? {} : (tpl.example_values || {});
-    const ex = buildBodyExample(cleanBody, stdVarMap, exVals);
-    if (ex) comp.example = ex;
+    const { namedBody, params } = buildNamedParams(cleanBody, stdVarMap, exVals);
+    const comp = { type: 'BODY', text: namedBody };
+    if (params.length) comp.example = { body_text_named_params: params };
     components.push(comp);
   }
 
   if (tpl.footer?.trim()) components.push({ type: 'FOOTER', text: sanitizeMetaText(tpl.footer) });
 
   if (tpl.buttons?.length) {
-    const exVals = Array.isArray(tpl.example_values) ? {} : (tpl.example_values || {});
     const buttons = tpl.buttons.map(b => {
       const bType = String(b.type || '').toUpperCase();
       if (bType === 'URL') {
         const btn = { type: 'URL', text: b.text, url: b.url };
-        // Button URL {{1}} is button-scoped — use btn_1 example key to avoid collision with body {{1}}
+        // Button URL {{1}} is button-scoped — use btn_1 example key
         const btnExVals = { '1': exVals['btn_1'] || exVals['4'] || 'product-slug' };
         const ex = buildUrlExample(b.url, stdVarMap, btnExVals);
         if (ex) btn.example = ex;
@@ -1286,8 +1318,11 @@ export async function createTemplate(req, res) {
       const langMap = { en: 'en_US', hi: 'hi', gu: 'gu', ta: 'ta', te: 'te', mr: 'mr', bn: 'bn', ar: 'ar', ur: 'ur' };
       const payload = {
         name: cleanName,
-        category: (tpl.category || 'MARKETING').toUpperCase(),  // Meta requires UPPERCASE: "MARKETING", "UTILITY"
+        category: (tpl.category || 'MARKETING').toUpperCase(),
         language: langMap[tpl.language] || tpl.language,
+        // Non-carousel single product uses NAMED params ({{param_name}} in body)
+        // Carousel uses POSITIONAL ({{1}}, {{2}} per card)
+        ...(is_carousel ? {} : { parameter_format: 'NAMED' }),
         components,
       };
 
