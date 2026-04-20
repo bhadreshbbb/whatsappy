@@ -71,6 +71,23 @@ const BLANK_TPL = {
   carousel_cards: [{ ...BLANK_CARD }, { ...BLANK_CARD }],
 };
 
+// Single product template (non-carousel) — custom name, one image, body + buttons
+const BLANK_SINGLE_TPL = {
+  name: '', category: 'MARKETING', language: 'en',
+  is_carousel: false, auto_product_mode: false,
+  header_type: 'IMAGE', header_text: '',
+  header_image_id: '', header_image_url: '',
+  body: 'Hi {{1}}! 👋\n\nYou recently viewed *{{2}}* on our store.\n\n💰 Price: {{3}}\n\nDon\'t let it slip away — limited stock! 🛍️',
+  footer: 'Reply STOP to unsubscribe',
+  buttons: [
+    { type: 'URL',         text: 'View Product 🛍️', url: 'https://yourstore.com/products/{{4}}' },
+    { type: 'QUICK_REPLY', text: 'Not Interested' },
+  ],
+  variable_labels: { '1': 'customer_name', '2': 'product_title', '3': 'product_price', '4': 'product_link' },
+  example_values:  { '1': 'Priya', '2': 'Blue Cotton Kurti', '3': '₹799', '4': 'blue-cotton-kurti' },
+  carousel_cards: [],
+};
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Utility: extract {{N}} variable numbers from text, sorted
 function extractVars(text) {
@@ -213,7 +230,8 @@ export default function Templates() {
     loadGallery();
     setView('config');
   }
-  function openCreate() { setView('create'); setError(''); setForm(BLANK_TPL); loadGallery(); }
+  function openCreate()       { setView('create'); setError(''); setForm({ ...BLANK_TPL });        loadGallery(); }
+  function openCreateSingle() { setView('create'); setError(''); setForm({ ...BLANK_SINGLE_TPL }); loadGallery(); }
   function copyName(name) { navigator.clipboard.writeText(name); setCopied(name); setTimeout(()=>setCopied(null),1500); }
 
   async function checkSendPayload(tpl) {
@@ -274,10 +292,19 @@ export default function Templates() {
           <h1 className="text-white text-xl font-bold">Meta Templates</h1>
           <p className="text-slate-400 text-sm mt-0.5">Create, submit for approval, assign products, send campaigns</p>
         </div>
-        <button onClick={openCreate}
-          className="flex items-center gap-2 bg-green-600 hover:bg-green-500 text-white px-4 py-2 rounded-xl text-sm font-medium transition-all">
-          <Plus size={16} /> New Template
-        </button>
+        <div className="flex items-center gap-2">
+          <button onClick={openCreateSingle}
+            className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium transition-all"
+            style={{ background: 'rgba(99,102,241,0.15)', border: '1px solid rgba(99,102,241,0.3)', color: '#818cf8' }}
+            onMouseEnter={e => e.currentTarget.style.background='rgba(99,102,241,0.25)'}
+            onMouseLeave={e => e.currentTarget.style.background='rgba(99,102,241,0.15)'}>
+            <Image size={15} /> Custom Single Product
+          </button>
+          <button onClick={openCreate}
+            className="flex items-center gap-2 bg-green-600 hover:bg-green-500 text-white px-4 py-2 rounded-xl text-sm font-medium transition-all">
+            <Plus size={16} /> New Carousel
+          </button>
+        </div>
       </div>
 
       {error && <ErrorBar msg={error} onClose={() => setError('')} />}
@@ -739,7 +766,99 @@ function CreateView({ form, setForm, error, setError, loading, onSubmit, onBack,
             </div>
           </div>
 
+          {/* ── SINGLE PRODUCT TEMPLATE FORM ──────────────────────── */}
+          {!form.is_carousel && (<>
+            {/* Header Image */}
+            <div className="flex flex-col gap-2">
+              <label className="text-slate-400 text-xs font-medium">Header Image <span className="text-slate-600">(upload via Meta or gallery)</span></label>
+              <input value={form.header_image_url || ''} onChange={e => f('header_image_url', e.target.value)}
+                placeholder="https://cdn.example.com/product.jpg  (or leave blank — upload manually in Meta)" className="input text-sm font-mono" />
+              <p className="text-slate-600 text-[10px]">You can also upload the image manually inside Meta Business Manager after creating the template.</p>
+            </div>
+
+            {/* Body */}
+            <div className="flex flex-col gap-2">
+              <div className="flex items-center justify-between">
+                <label className="text-slate-400 text-xs font-medium">Body Text <span className="text-orange-400/70">* required</span></label>
+                <button onClick={() => {
+                  const vars = extractVars(form.body);
+                  const next = vars.length ? Math.max(...vars.map(Number)) + 1 : 1;
+                  f('body', form.body + ` {{${next}}}`);
+                }} className="var-btn">+ Var</button>
+              </div>
+              <textarea value={form.body} onChange={e => f('body', e.target.value)} rows={5}
+                className="input text-sm font-mono resize-y" style={{ minHeight: 100 }} />
+            </div>
+
+            {/* Variable mapping */}
+            {extractVars(form.body).length > 0 && (
+              <div className="flex flex-col gap-2">
+                <label className="text-slate-400 text-xs font-medium">Variable Mapping</label>
+                <div className="rounded-xl overflow-hidden" style={{ border: '1px solid rgba(255,255,255,0.08)' }}>
+                  {extractVars(form.body).map((v, i) => (
+                    <div key={v} className={`flex items-center gap-3 px-3 py-2 ${i > 0 ? 'border-t border-white/5' : ''}`}>
+                      <span className="text-xs font-mono text-purple-400 w-8 shrink-0">{`{{${v}}}`}</span>
+                      <select value={form.variable_labels?.[v] || 'custom'}
+                        onChange={e => f('variable_labels', { ...(form.variable_labels||{}), [v]: e.target.value })}
+                        className="input text-xs flex-1">
+                        {VAR_FIELD_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                      </select>
+                      <input value={form.example_values?.[v] || ''}
+                        onChange={e => f('example_values', { ...(form.example_values||{}), [v]: e.target.value })}
+                        placeholder="Example value" className="input text-xs w-40 shrink-0" />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Footer */}
+            <div className="flex flex-col gap-1.5">
+              <label className="text-slate-400 text-xs font-medium">Footer</label>
+              <input value={form.footer} onChange={e => f('footer', e.target.value)}
+                placeholder="Reply STOP to unsubscribe" className="input text-sm" />
+            </div>
+
+            {/* Buttons */}
+            <div className="flex flex-col gap-2">
+              <div className="flex items-center justify-between">
+                <label className="text-slate-400 text-xs font-medium">Buttons <span className="text-slate-600">(max 3)</span></label>
+                <div className="flex gap-1.5">
+                  {(form.buttons||[]).length < 3 && (<>
+                    <button onClick={() => f('buttons', [...(form.buttons||[]), { type:'URL', text:'View Product', url:'https://yourstore.com/products/' }])}
+                      className="var-btn flex items-center gap-1"><Link size={10}/> URL</button>
+                    <button onClick={() => f('buttons', [...(form.buttons||[]), { type:'QUICK_REPLY', text:'Not Interested' }])}
+                      className="var-btn flex items-center gap-1"><MessageSquare size={10}/> Quick Reply</button>
+                    <button onClick={() => f('buttons', [...(form.buttons||[]), { type:'PHONE_NUMBER', text:'Call Us', phone_number:'+91XXXXXXXXXX' }])}
+                      className="var-btn flex items-center gap-1"><Phone size={10}/> Phone</button>
+                  </>)}
+                </div>
+              </div>
+              {(form.buttons||[]).map((btn, bi) => (
+                <div key={bi} className="flex items-center gap-2 px-3 py-2 rounded-xl" style={{ background:'rgba(255,255,255,0.03)', border:'1px solid rgba(255,255,255,0.08)' }}>
+                  <span className="text-[10px] px-1.5 py-0.5 rounded font-bold shrink-0"
+                    style={{ background: btn.type==='URL'?'rgba(59,130,246,0.15)':btn.type==='QUICK_REPLY'?'rgba(34,197,94,0.12)':'rgba(251,146,60,0.12)',
+                             color: btn.type==='URL'?'#60a5fa':btn.type==='QUICK_REPLY'?'#4ade80':'#fb923c' }}>
+                    {btn.type}
+                  </span>
+                  <input value={btn.text} onChange={e => { const bs=[...form.buttons]; bs[bi]={...bs[bi],text:e.target.value}; f('buttons',bs); }}
+                    placeholder="Button label" className="input text-xs flex-1" />
+                  {btn.type === 'URL' && (
+                    <input value={btn.url||''} onChange={e => { const bs=[...form.buttons]; bs[bi]={...bs[bi],url:e.target.value}; f('buttons',bs); }}
+                      placeholder="https://yourstore.com/..." className="input text-xs flex-1 font-mono" />
+                  )}
+                  {btn.type === 'PHONE_NUMBER' && (
+                    <input value={btn.phone_number||''} onChange={e => { const bs=[...form.buttons]; bs[bi]={...bs[bi],phone_number:e.target.value}; f('buttons',bs); }}
+                      placeholder="+91XXXXXXXXXX" className="input text-xs w-36 font-mono" />
+                  )}
+                  <button onClick={() => f('buttons', form.buttons.filter((_,i)=>i!==bi))} className="p-1 hover:text-red-400 text-slate-500 transition-all shrink-0"><X size={13}/></button>
+                </div>
+              ))}
+            </div>
+          </>)}
+
           {/* ── CAROUSEL PRODUCT TEMPLATE ─────────────────────────── */}
+          {form.is_carousel && (<>
           {/* Auto-product mode toggle */}
           <div className={`rounded-xl px-4 py-3 border transition-all ${form.auto_product_mode ? 'bg-orange-500/10 border-orange-500/30' : 'bg-white/[0.02] border-white/10'}`}>
             <div className="flex items-center justify-between">
@@ -876,6 +995,8 @@ function CreateView({ form, setForm, error, setError, loading, onSubmit, onBack,
             </>
           )}
 
+          </>)}
+          {/* ── Action Buttons ──────────────────────────────────────── */}
           <div className="flex gap-3 pt-2 border-t border-white/10 flex-wrap">
             <button onClick={onBack} className="px-5 py-2 rounded-xl bg-white/5 hover:bg-white/10 text-slate-300 text-sm transition-all">Cancel</button>
             <button onClick={checkPayload} disabled={payloadLoading}
