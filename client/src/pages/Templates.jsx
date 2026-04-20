@@ -885,7 +885,7 @@ function CreateView({ form, setForm, error, setError, loading, onSubmit, onBack,
                       {hdrScrapeImages.slice(0, 8).map((img, i) => (
                         <div key={i} className="relative group cursor-pointer rounded-lg overflow-hidden aspect-square bg-white/5 border border-white/10 hover:border-blue-500/50 transition-all"
                           onClick={() => uploadHeaderImage(img)}>
-                          <img src={img} alt="" className="w-full h-full object-cover" onError={e => e.target.style.display='none'}/>
+                          <img src={proxyUrl(img)} alt="" className="w-full h-full object-cover" onError={e => e.target.style.display='none'}/>
                           {hdrUploading && <div className="absolute inset-0 bg-black/60 flex items-center justify-center"><Loader2 size={16} className="animate-spin text-white"/></div>}
                           <div className="absolute inset-0 bg-blue-500/20 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-all">
                             <span className="text-white text-[10px] font-medium bg-blue-600/80 px-2 py-0.5 rounded-full">Select</span>
