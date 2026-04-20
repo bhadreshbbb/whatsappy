@@ -501,42 +501,52 @@ export async function buildAutoProductCards(channelId, cleanName, count = 4, off
 
   // ── Step 3: Build candidates list ─────────────────────────────────────────────
   // Primary: analytics/pages product URLs (most-viewed first)
-  // Fallback: product_catalog items (when page_views is empty — e.g. tracker not yet installed)
+  // Always supplement with product_catalog so we reach COUNT even with sparse traffic
   let candidates = [];
-  if (analyticsPages.length > 0) {
-    candidates = analyticsPages.map(p => {
-      const cat = catalogMap[p.url] || {};
-      return { url: p.url, name: cat.name || p.title || '', price: cat.price || '', image: cat.image || '', views: p.views, _from_analytics: true };
-    });
-  } else {
-    // Fallback: use product_catalog ranked by cart frequency, then Shopify API
-    console.log(`[AutoCards] page_views empty — falling back to product_catalog + Shopify API`);
+
+  // Analytics-sourced candidates
+  const analyticsCandidates = analyticsPages.map(p => {
+    const cat = catalogMap[p.url] || {};
+    return { url: p.url, name: cat.name || p.title || '', price: cat.price || '', image: cat.image || '', views: p.views, _from_analytics: true };
+  });
+
+  // Catalog candidates (already stored products in settings — always include as supplement)
+  const seenUrls = new Set(analyticsCandidates.map(c => c.url));
+  const catalogCandidates = (db.product_catalog || [])
+    .filter(c => c.channel_id === channelId && c.url && !seenUrls.has(c.url))
+    .map(c => ({ url: c.url, name: c.name || '', price: c.price || '', image: c.image || '', views: 0, _from_catalog: true }));
+
+  candidates = [...analyticsCandidates, ...catalogCandidates];
+
+  // If still not enough, try Shopify API to pull more products
+  if (candidates.length < COUNT) {
+    console.log(`[AutoCards] Only ${candidates.length} candidates — trying Shopify API for more`);
     const shopUrl = getShopUrl(db, channelId) || inferStoreBaseUrl(db);
     if (shopUrl) {
       try {
         const shopifyProducts = await fetchShopifyProducts(shopUrl, 50);
         const seededAt = new Date().toISOString();
+        const shopifyUrls = new Set(candidates.map(c => c.url));
         for (const sp of shopifyProducts) {
           const ei = db.product_catalog.findIndex(c => c.url === sp.url);
           const entry = { channel_id: channelId, name: sp.name, url: sp.url, price: sp._price, image: sp.image, _seeded_at: seededAt };
           if (ei >= 0) db.product_catalog[ei] = { ...db.product_catalog[ei], ...entry };
           else db.product_catalog.push(entry);
           catalogMap[sp.url] = entry;
+          if (!shopifyUrls.has(sp.url)) {
+            candidates.push({ url: sp.url, name: sp.name, price: sp._price, image: sp.image, views: 0, _shopify: true });
+            shopifyUrls.add(sp.url);
+          }
         }
         db.save();
-        console.log(`[AutoCards] Shopify fallback: ${shopifyProducts.length} products loaded`);
-        candidates = shopifyProducts.map(sp => ({ url: sp.url, name: sp.name, price: sp._price, image: sp.image, views: 0, _shopify: true, _title: sp.name, _imageUrl: sp.image }));
+        console.log(`[AutoCards] Shopify supplement: +${shopifyProducts.length} products`);
       } catch (e) {
-        console.warn(`[AutoCards] Shopify fallback failed: ${e.message}`);
+        console.warn(`[AutoCards] Shopify supplement failed: ${e.message}`);
       }
     }
-    if (candidates.length === 0) {
-      // Last resort: use whatever is in product_catalog
-      candidates = (db.product_catalog || [])
-        .filter(c => c.channel_id === channelId && c.url && c.image)
-        .map(c => ({ url: c.url, name: c.name || '', price: c.price || '', image: c.image || '', views: 0 }));
-    }
   }
+
+  console.log(`[AutoCards] ${analyticsCandidates.length} from analytics + ${catalogCandidates.length} from catalog = ${candidates.length} total candidates`);
 
   // Limit pool to top 50 (sorted by views: top → medium → low)
   const MAX_POOL = 50;
