@@ -471,32 +471,53 @@ export const trackingController = {
 
   _markRecovered(db, channelId, sessionId, phone) {
     const cid = channelId || 'demo';
+    const now = new Date().toISOString();
+
+    // Mark all matching cart events as recovered
     db.cart_events.forEach(c => {
       if (c.channel_id === cid && (c.session_id === sessionId || (phone && c.phone === phone))) {
         if (!c.recovered) {
-          c.recovered = 1;
-          c.recovered_at = new Date().toISOString();
+          c.recovered    = 1;
+          c.recovered_at = now;
         }
       }
     });
 
-    // Update visitor status
-    const vIdx = db.website_visitors.findIndex(v => v.channel_id === cid && (v.session_id === sessionId || (phone && v.phone === phone)));
+    // Update visitor: status → purchased + purchase tracking fields
+    const vIdx = db.website_visitors.findIndex(v =>
+      v.channel_id === cid && (v.session_id === sessionId || (phone && v.phone === phone))
+    );
+
     if (vIdx >= 0) {
-      upgradeStatus(db.website_visitors[vIdx], 'purchased');
+      const v = db.website_visitors[vIdx];
+
+      // Increment purchase_count (exact number of purchases this user made)
+      const newCount = (v.purchase_count || 0) + 1;
+      v.purchase_count       = newCount;
+      v.last_purchased_at    = now;
+      // is_repeat_purchaser = true from 2nd purchase onwards
+      if (newCount >= 2) v.is_repeat_purchaser = true;
+
+      console.log(`[Purchase] ${phone || sessionId} — purchase_count=${newCount}${newCount >= 2 ? ' (repeat purchaser)' : ''}`);
+
+      // Upgrade status to purchased (also resets funnel_cycle if coming from a re-entry)
+      upgradeStatus(v, 'purchased');
     } else {
-      // Create minimal visitor record for the purchase so dashboard shows it
-      const now = new Date().toISOString();
+      // Create minimal visitor record so dashboard shows the purchase
       db.website_visitors.push({
-        id:        (db.website_visitors.length || 0) + 1,
-        channel_id: cid,
-        session_id: sessionId,
-        phone:     phone || null,
-        status:    'purchased',
-        page_views: 1,
-        visited_at: now,
-        created_at: now,
-        updated_at: now,
+        id:                   (db.website_visitors.length || 0) + 1,
+        channel_id:           cid,
+        session_id:           sessionId,
+        phone:                phone || null,
+        status:               'purchased',
+        purchase_count:       1,
+        last_purchased_at:    now,
+        is_repeat_purchaser:  false,
+        funnel_cycle:         1,
+        page_views:           1,
+        visited_at:           now,
+        created_at:           now,
+        updated_at:           now,
       });
     }
   },
@@ -544,11 +565,25 @@ export const trackingController = {
       // ── Store on visitor record for campaign variables ──
       const vIdx = db.website_visitors.findIndex(v => v.channel_id === cid && v.session_id === sessionId);
       if (vIdx >= 0) {
-        db.website_visitors[vIdx].last_product_name  = product_name  || db.website_visitors[vIdx].last_product_name;
-        db.website_visitors[vIdx].last_product_image = product_image || db.website_visitors[vIdx].last_product_image;
-        db.website_visitors[vIdx].last_product_url   = product_url   || db.website_visitors[vIdx].last_product_url;
-        db.website_visitors[vIdx].last_product_price = product_price || db.website_visitors[vIdx].last_product_price;
-        upgradeStatus(db.website_visitors[vIdx], 'product_view');
+        const v = db.website_visitors[vIdx];
+        v.last_product_name  = product_name  || v.last_product_name;
+        v.last_product_image = product_image || v.last_product_image;
+        v.last_product_url   = product_url   || v.last_product_url;
+        v.last_product_price = product_price || v.last_product_price;
+
+        // Only upgrade to product_view if user has NO active cart items.
+        // abandoned_cart (level 3) already blocks product_view (level 2) via upgradeStatus,
+        // but we check explicitly here to log clearly when it's blocked.
+        const hasActiveCart = db.cart_events.some(c =>
+          c.channel_id === cid &&
+          (c.session_id === sessionId || (v.phone && c.phone === v.phone)) &&
+          !c.recovered
+        );
+        if (hasActiveCart) {
+          console.log(`[Status] product_view blocked for ${v.phone || sessionId} — active cart exists, keeping abandoned_cart`);
+        } else {
+          upgradeStatus(v, 'product_view');
+        }
       } else {
         // ── CREATE visitor on-the-fly when product event arrives before trackVisitor ──
         const now = new Date().toISOString();
