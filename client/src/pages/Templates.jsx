@@ -523,8 +523,6 @@ function CreateView({ form, setForm, error, setError, loading, onSubmit, onBack,
   const [hdrScraping, setHdrScraping]     = useState(false);
   const [hdrScrapeImages, setHdrScrapeImages] = useState([]);
   const [hdrScrapeErr, setHdrScrapeErr]   = useState('');
-  const [hdrUploading, setHdrUploading]   = useState(false);
-  const [hdrUploadErr, setHdrUploadErr]   = useState('');
 
   async function scrapeHeaderImages() {
     if (!hdrScrapeUrl.trim()) return;
@@ -543,20 +541,10 @@ function CreateView({ form, setForm, error, setError, loading, onSubmit, onBack,
     finally { setHdrScraping(false); }
   }
 
-  async function uploadHeaderImage(imageUrl) {
-    setHdrUploading(true); setHdrUploadErr('');
-    try {
-      const res = await fetch(`${GALLERY_API}/import-url`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...CH() },
-        body: JSON.stringify({ image_url: imageUrl }),
-      });
-      const d = await res.json();
-      if (d.error) throw new Error(d.error);
-      f('header_image_id', d.image.id);
-      f('header_image_url', imageUrl);
-    } catch (e) { setHdrUploadErr(e.message); }
-    finally { setHdrUploading(false); }
+  function uploadHeaderImage(imageUrl) {
+    // Just store the URL — server uploads to Meta at template creation time
+    f('header_image_url', imageUrl);
+    f('header_image_id', '');
   }
 
   // Bulk upload all auto-fetched images to gallery (gives each card a header_media_id)
@@ -886,26 +874,30 @@ function CreateView({ form, setForm, error, setError, loading, onSubmit, onBack,
                         <div key={i} className="relative group cursor-pointer rounded-lg overflow-hidden aspect-square bg-white/5 border border-white/10 hover:border-blue-500/50 transition-all"
                           onClick={() => uploadHeaderImage(img.url || img)}>
                           <img src={proxyUrl(img.url || img)} alt={img.alt || ''} className="w-full h-full object-cover" onError={e => e.target.style.display='none'}/>
-                          {hdrUploading && <div className="absolute inset-0 bg-black/60 flex items-center justify-center"><Loader2 size={16} className="animate-spin text-white"/></div>}
-                          <div className="absolute inset-0 bg-blue-500/20 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-all">
+<div className="absolute inset-0 bg-blue-500/20 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-all">
                             <span className="text-white text-[10px] font-medium bg-blue-600/80 px-2 py-0.5 rounded-full">Select</span>
                           </div>
                         </div>
                       ))}
                     </div>
                   )}
-                  {hdrUploadErr && <p className="text-red-400 text-xs">{hdrUploadErr}</p>}
                 </div>
               )}
 
               {/* Preview of selected image */}
-              {form.header_image_id && (
+              {(form.header_image_id || form.header_image_url) && (
                 <div className="flex items-center gap-3 p-2 bg-green-500/10 border border-green-500/20 rounded-xl">
-                  <img src={`/api/gallery/images/${form.header_image_id}/preview`} alt="Header"
+                  <img
+                    src={form.header_image_id
+                      ? `/api/gallery/images/${form.header_image_id}/preview`
+                      : proxyUrl(form.header_image_url)}
+                    alt="Header"
                     className="w-14 h-14 rounded-lg object-cover border border-white/10" />
                   <div className="flex-1 min-w-0">
                     <p className="text-green-400 text-xs font-medium">Header image selected</p>
-                    <p className="text-slate-500 text-[10px] truncate">ID: {form.header_image_id}</p>
+                    <p className="text-slate-500 text-[10px] truncate">
+                      {form.header_image_id ? `Gallery ID: ${form.header_image_id}` : 'Will upload to Meta on creation'}
+                    </p>
                   </div>
                   <button onClick={() => { f('header_image_id', ''); f('header_image_url', ''); }}
                     className="text-slate-500 hover:text-red-400 transition-colors">
