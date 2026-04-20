@@ -438,8 +438,27 @@ export default function Templates() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SUCCESS VIEW — shown after template created
-function SuccessView({ tpl, onPreview, onDone, onConfigure }) {
+// SUCCESS VIEW — shown after template created, with live status polling
+const TERMINAL_STATUSES = ['APPROVED', 'REJECTED', 'SUBMIT_ERROR'];
+function SuccessView({ tpl: initialTpl, onPreview, onDone, onConfigure }) {
+  const [tpl, setTpl] = useState(initialTpl);
+
+  useEffect(() => {
+    if (TERMINAL_STATUSES.includes(tpl.meta_status)) return;
+    const interval = setInterval(async () => {
+      try {
+        const d = await api(`/${tpl.id}/refresh`);
+        if (d.template) {
+          setTpl(d.template);
+          if (TERMINAL_STATUSES.includes(d.template.meta_status)) clearInterval(interval);
+        }
+      } catch { /* ignore polling errors */ }
+    }, 3000);
+    return () => clearInterval(interval);
+  }, [tpl.id, tpl.meta_status]);
+
+  const isPolling = !TERMINAL_STATUSES.includes(tpl.meta_status);
+
   return (
     <div className="flex flex-col items-center justify-center py-16 gap-6 max-w-lg mx-auto text-center">
       <div className="w-16 h-16 rounded-full bg-green-500/20 flex items-center justify-center">
@@ -454,13 +473,17 @@ function SuccessView({ tpl, onPreview, onDone, onConfigure }) {
       </div>
 
       <div className={`w-full rounded-2xl border p-4 text-sm flex items-center gap-3 ${
-        tpl.meta_status === 'APPROVED' ? 'bg-green-500/10 border-green-500/20 text-green-400' :
-        tpl.meta_status === 'PENDING'  ? 'bg-yellow-500/10 border-yellow-500/20 text-yellow-400' :
+        tpl.meta_status === 'APPROVED'     ? 'bg-green-500/10 border-green-500/20 text-green-400' :
+        tpl.meta_status === 'PENDING'      ? 'bg-yellow-500/10 border-yellow-500/20 text-yellow-400' :
         tpl.meta_status === 'SUBMIT_ERROR' ? 'bg-red-500/10 border-red-500/20 text-red-400' :
+        tpl.meta_status === 'REJECTED'     ? 'bg-red-500/10 border-red-500/20 text-red-400' :
         'bg-slate-500/10 border-slate-500/20 text-slate-400'
       }`}>
-        <AlertCircle size={16} className="shrink-0" />
+        {isPolling
+          ? <Loader2 size={16} className="shrink-0 animate-spin" />
+          : <AlertCircle size={16} className="shrink-0" />}
         <span>Status: <strong>{tpl.meta_status}</strong> {tpl.meta_error && `— ${tpl.meta_error}`}</span>
+        {isPolling && <span className="text-xs opacity-60 ml-auto">checking…</span>}
       </div>
 
       <div className="flex gap-3 flex-wrap justify-center">
@@ -492,6 +515,49 @@ function CreateView({ form, setForm, error, setError, loading, onSubmit, onBack,
   const [payloadLoading, setPayloadLoading] = useState(false);
   const [bulkCapturing, setBulkCapturing] = useState(false);
   const [bulkCaptureStatus, setBulkCaptureStatus] = useState(''); // status message
+
+  // Single product template header image picker state
+  const [hdrTab, setHdrTab]               = useState('gallery'); // 'gallery' | 'scrape'
+  const [hdrGalleryFolder, setHdrGalleryFolder] = useState('');
+  const [hdrScrapeUrl, setHdrScrapeUrl]   = useState('');
+  const [hdrScraping, setHdrScraping]     = useState(false);
+  const [hdrScrapeImages, setHdrScrapeImages] = useState([]);
+  const [hdrScrapeErr, setHdrScrapeErr]   = useState('');
+  const [hdrUploading, setHdrUploading]   = useState(false);
+  const [hdrUploadErr, setHdrUploadErr]   = useState('');
+
+  async function scrapeHeaderImages() {
+    if (!hdrScrapeUrl.trim()) return;
+    setHdrScraping(true); setHdrScrapeErr(''); setHdrScrapeImages([]);
+    try {
+      const res = await fetch(`${BASE}/scrape-product`, {
+        method: 'POST',
+        headers: { ...CH(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: hdrScrapeUrl.trim() }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Scrape failed');
+      setHdrScrapeImages(data.images || []);
+      if (!data.images?.length) setHdrScrapeErr('No images found at that URL');
+    } catch (e) { setHdrScrapeErr(e.message); }
+    finally { setHdrScraping(false); }
+  }
+
+  async function uploadHeaderImage(imageUrl) {
+    setHdrUploading(true); setHdrUploadErr('');
+    try {
+      const res = await fetch(`${GALLERY_API}/import-url`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...CH() },
+        body: JSON.stringify({ image_url: imageUrl }),
+      });
+      const d = await res.json();
+      if (d.error) throw new Error(d.error);
+      f('header_image_id', d.image.id);
+      f('header_image_url', imageUrl);
+    } catch (e) { setHdrUploadErr(e.message); }
+    finally { setHdrUploading(false); }
+  }
 
   // Bulk upload all auto-fetched images to gallery (gives each card a header_media_id)
   async function captureAllImages() {
@@ -770,10 +836,83 @@ function CreateView({ form, setForm, error, setError, loading, onSubmit, onBack,
           {!form.is_carousel && (<>
             {/* Header Image */}
             <div className="flex flex-col gap-2">
-              <label className="text-slate-400 text-xs font-medium">Header Image <span className="text-slate-600">(upload via Meta or gallery)</span></label>
-              <input value={form.header_image_url || ''} onChange={e => f('header_image_url', e.target.value)}
-                placeholder="https://cdn.example.com/product.jpg  (or leave blank — upload manually in Meta)" className="input text-sm font-mono" />
-              <p className="text-slate-600 text-[10px]">You can also upload the image manually inside Meta Business Manager after creating the template.</p>
+              <label className="text-slate-400 text-xs font-medium">Header Image</label>
+
+              {/* Tab switcher */}
+              <div className="flex gap-1 p-1 bg-white/5 rounded-xl w-fit">
+                {[['gallery','Gallery'],['scrape','Scrape from URL']].map(([key,label]) => (
+                  <button key={key} onClick={() => setHdrTab(key)}
+                    className={`px-3 py-1 rounded-lg text-xs font-medium transition-all ${hdrTab === key ? 'bg-white/10 text-white' : 'text-slate-400 hover:text-slate-300'}`}>
+                    {label}
+                  </button>
+                ))}
+              </div>
+
+              {/* Gallery tab */}
+              {hdrTab === 'gallery' && (
+                <div className="rounded-xl border border-white/8 overflow-hidden">
+                  <InlineGalleryPicker
+                    galleries={galleries}
+                    galleryImages={galleryImages}
+                    selectedId={form.header_image_id}
+                    selFolder={hdrGalleryFolder}
+                    onSelectFolder={id => { setHdrGalleryFolder(id); loadFolderImages(id); }}
+                    onSelect={img => { f('header_image_id', img.id); f('header_image_url', img.source_url || ''); }}
+                  />
+                </div>
+              )}
+
+              {/* Scrape tab */}
+              {hdrTab === 'scrape' && (
+                <div className="flex flex-col gap-2">
+                  <div className="flex gap-2">
+                    <input
+                      value={hdrScrapeUrl}
+                      onChange={e => setHdrScrapeUrl(e.target.value)}
+                      onKeyDown={e => e.key === 'Enter' && scrapeHeaderImages()}
+                      placeholder="https://yourstore.com/products/product-name"
+                      className="input text-xs font-mono flex-1"
+                    />
+                    <button onClick={scrapeHeaderImages} disabled={hdrScraping || !hdrScrapeUrl.trim()}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-600/30 hover:bg-blue-600/50 border border-blue-500/30 text-blue-400 text-xs font-medium disabled:opacity-50 shrink-0 transition-all">
+                      {hdrScraping ? <Loader2 size={11} className="animate-spin"/> : <Globe size={11}/>}
+                      {hdrScraping ? 'Scraping…' : 'Scrape'}
+                    </button>
+                  </div>
+                  {hdrScrapeErr && <p className="text-red-400 text-xs">{hdrScrapeErr}</p>}
+                  {hdrScrapeImages.length > 0 && (
+                    <div className="grid grid-cols-4 gap-2">
+                      {hdrScrapeImages.slice(0, 8).map((img, i) => (
+                        <div key={i} className="relative group cursor-pointer rounded-lg overflow-hidden aspect-square bg-white/5 border border-white/10 hover:border-blue-500/50 transition-all"
+                          onClick={() => uploadHeaderImage(img)}>
+                          <img src={img} alt="" className="w-full h-full object-cover" onError={e => e.target.style.display='none'}/>
+                          {hdrUploading && <div className="absolute inset-0 bg-black/60 flex items-center justify-center"><Loader2 size={16} className="animate-spin text-white"/></div>}
+                          <div className="absolute inset-0 bg-blue-500/20 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-all">
+                            <span className="text-white text-[10px] font-medium bg-blue-600/80 px-2 py-0.5 rounded-full">Select</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {hdrUploadErr && <p className="text-red-400 text-xs">{hdrUploadErr}</p>}
+                </div>
+              )}
+
+              {/* Preview of selected image */}
+              {form.header_image_id && (
+                <div className="flex items-center gap-3 p-2 bg-green-500/10 border border-green-500/20 rounded-xl">
+                  <img src={`/api/gallery/images/${form.header_image_id}/preview`} alt="Header"
+                    className="w-14 h-14 rounded-lg object-cover border border-white/10" />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-green-400 text-xs font-medium">Header image selected</p>
+                    <p className="text-slate-500 text-[10px] truncate">ID: {form.header_image_id}</p>
+                  </div>
+                  <button onClick={() => { f('header_image_id', ''); f('header_image_url', ''); }}
+                    className="text-slate-500 hover:text-red-400 transition-colors">
+                    <X size={14}/>
+                  </button>
+                </div>
+              )}
             </div>
 
             {/* Body */}
