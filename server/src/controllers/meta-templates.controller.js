@@ -846,7 +846,7 @@ function getFieldValue(varNum, varMap, productCard) {
         return seg;
       } catch { return ''; }
     }
-    case 'customer_name':  return 'Customer';
+    case 'customer_name':  return productCard?.name || 'Customer';
     case 'cart_total':     return productCard?.cart_total || '';
     case 'cart_link':      return productCard?.link || '';
     case 'custom':         return String((varMap || {})[`${varNum}_custom`] || '');
@@ -873,13 +873,52 @@ export function buildSendMessagePayload(tpl, productConfig, recipientPhone = '{{
   const stdVarMap = Array.isArray(tpl.variable_labels) ? {} : (tpl.variable_labels || {});
   const components = [];
 
-  // Optional carousel-level body parameters
+  const firstCard = (productConfig?.cards || [])[0] || {};
+
+  // Non-carousel image header — inject product image from productConfig.cards[0]
+  if (!tpl.is_carousel && tpl.header_type === 'IMAGE') {
+    const mediaId = firstCard.media_id || tpl.header_image_id || '';
+    const imgUrl  = firstCard.image || firstCard.image_url || tpl.header_image_url || '';
+    if (mediaId) {
+      components.push({ type: 'header', parameters: [{ type: 'image', image: { id: mediaId } }] });
+    } else if (imgUrl) {
+      components.push({ type: 'header', parameters: [{ type: 'image', image: { link: imgUrl } }] });
+    }
+  }
+
+  // Optional body parameters (carousel-level or single-product)
   if (tpl.body?.trim()) {
     const vars = [...tpl.body.matchAll(/\{\{(\d+)\}\}/g)].map(m => m[1]);
     if (vars.length > 0) {
-      const firstCard = (productConfig?.cards || [])[0] || {};
       components.push({ type: 'body', parameters: vars.map(v => ({ type: 'text', text: sanitizeVarValue(getFieldValue(v, stdVarMap, firstCard)) })) });
     }
+  }
+
+  // Non-carousel URL button parameters
+  if (!tpl.is_carousel) {
+    const buttons = Array.isArray(tpl.buttons)
+      ? tpl.buttons
+      : (typeof tpl.buttons === 'string' ? (() => { try { return JSON.parse(tpl.buttons); } catch (_) { return []; } })() : []);
+    buttons.forEach((btn, bi) => {
+      if (String(btn.type || '').toUpperCase() === 'URL' && btn.url?.includes('{{')) {
+        const urlVars = [...btn.url.matchAll(/\{\{(\d+)\}\}/g)].map(m => m[1]);
+        const varStart = btn.url.indexOf('{{');
+        const staticPrefix = varStart > 0 ? btn.url.substring(0, varStart) : '';
+        const fullLink = firstCard.link || firstCard.url || firstCard.product_url || '';
+        let paramVal;
+        if (staticPrefix) {
+          const seg = getFieldValue(urlVars[0], stdVarMap, firstCard);
+          paramVal = seg || (fullLink ? (() => { try { return new URL(fullLink).pathname.split('/').filter(Boolean).pop() || ''; } catch { return ''; } })() : '');
+          if (paramVal && campaignId) paramVal += `?utm_source=whatsapp&utm_medium=single_product&utm_campaign=${campaignId}`;
+        } else {
+          paramVal = fullLink || getFieldValue(urlVars[0], stdVarMap, firstCard);
+          if (paramVal && campaignId) { const sep = paramVal.includes('?') ? '&' : '?'; paramVal += `${sep}utm_source=whatsapp&utm_medium=single_product&utm_campaign=${campaignId}`; }
+        }
+        if (paramVal) {
+          components.push({ type: 'button', sub_type: 'url', index: String(bi), parameters: [{ type: 'text', text: paramVal }] });
+        }
+      }
+    });
   }
 
   // Carousel cards

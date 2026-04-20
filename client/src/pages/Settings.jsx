@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { Save, Eye, EyeOff, Copy, CheckCircle, Zap, MessageSquare, Globe, Code, RefreshCw } from "lucide-react";
+import { Save, Eye, EyeOff, Copy, CheckCircle, Zap, MessageSquare, Globe, Code, RefreshCw, Settings2 } from "lucide-react";
 import { settingsApi } from "../api";
 
 const CH = () => ({ 'x-channel-id': localStorage.getItem('channelId') || 'demo' });
@@ -106,6 +106,7 @@ export default function Settings() {
     { id: "automation", icon: Zap,           label: "Automation",     color: "#f97316" },
     { id: "tracker",    icon: Code,          label: "Tracker Setup",  color: "#3b82f6" },
     { id: "general",    icon: Globe,         label: "General",        color: "#a855f7" },
+    { id: "campaigns",  icon: Settings2,     label: "Campaign & Template", color: "#06b6d4" },
   ];
 
   if (loading) return (
@@ -388,6 +389,52 @@ WhatsWay.identify({ phone: `}<span style={{color:"#fbbf24"}}>"+919876543210"</sp
           </div>
           <button onClick={save} disabled={saving} className="btn-primary w-full justify-center gap-2">
             <Save size={14} />{saving ? "Saving…" : "Save General Settings"}
+          </button>
+        </div>
+      )}
+
+      {/* Campaign & Template Tab */}
+      {activeTab === "campaigns" && (
+        <div className="card p-6 space-y-5">
+          <div>
+            <h3 className="text-sm font-semibold text-white mb-1">Campaign & Template Settings</h3>
+            <p className="text-xs" style={{ color: "#64748b" }}>Configure campaign targeting and template behavior</p>
+          </div>
+
+          <div className="space-y-4">
+            <div>
+              <label className="label">
+                Product URL Slug
+                <span className="text-xs ml-2 font-normal" style={{ color: "#06b6d4" }}>
+                  used by Abandoned Product View campaigns
+                </span>
+              </label>
+              <input
+                className="input font-mono"
+                placeholder="/products"
+                value={settings.product_url_slug || ""}
+                onChange={e => s("product_url_slug", e.target.value)}
+              />
+              <p className="text-xs mt-1.5" style={{ color: "#64748b" }}>
+                The URL path segment that identifies product pages on your store. E.g. <code style={{ background: "rgba(6,182,212,0.1)", padding: "1px 5px", borderRadius: "4px", color: "#06b6d4" }}>/products</code> for Shopify.
+                Only visitors whose product view URL contains this slug will be targeted by Abandoned Product View campaigns.
+              </p>
+            </div>
+
+            <div className="p-4 rounded-xl text-xs" style={{ background: "rgba(6,182,212,0.06)", border: "1px solid rgba(6,182,212,0.2)", color: "#67e8f9" }}>
+              <p className="font-semibold mb-1.5" style={{ color: "#22d3ee" }}>How Abandoned Product View works</p>
+              <ul className="space-y-1" style={{ color: "#94a3b8" }}>
+                <li>• Targets visitors with <strong style={{ color: "#67e8f9" }}>product_view</strong> status whose viewed URL matches the slug above</li>
+                <li>• First message: sent after <strong style={{ color: "#67e8f9" }}>30 minutes</strong> of inactivity</li>
+                <li>• Follow-up: sent after <strong style={{ color: "#67e8f9" }}>24 hours</strong> if no purchase</li>
+                <li>• Maximum <strong style={{ color: "#67e8f9" }}>2 follow-ups</strong> per product view</li>
+                <li>• Uses a single product WhatsApp template with dynamic product name, price &amp; image</li>
+              </ul>
+            </div>
+          </div>
+
+          <button onClick={save} disabled={saving} className="btn-primary w-full justify-center gap-2">
+            <Save size={14} />{saving ? "Saving…" : "Save Campaign Settings"}
           </button>
         </div>
       )}

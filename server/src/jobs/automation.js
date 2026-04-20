@@ -646,6 +646,64 @@ async function runAutomation() {
       }
 
       // ────────────────────────────────────────────────────────────────────
+      // FLOW 2b: Abandoned Product View — slug-matched product views, single
+      //          product template, 30-min first message, 24h follow-up, max 2
+      // ────────────────────────────────────────────────────────────────────
+      else if (cam.campaign_type === 'abandoned_product_view') {
+        // Read configured product URL slug from channel settings
+        const settingsRow = (db.channel_settings || []).find(s => s.channel_id === channelId);
+        const channelSettings = settingsRow ? (() => { try { return JSON.parse(settingsRow.settings || '{}'); } catch(_) { return {}; } })() : {};
+        const productSlug = channelSettings.product_url_slug || '/products';
+
+        const THIRTY_MIN_MS = 30 * 60 * 1000;
+        const now = Date.now();
+
+        const views = (db.product_views || []).filter(v => {
+          if (v.channel_id !== channelId || !v.phone) return false;
+          // Must match configured product page URL slug
+          if (!v.product_url || !v.product_url.includes(productSlug)) return false;
+          // Max 2 follow-ups total
+          if ((v.followup_count || 0) >= 2) return false;
+          const isInitial  = !v.whatsapp_sent;
+          const isFollowup = v.whatsapp_sent && (v.followup_count || 0) < 2;
+          if (!isInitial && !isFollowup) return false;
+
+          if (isInitial) {
+            // Require 30 minutes of inactivity before first message
+            const visitor = db.website_visitors.find(vis => vis.phone === v.phone);
+            const lastActivity = visitor?.visited_at || v.created_at;
+            if ((now - new Date(lastActivity).getTime()) < THIRTY_MIN_MS) return false;
+          }
+          if (isFollowup) {
+            const hoursSince = v.whatsapp_sent_at ? (now - new Date(v.whatsapp_sent_at).getTime()) / 3600000 : Infinity;
+            if (hoursSince < 24) return false; // 24h gap for follow-up
+          }
+
+          // Skip if user has carted or purchased (status-level guard)
+          const visitor = db.website_visitors.find(vis => vis.phone === v.phone);
+          if (visitor && isBlockedByStatus(visitor.status, 'abandoned_product_view')) return false;
+
+          // Product-level guard: skip if this exact product is already in an unrecovered cart.
+          // Cart has higher priority — abandoned_cart campaign will handle it instead.
+          const productInCart = (db.cart_events || []).some(c => {
+            if (c.phone !== v.phone || c.recovered || c.channel_id !== channelId) return false;
+            // Check top-level product_url
+            if (c.product_url && c.product_url === v.product_url) return true;
+            // Check products array for same URL
+            try {
+              const prods = JSON.parse(c.products || '[]');
+              return prods.some(p => (p.url || p.product_url || p.link || '') === v.product_url);
+            } catch (_) { return false; }
+          });
+          if (productInCart) return false;
+
+          return passesAudienceFilters(db, channelId, v.phone, cam);
+        }).slice(0, 10);
+
+        await sendMultiple(db, cam, views, 'view');
+      }
+
+      // ────────────────────────────────────────────────────────────────────
       // FLOW 3: Abandoned Cart & Checkout — added to cart or checkout started
       // ────────────────────────────────────────────────────────────────────
       else if (cam.campaign_type === 'abandoned_cart' || cam.campaign_type === 'abandoned_checkout' || cam.campaign_type === 'discount') {
@@ -839,7 +897,7 @@ function passesAudienceFilters(db, channelId, phone, cam) {
  */
 const STATUS_ALLOWED = {
   active:                  ['website_visit'],
-  product_view:            ['product_view'],
+  product_view:            ['product_view', 'abandoned_product_view'],
   abandoned_cart:          ['abandoned_cart', 'discount'],
   abandoned_checkout:      ['abandoned_checkout', 'discount'],
   followup_complete:       ['post_cart_upsell'],
@@ -850,6 +908,7 @@ function isBlockedByStatus(visitorStatus, campaignType) {
   if (campaignType === 'custom_broadcast') return false;      // Allowed unconditionally (relies on query filters)
   if (campaignType === 'custom') return false;                // Custom campaigns use their own filter rules
   if (campaignType === 'product_recommendation') return false; // Broadcast to any audience regardless of status
+  if (campaignType === 'abandoned_product_view') return visitorStatus !== 'product_view'; // Only product_view status
   if (!visitorStatus) return false;
   const allowed = STATUS_ALLOWED[visitorStatus];
   if (!allowed) return false; // unknown status — don't block
@@ -970,8 +1029,15 @@ async function sendMultiple(db, cam, events, type) {
           }
         }
 
-        // Build the exact /messages carousel payload with language override + UTM tracking
-        const sendPayload = buildSendMessagePayload(metaTpl, metaTpl.product_config, evt.phone, metaLangCode, cam.id);
+        // For single-product templates, build per-user productConfig from the event's product data
+        // so each send has the exact product the visitor viewed (not a static template default).
+        const visitorName = visitor?.name || evt.name || 'Customer';
+        const perUserProductConfig = (!metaTpl.is_carousel && (evt.product_name || evt.product_url))
+          ? { cards: [{ name: visitorName, title: evt.product_name || '', price: evt.product_price || '', link: evt.product_url || '', url: evt.product_url || '', image: evt.product_image || '' }] }
+          : metaTpl.product_config;
+
+        // Build the exact /messages payload with language override + UTM tracking
+        const sendPayload = buildSendMessagePayload(metaTpl, perUserProductConfig, evt.phone, metaLangCode, cam.id);
 
         // ── FULL MESSAGE PAYLOAD LOG ─────────────────────────────────────────
         const pc = metaTpl.product_config;
@@ -1044,6 +1110,16 @@ async function sendMultiple(db, cam, events, type) {
           const vIdx = db.website_visitors.findIndex(v => v.phone === evt.phone);
           if (vIdx >= 0 && upgradeStatus(db.website_visitors[vIdx], 'followup_complete')) {
             console.log(`[Stage 4] ${evt.phone} → followup_complete`);
+          }
+        }
+
+        // abandoned_product_view: stage 2 is the final — move to followup_complete
+        // so weekly product recommendations (post_cart_upsell) takes over.
+        // User stays there until they view a product or add to cart again (status re-entry).
+        if (currentStage === 2 && cam.campaign_type === 'abandoned_product_view') {
+          const vIdx = db.website_visitors.findIndex(v => v.phone === evt.phone);
+          if (vIdx >= 0 && upgradeStatus(db.website_visitors[vIdx], 'followup_complete')) {
+            console.log(`[abandoned_product_view Stage 2] ${evt.phone} → followup_complete → weekly upsell loop`);
           }
         }
 
@@ -1163,15 +1239,13 @@ async function sendMultiple(db, cam, events, type) {
         evt.whatsapp_sent_at = new Date().toISOString();
       }
 
-      // ── STAGE 4 STATUS PROMOTIONS ──
-      if (currentStage === 4) {
+      // ── STAGE COMPLETION → followup_complete ──
+      const isFinalStage = currentStage === 4 ||
+        (currentStage === 2 && cam.campaign_type === 'abandoned_product_view');
+      if (isFinalStage) {
         const vIdx = db.website_visitors.findIndex(v => v.phone === evt.phone);
-        if (vIdx >= 0) {
-          // ANY campaign reaching stage 4 without converting upgrades to followup_complete
-          // so they drop into the universal product recommendation engine (post_cart_upsell)
-          if (upgradeStatus(db.website_visitors[vIdx], 'followup_complete')) {
-            console.log(`[Stage 4] ${evt.phone} → followup_complete (universal upsell targeting begins)`);
-          }
+        if (vIdx >= 0 && upgradeStatus(db.website_visitors[vIdx], 'followup_complete')) {
+          console.log(`[Final Stage ${currentStage}] ${evt.phone} → followup_complete → weekly upsell loop`);
         }
       }
 

@@ -5,7 +5,7 @@ import {
   Zap, Clock, CheckCircle, Globe, MessageSquare, ShoppingCart,
   Eye, TrendingDown, Package, Users, Settings, ToggleLeft, Gift, Layout,
   Filter, Sliders, UserCheck, Search, Target, ChevronRight, AlertCircle,
-  Flame, Smartphone, Monitor, Repeat, Send,
+  Flame, Smartphone, Monitor, Repeat, Send, GitBranch,
 } from "lucide-react";
 import { campaignsApi, templatesApi, analyticsApi } from "../api";
 
@@ -31,16 +31,6 @@ const CAMPAIGN_TYPES = [
     autoTarget: true,
     defaultDelay: 1,
     targetSegment: "abandoned_checkout",
-  },
-  {
-    id: "product_view",
-    icon: "👁",
-    label: "Abandoned Product View",
-    description: "Retarget visitors who viewed specific products but didn't add to cart.",
-    color: "blue",
-    autoTarget: true,
-    defaultDelay: 2,
-    targetSegment: "product_view",
   },
   {
     id: "website_visit",
@@ -83,6 +73,17 @@ const CAMPAIGN_TYPES = [
     targetSegment: "purchased",
   },
   {
+    id: "abandoned_product_view",
+    icon: "🔍",
+    label: "Abandoned Product View",
+    description: "Auto-reach users who viewed a specific product page but didn't add to cart. Uses single product template with dynamic product data.",
+    color: "cyan",
+    autoTarget: true,
+    defaultDelay: 0.5,
+    targetSegment: "product_view",
+    singleProductOnly: true,
+  },
+  {
     id: "product_recommendation",
     icon: "🎯",
     label: "Product Recommendation",
@@ -113,6 +114,9 @@ const COLOR_MAP = {
   blue:   "text-blue-400 bg-blue-400/10 border-blue-400/20",
   purple: "text-purple-400 bg-purple-400/10 border-purple-400/20",
   green:  "text-green-400 bg-green-400/10 border-green-400/20",
+  red:    "text-red-400 bg-red-400/10 border-red-400/20",
+  pink:   "text-pink-400 bg-pink-400/10 border-pink-400/20",
+  cyan:   "text-cyan-400 bg-cyan-400/10 border-cyan-400/20",
 };
 
 const PREVIEW_VARS = {
@@ -370,6 +374,15 @@ function CreateModal({ onClose, onCreated }) {
           setStep(3); return;
         }
 
+        // Abandoned Product View requires a single product Meta template
+        if (type?.singleProductOnly) {
+          if (!metaTemplateId) {
+            setValidationErr("• Please select a single product Meta template. Abandoned Product View campaigns require a non-carousel Meta template.");
+            return;
+          }
+          setStep(3); return;
+        }
+
         // If a Meta carousel template is selected, that's sufficient — no regular template needed
         if (metaTemplateId) { setStep(3); return; }
 
@@ -535,16 +548,18 @@ function CreateModal({ onClose, onCreated }) {
                    <div className="space-y-2">
                      <label className="label flex items-center gap-2">
                        <span className="text-orange-400">📋</span>
-                       {type?.carouselOnly ? 'Carousel Meta Template' : 'Meta Template'}
-                       {type?.carouselOnly && <span className="text-[10px] text-red-400 font-bold">Required</span>}
+                       {type?.carouselOnly ? 'Carousel Meta Template' : type?.singleProductOnly ? 'Single Product Meta Template' : 'Meta Template'}
+                       {(type?.carouselOnly || type?.singleProductOnly) && <span className="text-[10px] text-red-400 font-bold">Required</span>}
                      </label>
                      <p className="text-[10px] text-slate-500 -mt-1">
                        {type?.carouselOnly
                          ? 'Select a carousel template. Only APPROVED templates will deliver. Payload format matches the Meta carousel API exactly.'
-                         : 'Select any created Meta template. Only APPROVED templates can deliver messages.'}
+                         : type?.singleProductOnly
+                           ? 'Select a single product (non-carousel) template. Product name, price & image are injected dynamically per user.'
+                           : 'Select any created Meta template. Only APPROVED templates can deliver messages.'}
                      </p>
                      <div className="space-y-2">
-                       {!type?.carouselOnly && (
+                       {!type?.carouselOnly && !type?.singleProductOnly && (
                          <button
                            onClick={() => setMetaTplId("")}
                            className={`w-full p-2.5 rounded-xl border text-left flex justify-between items-center transition-all text-xs ${!metaTemplateId ? 'bg-slate-700/40 border-white/10 text-slate-400' : 'border-white/5 text-slate-500 hover:border-white/10'}`}>
@@ -555,7 +570,9 @@ function CreateModal({ onClose, onCreated }) {
                        {(() => {
                          const filtered = type?.carouselOnly
                            ? metaTemplates.filter(t => t.is_carousel)
-                           : metaTemplates;
+                           : type?.singleProductOnly
+                             ? metaTemplates.filter(t => !t.is_carousel)
+                             : metaTemplates;
                          if (filtered.length === 0) return (
                            <p className="text-[10px] text-slate-500 px-1">
                              {type?.carouselOnly
@@ -1645,6 +1662,7 @@ export default function Campaigns() {
   const [testPhone, setTestPhone] = useState('');
   const [testSending, setTestSending] = useState(false);
   const [testResult, setTestResult] = useState(null); // last result for display
+  const [flowModal, setFlowModal] = useState(null); // campaign object | null
 
   const CH = () => ({ 'x-channel-id': localStorage.getItem('channelId') || 'demo' });
 
@@ -1866,6 +1884,14 @@ export default function Campaigns() {
                        <span className="text-[10px] text-green-400 font-bold">{rate}% rate</span>
                     </div>
                     <div className="flex items-center gap-1.5">
+                       {/* Flow Diagram button */}
+                       <button
+                         title="View campaign flow diagram"
+                         onClick={() => setFlowModal(flowModal?.id === c.id ? null : c)}
+                         className="p-2 rounded-lg border transition-all text-xs"
+                         style={{ background: flowModal?.id === c.id ? 'rgba(6,182,212,0.15)' : 'rgba(255,255,255,0.05)', borderColor: flowModal?.id === c.id ? 'rgba(6,182,212,0.4)' : 'rgba(255,255,255,0.08)', color: flowModal?.id === c.id ? '#22d3ee' : '#64748b' }}>
+                         <GitBranch size={13}/>
+                       </button>
                        {/* Test Send button */}
                        <button
                          title="Send test message to a specific number"
@@ -1933,6 +1959,274 @@ export default function Campaigns() {
 
       {showModal  && <CreateModal         onClose={() => setShowModal(false)}  onCreated={load} />}
       {showCustom && <CustomCampaignModal onClose={() => setShowCustom(false)} onCreated={load} />}
+      {flowModal  && <FlowDiagramModal campaign={flowModal} onClose={() => setFlowModal(null)} />}
+    </div>
+  );
+}
+
+// ── Flow Diagram Modal ────────────────────────────────────────────────────────
+function FlowDiagramModal({ campaign, onClose }) {
+  const type = CAMPAIGN_TYPES.find(t => t.id === campaign.campaign_type);
+
+  const FLOWS = {
+    abandoned_product_view: {
+      title: "Abandoned Product View Flow",
+      color: "#22d3ee",
+      steps: [
+        { icon: "🌐", label: "User visits product page", sub: "tracker.js auto-captures product URL, name, price, image", type: "trigger" },
+        { icon: "💾", label: "product_views record created", sub: "Stored in DB with product_url, phone, session_id", type: "action" },
+        { icon: "🔍", label: "URL slug check", sub: `URL must contain the configured product slug (e.g. /products)`, type: "check" },
+        { icon: "📊", label: "Status → product_view", sub: "Forward-only status upgrade (won't downgrade if already carted)", type: "action" },
+        { icon: "⏱️", label: "30-minute inactivity wait", sub: "Automation checks visitor's last_activity — must be silent for 30 min", type: "wait" },
+        { icon: "🛒", label: "Cart check (product-level)", sub: "If same product URL found in unrecovered cart → skip, cart campaign handles it", type: "check" },
+        { icon: "📱", label: "Stage 1 — WhatsApp message sent", sub: "Single product template with dynamic: product name, price, image, URL", type: "send" },
+        { icon: "⏱️", label: "24-hour gap", sub: "If user hasn't purchased or carted after 24h", type: "wait" },
+        { icon: "🔒", label: "Status re-check", sub: "If status changed to abandoned_cart or purchased → stop here", type: "check" },
+        { icon: "📱", label: "Stage 2 — Follow-up sent", sub: "Same single product template — final follow-up", type: "send" },
+        { icon: "📊", label: "Status → followup_complete", sub: "After stage 2, user moves to weekly product recommendations loop", type: "action" },
+        { icon: "♾️", label: "Weekly Recommendations loop", sub: "post_cart_upsell campaign takes over — sends new products every 7 days", type: "end" },
+      ],
+      bypasses: [
+        { icon: "🛒", text: "User adds same product to cart → abandoned_cart campaign takes over immediately" },
+        { icon: "💳", text: "User reaches checkout → abandoned_checkout campaign takes over" },
+        { icon: "✅", text: "User purchases → status = purchased, all campaigns stop" },
+        { icon: "🔄", text: "User views a product again → status re-enters product_view (new funnel cycle), abandoned_product_view restarts" },
+        { icon: "🚫", text: "User opts out → permanently excluded from all campaigns" },
+      ],
+    },
+    abandoned_cart: {
+      title: "Abandoned Cart Recovery Flow",
+      color: "#fb923c",
+      steps: [
+        { icon: "🛒", label: "User adds product to cart", sub: "tracker.js captures cart items, quantities, prices, cart URL", type: "trigger" },
+        { icon: "💾", label: "cart_events record created", sub: "event_type = add_to_cart, stored with product details", type: "action" },
+        { icon: "📊", label: "Status → abandoned_cart", sub: "Upgraded from product_view or active (forward-only)", type: "action" },
+        { icon: "⏱️", label: `${campaign.delay_hours || 1}h delay`, sub: "Automation waits configured delay before first message", type: "wait" },
+        { icon: "📱", label: "Stage 1 sent", sub: "Cart recovery template with product image + cart URL", type: "send" },
+        { icon: "⏱️", label: "24h gap", sub: "Progressive: 24h → 48h → 72h between follow-ups", type: "wait" },
+        { icon: "📱", label: "Stage 2 → Stage 3 → Stage 4", sub: "Up to 4 follow-ups total (progressive delay)", type: "send" },
+        { icon: "✅", label: "followup_complete status", sub: "After all 4 stages → post_cart_upsell campaign can engage", type: "end" },
+      ],
+      bypasses: [
+        { icon: "✅", text: "User purchases → cart marked recovered, no more messages" },
+        { icon: "🔄", text: "After stage 4 → Infinite Weekly Recommendations campaign takes over" },
+      ],
+    },
+    abandoned_checkout: {
+      title: "Checkout Drop-off Recovery Flow",
+      color: "#f87171",
+      steps: [
+        { icon: "💳", label: "User starts checkout", sub: "tracker.js detects checkout_started event", type: "trigger" },
+        { icon: "💾", label: "cart_events record created", sub: "event_type = checkout_started — high intent signal", type: "action" },
+        { icon: "📊", label: "Status → abandoned_checkout", sub: "Highest urgency pre-purchase status", type: "action" },
+        { icon: "⏱️", label: `${campaign.delay_hours || 1}h delay`, sub: "Shorter delay recommended — user showed payment intent", type: "wait" },
+        { icon: "📱", label: "Stage 1 sent", sub: "High-urgency template — offer discount if configured", type: "send" },
+        { icon: "📱", label: "Stages 2 → 3 → 4", sub: "Up to 4 follow-ups with progressive delay", type: "send" },
+        { icon: "✅", label: "followup_complete", sub: "All follow-ups sent without purchase", type: "end" },
+      ],
+      bypasses: [
+        { icon: "✅", text: "User completes purchase → status = purchased, campaign stops" },
+      ],
+    },
+    product_view: {
+      title: "Abandoned Product View (Multi-stage) Flow",
+      color: "#60a5fa",
+      steps: [
+        { icon: "👁", label: "User views product page", sub: "product_views record created with product data", type: "trigger" },
+        { icon: "📊", label: "Status → product_view", sub: "Only if user hasn't carted — status machine blocks downgrade", type: "action" },
+        { icon: "⏱️", label: `${campaign.delay_hours || 2}h delay`, sub: "Configurable delay before first outreach", type: "wait" },
+        { icon: "📱", label: "Stages 1 → 2 → 3 → 4", sub: "Up to 4 follow-ups using the last viewed product data", type: "send" },
+        { icon: "✅", label: "followup_complete", sub: "All follow-ups sent", type: "end" },
+      ],
+      bypasses: [
+        { icon: "🛒", text: "User adds to cart → abandoned_cart campaign takes over" },
+        { icon: "✅", text: "User purchases → campaign stops" },
+      ],
+    },
+    website_visit: {
+      title: "Abandoned Website Visitor Flow",
+      color: "#a78bfa",
+      steps: [
+        { icon: "🏠", label: "User visits home / listing page", sub: "No product viewed — pure browse session", type: "trigger" },
+        { icon: "📊", label: "Status = active", sub: "Lowest-funnel status — browsed but no product interest shown", type: "action" },
+        { icon: "⏱️", label: `${campaign.delay_hours || 4}h delay`, sub: "Longer delay — lower intent visitor", type: "wait" },
+        { icon: "📱", label: "Stage 1 → Catalog recommendations", sub: "Hot products from catalog sent as carousel", type: "send" },
+        { icon: "📱", label: "Stages 2 → 3 → 4", sub: "Progressive follow-ups every 24 / 48 / 72h", type: "send" },
+        { icon: "✅", label: "Campaign completes", sub: "User remains active status after all stages", type: "end" },
+      ],
+      bypasses: [
+        { icon: "👁", text: "User views product → status upgrades to product_view, product_view campaign takes over" },
+        { icon: "🛒", text: "User carts → abandoned_cart campaign takes over" },
+      ],
+    },
+    post_purchase: {
+      title: "Post-Purchase Upsell Flow",
+      color: "#4ade80",
+      steps: [
+        { icon: "✅", label: "User completes purchase", sub: "purchase_history record created, status → purchased", type: "trigger" },
+        { icon: "📊", label: "purchase_count tracked", sub: "is_repeat_purchaser = true when purchase_count ≥ 2", type: "action" },
+        { icon: "⏱️", label: `${campaign.delay_hours || 24}h delay`, sub: "Wait before upsell — let the purchase experience settle", type: "wait" },
+        { icon: "🤖", label: "AI picks upsell products", sub: "Recommends related items based on what they purchased", type: "action" },
+        { icon: "📱", label: "Upsell message sent", sub: "Product recommendation with AI-curated suggestions", type: "send" },
+        { icon: "✅", label: "One-time send", sub: "Fires once per purchase cycle", type: "end" },
+      ],
+      bypasses: [],
+    },
+    post_cart_upsell: {
+      title: "Infinite Weekly Recommendations Flow",
+      color: "#f472b6",
+      steps: [
+        { icon: "♾️", label: "Triggered after followup_complete", sub: "User finished all 4 cart reminders without buying", type: "trigger" },
+        { icon: "⏱️", label: "7-day wait", sub: "First upsell fires 1 week after followup_complete", type: "wait" },
+        { icon: "🎯", label: "Random 3 products from catalog", sub: "Rotates weekly — always fresh picks", type: "action" },
+        { icon: "📱", label: "Weekly upsell sent", sub: "Continues indefinitely every 7 days", type: "send" },
+        { icon: "🔄", label: "Loop forever", sub: "No max follow-up limit — runs every 168 hours", type: "end" },
+      ],
+      bypasses: [
+        { icon: "✅", text: "User purchases → status = purchased, upsell loop stops" },
+      ],
+    },
+    product_recommendation: {
+      title: "Product Recommendation Broadcast Flow",
+      color: "#4ade80",
+      steps: [
+        { icon: "🎯", label: "Manual or auto trigger", sub: "Runs when campaign is sent — targets configured audience", type: "trigger" },
+        { icon: "🔍", label: "Audience filter", sub: "Status filters, city, device, language, engagement score", type: "check" },
+        { icon: "🛍️", label: "Hot products selected", sub: "Auto-product mode: latest viewed products from page_views", type: "action" },
+        { icon: "📱", label: "Carousel template sent", sub: "Multi-card carousel with images, prices, product links", type: "send" },
+        { icon: "✅", label: "Done", sub: "One-time or repeating based on campaign settings", type: "end" },
+      ],
+      bypasses: [],
+    },
+    discount: {
+      title: "Discount Offer Flow",
+      color: "#4ade80",
+      steps: [
+        { icon: "🎁", label: "Targets abandoned_cart users", sub: "High-intent users who carted but didn't buy", type: "trigger" },
+        { icon: "⏱️", label: "Instant or delayed send", sub: `Delay: ${campaign.delay_hours || 0}h configured`, type: "wait" },
+        { icon: "📱", label: "Discount code message sent", sub: "Special offer to push conversion", type: "send" },
+        { icon: "✅", label: "Done", sub: "Complements abandoned cart campaign", type: "end" },
+      ],
+      bypasses: [
+        { icon: "✅", text: "User purchases → no more messages" },
+      ],
+    },
+  };
+
+  const flow = FLOWS[campaign.campaign_type] || {
+    title: `${type?.label || campaign.campaign_type} Flow`,
+    color: "#64748b",
+    steps: [
+      { icon: "🎯", label: "Campaign triggered", sub: "Custom campaign flow", type: "trigger" },
+      { icon: "📱", label: "Message sent", sub: "To matched audience", type: "send" },
+      { icon: "✅", label: "Done", sub: "", type: "end" },
+    ],
+    bypasses: [],
+  };
+
+  const stepColors = {
+    trigger: { bg: "rgba(34,211,102,0.08)",  border: "rgba(34,211,102,0.25)",  dot: "#22d36a", label: "TRIGGER"  },
+    action:  { bg: "rgba(96,165,250,0.08)",  border: "rgba(96,165,250,0.25)",  dot: "#60a5fa", label: "ACTION"   },
+    check:   { bg: "rgba(251,191,36,0.08)",  border: "rgba(251,191,36,0.25)",  dot: "#fbbf24", label: "CHECK"    },
+    wait:    { bg: "rgba(167,139,250,0.08)", border: "rgba(167,139,250,0.25)", dot: "#a78bfa", label: "WAIT"     },
+    send:    { bg: `rgba(6,182,212,0.08)`,   border: `rgba(6,182,212,0.25)`,   dot: "#22d3ee", label: "SEND"     },
+    end:     { bg: "rgba(148,163,184,0.06)", border: "rgba(148,163,184,0.15)", dot: "#94a3b8", label: "END"      },
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      style={{ background: "rgba(0,0,0,0.75)", backdropFilter: "blur(6px)" }}
+      onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="w-full max-w-lg max-h-[90vh] flex flex-col rounded-2xl overflow-hidden"
+        style={{ background: "#0d1422", border: "1px solid rgba(255,255,255,0.08)", boxShadow: "0 25px 80px rgba(0,0,0,0.6)" }}>
+
+        {/* Header */}
+        <div className="flex items-center justify-between px-5 py-4 shrink-0"
+          style={{ borderBottom: "1px solid rgba(255,255,255,0.06)", background: "rgba(255,255,255,0.015)" }}>
+          <div className="flex items-center gap-3">
+            <div className="w-8 h-8 rounded-xl flex items-center justify-center"
+              style={{ background: `${flow.color}18`, border: `1px solid ${flow.color}30` }}>
+              <GitBranch size={14} style={{ color: flow.color }} />
+            </div>
+            <div>
+              <p className="text-sm font-bold text-white">{flow.title}</p>
+              <p className="text-[10px]" style={{ color: "#64748b" }}>{campaign.name}</p>
+            </div>
+          </div>
+          <button onClick={onClose} className="p-1.5 rounded-lg transition-colors"
+            style={{ color: "#475569" }}
+            onMouseEnter={e => e.currentTarget.style.color = "#e2e8f0"}
+            onMouseLeave={e => e.currentTarget.style.color = "#475569"}>
+            <X size={16} />
+          </button>
+        </div>
+
+        {/* Scrollable body */}
+        <div className="overflow-y-auto p-5 space-y-0 flex-1">
+
+          {/* Steps */}
+          <div className="relative">
+            {flow.steps.map((step, idx) => {
+              const sc = stepColors[step.type] || stepColors.action;
+              const isLast = idx === flow.steps.length - 1;
+              return (
+                <div key={idx} className="relative flex gap-3">
+                  {/* Connector line */}
+                  {!isLast && (
+                    <div className="absolute left-[17px] top-10 w-px"
+                      style={{ height: "calc(100% - 8px)", background: "rgba(255,255,255,0.06)" }} />
+                  )}
+                  {/* Icon dot */}
+                  <div className="shrink-0 w-9 h-9 rounded-full flex items-center justify-center text-base mt-1 z-10"
+                    style={{ background: sc.bg, border: `1px solid ${sc.border}` }}>
+                    {step.icon}
+                  </div>
+                  {/* Content */}
+                  <div className={`flex-1 pb-5 ${isLast ? '' : ''}`}>
+                    <div className="flex items-center gap-2 mb-0.5">
+                      <p className="text-xs font-semibold text-white">{step.label}</p>
+                      <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full uppercase tracking-widest"
+                        style={{ background: sc.bg, border: `1px solid ${sc.border}`, color: sc.dot }}>
+                        {sc.label}
+                      </span>
+                    </div>
+                    {step.sub && <p className="text-[11px]" style={{ color: "#64748b" }}>{step.sub}</p>}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Bypass / Exit conditions */}
+          {flow.bypasses?.length > 0 && (
+            <div className="mt-2 rounded-xl p-4 space-y-2"
+              style={{ background: "rgba(251,191,36,0.05)", border: "1px solid rgba(251,191,36,0.15)" }}>
+              <p className="text-[10px] font-bold uppercase tracking-widest" style={{ color: "#fbbf24" }}>
+                ⚡ Early Exit Conditions
+              </p>
+              {flow.bypasses.map((b, i) => (
+                <div key={i} className="flex items-start gap-2 text-[11px]" style={{ color: "#94a3b8" }}>
+                  <span>{b.icon}</span>
+                  <span>{b.text}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Legend */}
+          <div className="mt-4 pt-4" style={{ borderTop: "1px solid rgba(255,255,255,0.05)" }}>
+            <p className="text-[9px] font-bold uppercase tracking-widest mb-2" style={{ color: "#334155" }}>Legend</p>
+            <div className="flex flex-wrap gap-2">
+              {Object.entries(stepColors).map(([k, sc]) => (
+                <div key={k} className="flex items-center gap-1.5 text-[9px]" style={{ color: "#475569" }}>
+                  <div className="w-2 h-2 rounded-full" style={{ background: sc.dot }} />
+                  {sc.label}
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
