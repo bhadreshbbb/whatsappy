@@ -70,6 +70,7 @@ export const campaignsController = {
         template_id: templateId,
         template_ids: templateIds,
         meta_template_id: metaTemplateId,
+        stage_vars: b.stage_vars || null,   // { s1: { v1, v2 }, s2: { v1, v2 } } for abandoned_product_view
         schedule_type: 'delayed',
         delay_hours: delayHours,
         run_times: runTimes,

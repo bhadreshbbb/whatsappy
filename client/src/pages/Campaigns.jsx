@@ -271,6 +271,7 @@ function CreateModal({ onClose, onCreated }) {
   const [metaTemplates, setMetaTemplates] = useState([]);   // approved carousel Meta templates
   const [metaTemplateId, setMetaTplId] = useState("");      // selected Meta template id
   const [metaPayloadPreview, setMetaPayloadPreview] = useState(null); // payload preview from /send-payload
+  const [stageVars, setStageVars] = useState({ s1: { v1: '', v2: '' }, s2: { v1: '', v2: '' } });
   const [saving, setSaving] = useState(false);
   const [translating, setTranslating] = useState(false);
   const [translatedTpl, setTranslatedTpl] = useState(null);
@@ -427,6 +428,7 @@ function CreateModal({ onClose, onCreated }) {
         template_id: isMultiStage ? templateIds[0] : templateId,
         template_ids: isMultiStage ? templateIds.filter(id => id !== "") : [],
         meta_template_id: metaTemplateId || null,
+        stage_vars: type.singleProductOnly ? stageVars : null,
         delay_hours: delayHrs,
         is_active: true,
         filters: audRules.length > 0 ? JSON.stringify({ logic: 'AND', rules: audRules }) : null,
@@ -717,6 +719,71 @@ function CreateModal({ onClose, onCreated }) {
                    <h2 className="text-lg font-bold text-white mb-1">{type.label}</h2>
                    <p className="text-xs text-slate-400">Auto-targets <span className="text-white font-medium">{type.targetSegment.replace(/_/g,' ')}</span> users from your tracker.</p>
                 </div>
+
+                {/* ── Stage Variables (abandoned_product_view only) ─── */}
+                {type?.singleProductOnly && (
+                  <div className="rounded-2xl overflow-hidden" style={{ border: "1px solid rgba(6,182,212,0.25)" }}>
+                    <div className="px-4 py-3 flex items-center gap-2" style={{ background: "rgba(6,182,212,0.07)", borderBottom: "1px solid rgba(6,182,212,0.15)" }}>
+                      <span className="text-sm">📝</span>
+                      <span className="text-xs font-bold text-cyan-400">Message Variable Values</span>
+                      <span className="text-[10px] text-slate-500 ml-1">{"— what goes in {{1}} and {{2}} for each stage"}</span>
+                    </div>
+                    <div className="p-4 space-y-5" style={{ background: "rgba(6,182,212,0.03)" }}>
+                      <p className="text-[10px]" style={{ color: "#64748b" }}>
+                        Use <code style={{ color: "#22d3ee", background: "rgba(6,182,212,0.1)", padding: "1px 5px", borderRadius: "4px" }}>{"{product_name}"}</code>{" "}
+                        <code style={{ color: "#22d3ee", background: "rgba(6,182,212,0.1)", padding: "1px 5px", borderRadius: "4px" }}>{"{product_price}"}</code>{" "}
+                        <code style={{ color: "#22d3ee", background: "rgba(6,182,212,0.1)", padding: "1px 5px", borderRadius: "4px" }}>{"{customer_name}"}</code>{" "}
+                        as tokens — replaced with real values per user at send time.
+                      </p>
+                      {[
+                        { key: 's1', label: 'Stage 1', sub: 'First message (30 min after inactivity)', color: '#22d3ee' },
+                        { key: 's2', label: 'Stage 2', sub: 'Follow-up (24h later)', color: '#a78bfa' },
+                      ].map(({ key, label, sub, color }) => (
+                        <div key={key} className="space-y-2">
+                          <div className="flex items-center gap-2">
+                            <span className="text-[10px] font-bold uppercase tracking-widest" style={{ color }}>{label}</span>
+                            <span className="text-[10px]" style={{ color: "#475569" }}>— {sub}</span>
+                          </div>
+                          <div className="grid grid-cols-2 gap-2">
+                            {[
+                              { vk: 'v1', placeholder: 'e.g. Hi {customer_name}! 👋 You viewed *{product_name}*' },
+                              { vk: 'v2', placeholder: 'e.g. 💰 Price: {product_price} — grab it now! 🛍️' },
+                            ].map(({ vk, placeholder }) => (
+                              <div key={vk}>
+                                <label className="text-[10px] font-semibold mb-1 block" style={{ color: "#64748b" }}>
+                                  {vk === 'v1' ? '{{1}}' : '{{2}}'}
+                                </label>
+                                <textarea
+                                  rows={2}
+                                  className="w-full text-[11px] px-2.5 py-2 rounded-lg outline-none resize-none"
+                                  style={{ background: "rgba(255,255,255,0.05)", border: `1px solid ${stageVars[key][vk] ? 'rgba(6,182,212,0.35)' : 'rgba(255,255,255,0.08)'}`, color: "#e2e8f0" }}
+                                  placeholder={placeholder}
+                                  value={stageVars[key][vk]}
+                                  onChange={e => setStageVars(prev => ({ ...prev, [key]: { ...prev[key], [vk]: e.target.value } }))}
+                                />
+                              </div>
+                            ))}
+                          </div>
+                          {/* Live preview */}
+                          <div className="text-[10px] px-3 py-2 rounded-lg space-y-0.5" style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)" }}>
+                            <p className="font-semibold" style={{ color: "#475569" }}>Preview (sample values):</p>
+                            <p style={{ color: "#94a3b8" }}>
+                              {(stageVars[key].v1 || '{{1}}').replace(/{product_name}/g, 'Blue Kurti').replace(/{product_price}/g, '₹799').replace(/{customer_name}/g, 'Priya')}
+                            </p>
+                            <p style={{ color: "#94a3b8" }}>
+                              {(stageVars[key].v2 || '{{2}}').replace(/{product_name}/g, 'Blue Kurti').replace(/{product_price}/g, '₹799').replace(/{customer_name}/g, 'Priya')}
+                            </p>
+                          </div>
+                        </div>
+                      ))}
+                      <div className="text-[10px] p-3 rounded-xl" style={{ background: "rgba(6,182,212,0.05)", border: "1px solid rgba(6,182,212,0.15)", color: "#67e8f9" }}>
+                        <p className="font-semibold mb-1">Auto-injected per user (no input needed):</p>
+                        <p style={{ color: "#94a3b8" }}>• Header image — uploaded to Meta Media API per product, media_id passed in payload</p>
+                        <p style={{ color: "#94a3b8" }}>• Product URL — auto-detected from product_view record</p>
+                      </div>
+                    </div>
+                  </div>
+                )}
 
                 {/* ── Audience Filters ────────────────────────────────── */}
                 <div className="rounded-2xl border border-white/8 overflow-hidden">
@@ -1658,6 +1725,8 @@ export default function Campaigns() {
   const [analyticsMap, setAnalyticsMap] = useState({});   // campaignId → analytics data
   const [analyticsOpen, setAnalyticsOpen] = useState({}); // campaignId → bool (panel open)
   const [analyticsLoading, setAnalyticsLoading] = useState({});
+  const [payloadOpen, setPayloadOpen] = useState({});     // campaignId → bool
+  const [payloadMap, setPayloadMap] = useState({});       // campaignId → { executions[] }
   const [testModal, setTestModal] = useState(null);  // { id, name } | null
   const [testPhone, setTestPhone] = useState('');
   const [testSending, setTestSending] = useState(false);
@@ -1681,6 +1750,19 @@ export default function Campaigns() {
     const next = !analyticsOpen[campaignId];
     setAnalyticsOpen(p => ({ ...p, [campaignId]: next }));
     if (next && !analyticsMap[campaignId]) loadAnalytics(campaignId);
+  };
+
+  const loadPayload = async (campaignId) => {
+    try {
+      const res = await fetch(`/api/campaigns/${campaignId}/executions?limit=5`, { headers: CH() });
+      const data = await res.json();
+      setPayloadMap(p => ({ ...p, [campaignId]: data }));
+    } catch (_) {}
+  };
+  const togglePayload = (campaignId) => {
+    const next = !payloadOpen[campaignId];
+    setPayloadOpen(p => ({ ...p, [campaignId]: next }));
+    if (next) loadPayload(campaignId);
   };
 
   const handleSendTest = async () => {
@@ -1866,6 +1948,54 @@ export default function Campaigns() {
                     })() : null}
                   </div>
                 )}
+              </div>
+
+              {/* ── Payload & Send History Panel ── */}
+              <div className="mb-4">
+                <button onClick={() => togglePayload(c.id)}
+                  className="w-full flex items-center justify-between px-3 py-2 rounded-xl text-[10px] font-semibold transition-all"
+                  style={{ background: payloadOpen[c.id] ? "rgba(6,182,212,0.1)" : "rgba(255,255,255,0.03)", border: `1px solid ${payloadOpen[c.id] ? "rgba(6,182,212,0.3)" : "rgba(255,255,255,0.06)"}`, color: payloadOpen[c.id] ? "#22d3ee" : "#64748b" }}>
+                  <span className="flex items-center gap-1.5"><GitBranch size={11}/> Last Sent Payloads</span>
+                  <ChevronDown size={11} style={{ transform: payloadOpen[c.id] ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }}/>
+                </button>
+                {payloadOpen[c.id] && (() => {
+                  const execs = payloadMap[c.id];
+                  if (!execs) return <div className="mt-2 text-[10px] text-center py-3" style={{ color: "#475569" }}>Loading…</div>;
+                  if (!execs.length) return <div className="mt-2 text-[10px] text-center py-3" style={{ color: "#475569" }}>No messages sent yet.</div>;
+                  return (
+                    <div className="mt-2 rounded-xl overflow-hidden space-y-2" style={{ border: "1px solid rgba(6,182,212,0.15)" }}>
+                      {execs.slice(0, 5).map((ex, i) => {
+                        let payload = null;
+                        try { payload = JSON.parse(ex.payload_sent || 'null'); } catch (_) {}
+                        return (
+                          <div key={i} className="p-3 space-y-2" style={{ background: i % 2 === 0 ? "rgba(6,182,212,0.03)" : "transparent", borderTop: i > 0 ? "1px solid rgba(255,255,255,0.04)" : "none" }}>
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-center gap-2">
+                                <span className={`w-1.5 h-1.5 rounded-full`} style={{ background: ex.status === 'sent' ? '#4ade80' : '#f87171' }}/>
+                                <span className="text-[10px] font-semibold" style={{ color: ex.status === 'sent' ? '#4ade80' : '#f87171' }}>
+                                  {ex.status === 'sent' ? '✓ Sent' : '✗ Failed'}
+                                </span>
+                                <span className="text-[10px]" style={{ color: "#64748b" }}>→ {ex.phone}</span>
+                              </div>
+                              <span className="text-[9px]" style={{ color: "#334155" }}>{new Date(ex.sent_at).toLocaleString()}</span>
+                            </div>
+                            {payload && (
+                              <pre className="text-[9px] rounded-lg p-2 overflow-x-auto leading-relaxed"
+                                style={{ background: "#070d1a", border: "1px solid rgba(6,182,212,0.12)", color: "#67e8f9", maxHeight: "160px", overflowY: "auto" }}>
+                                {JSON.stringify(payload, null, 2)}
+                              </pre>
+                            )}
+                          </div>
+                        );
+                      })}
+                      <div className="px-3 pb-2 flex justify-end">
+                        <button onClick={() => loadPayload(c.id)} className="text-[9px] flex items-center gap-1" style={{ color: "#475569" }}>
+                          <Repeat size={9}/> Refresh
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })()}
               </div>
 
               <div className="pt-4 border-t border-white/5 space-y-4">

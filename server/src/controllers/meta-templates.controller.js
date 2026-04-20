@@ -199,7 +199,9 @@ function buildMetaComponents(tpl, { preserveVarNumbers = false } = {}) {
   // ── STANDARD template ────────────────────────────────────────────────────────
 
   if (tpl.header_type === 'IMAGE') {
-    components.push({ type: 'HEADER', format: 'IMAGE' });
+    const headerComp = { type: 'HEADER', format: 'IMAGE' };
+    if (tpl.header_file_handle) headerComp.example = { header_handle: [String(tpl.header_file_handle)] };
+    components.push(headerComp);
   } else if (tpl.header_type === 'TEXT' && tpl.header_text?.trim()) {
     const cleanHeader = sanitizeMetaText(tpl.header_text);
     const hVars = [...cleanHeader.matchAll(/\{\{(\d+)\}\}/g)].map(m => m[1]);
@@ -211,7 +213,8 @@ function buildMetaComponents(tpl, { preserveVarNumbers = false } = {}) {
   if (tpl.body?.trim()) {
     const cleanBody = sanitizeMetaText(tpl.body);
     const comp = { type: 'BODY', text: cleanBody };
-    const ex = buildBodyExample(cleanBody, stdVarMap);
+    const exVals = Array.isArray(tpl.example_values) ? {} : (tpl.example_values || {});
+    const ex = buildBodyExample(cleanBody, stdVarMap, exVals);
     if (ex) comp.example = ex;
     components.push(comp);
   }
@@ -890,7 +893,16 @@ export function buildSendMessagePayload(tpl, productConfig, recipientPhone = '{{
   if (tpl.body?.trim()) {
     const vars = [...tpl.body.matchAll(/\{\{(\d+)\}\}/g)].map(m => m[1]);
     if (vars.length > 0) {
-      components.push({ type: 'body', parameters: vars.map(v => ({ type: 'text', text: sanitizeVarValue(getFieldValue(v, stdVarMap, firstCard)) })) });
+      // When variable_labels is empty (abandoned_product_view), perUserProductConfig.cards[0]
+      // stores already-resolved strings in positional keys: '1', '2', etc.
+      // Fall back to those if getFieldValue returns empty.
+      const resolveVar = (v) => {
+        const fieldVal = getFieldValue(v, stdVarMap, firstCard);
+        if (fieldVal) return fieldVal;
+        // Direct positional value stored by automation for no-label templates
+        return String(firstCard[v] || firstCard[`v${v}`] || '');
+      };
+      components.push({ type: 'body', parameters: vars.map(v => ({ type: 'text', text: sanitizeVarValue(resolveVar(v)) })) });
     }
   }
 
@@ -1095,7 +1107,7 @@ export async function createTemplate(req, res) {
   try {
     const db = getDb();
     const channelId = req.headers['x-channel-id'] || 'demo';
-    const { name, category, language, header_type, header_text, body, footer, buttons, variable_labels, is_carousel, carousel_cards, auto_product_mode } = req.body;
+    const { name, category, language, header_type, header_text, header_image_url, body, footer, buttons, variable_labels, example_values, is_carousel, carousel_cards, auto_product_mode } = req.body;
 
     // Carousel body (intro text) is optional; standard templates require body
     if (!name) return res.status(400).json({ error: 'Template name is required' });
@@ -1113,6 +1125,10 @@ export async function createTemplate(req, res) {
       language: language || 'en',
       header_type: header_type || 'NONE',
       header_text: header_text || '',
+      header_image_url: header_image_url || '',
+      header_image_id: '',
+      header_file_handle: '',
+      example_values: example_values || {},
       body,
       footer: footer || '',
       buttons: buttons || [],
@@ -1212,6 +1228,51 @@ export async function createTemplate(req, res) {
           auto_products:     productConfigCards.map(c => ({ name: c.title, price: c.price, url: c.link, image: c._hot_image_url || c.image_url })),
         };
         tpl.product_config.send_payload = buildSendMessagePayload(tpl, tpl.product_config, '{{RECIPIENT_PHONE}}');
+      } else if (!is_carousel) {
+        resolvedCards = [];
+        tpl.carousel_cards = [];
+
+        // Single product template: upload header image → get media_id → store in gallery folder
+        const headerImageUrl = req.body.header_image_url || '';
+        if (headerImageUrl && tpl.header_type === 'IMAGE') {
+          try {
+            console.log(`[MetaTemplates] Single product: uploading header image for "${cleanName}"…`);
+            const { buffer, mimeType } = await whatsappService.downloadImage(headerImageUrl);
+            const filename = `${cleanName}_header_${Date.now()}.jpg`;
+
+            // uploadMedia → media_id (used in /messages send payload)
+            const mediaId = await whatsappService.uploadMedia(buffer, filename, mimeType);
+            tpl.header_image_id = mediaId;
+
+            // Also uploadMediaResumable → file_handle (used in template creation example)
+            let fileHandle = '';
+            try {
+              fileHandle = await whatsappService.uploadMediaResumable(buffer, filename, mimeType);
+              tpl.header_file_handle = fileHandle; // used by buildMetaComponents for header example
+            } catch (fhErr) {
+              console.warn(`[MetaTemplates] Resumable upload failed (non-fatal): ${fhErr.message}`);
+            }
+
+            // Store in gallery under folder named after template
+            if (!db.gallery_folders) db.gallery_folders = [];
+            if (!db.gallery_images)  db.gallery_images  = [];
+            let folder = db.gallery_folders.find(f => f.channel_id === channelId && f.name === cleanName);
+            if (!folder) {
+              folder = { id: uuidv4(), channel_id: channelId, name: cleanName, created_at: new Date().toISOString() };
+              db.gallery_folders.push(folder);
+            }
+            db.gallery_images.push({
+              id: uuidv4(), folder_id: folder.id, channel_id: channelId,
+              filename, media_id: mediaId, file_handle: fileHandle,
+              source_url: headerImageUrl, template_name: cleanName, card_index: 0,
+              auto_detected: false, created_at: new Date().toISOString(),
+            });
+            db.save();
+            console.log(`[MetaTemplates] Single product header uploaded → media_id: ${mediaId}`);
+          } catch (imgErr) {
+            console.warn(`[MetaTemplates] Header image upload failed (non-fatal): ${imgErr.message}`);
+          }
+        }
       } else {
         resolvedCards = is_carousel ? await autoUploadTemplateImages(channelId, carousel_cards, name) : [];
         tpl.carousel_cards = resolvedCards;

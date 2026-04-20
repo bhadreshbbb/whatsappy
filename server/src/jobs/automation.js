@@ -1029,12 +1029,79 @@ async function sendMultiple(db, cam, events, type) {
           }
         }
 
-        // For single-product templates, build per-user productConfig from the event's product data
-        // so each send has the exact product the visitor viewed (not a static template default).
-        const visitorName = visitor?.name || evt.name || 'Customer';
-        const perUserProductConfig = (!metaTpl.is_carousel && (evt.product_name || evt.product_url))
-          ? { cards: [{ name: visitorName, title: evt.product_name || '', price: evt.product_price || '', link: evt.product_url || '', url: evt.product_url || '', image: evt.product_image || '' }] }
-          : metaTpl.product_config;
+        // ── SINGLE PRODUCT (abandoned_product_view): per-user image upload + stage vars ──
+        let perUserProductConfig = metaTpl.product_config;
+        if (!metaTpl.is_carousel && cam.campaign_type === 'abandoned_product_view') {
+          const visitorName = visitor?.name || evt.name || 'Customer';
+
+          // Resolve stage variables — replace {product_name} etc. with real values
+          const sv = cam.stage_vars || {};
+          const sKey = currentStage === 1 ? 's1' : 's2';
+          const stageTpl = sv[sKey] || {};
+          const tok = (s) => (s || '')
+            .replace(/\{product_name\}/g,  evt.product_name  || '')
+            .replace(/\{product_price\}/g, evt.product_price || '')
+            .replace(/\{product_url\}/g,   evt.product_url   || '')
+            .replace(/\{customer_name\}/g, visitorName);
+          const v1 = tok(stageTpl.v1) || evt.product_name  || '';
+          const v2 = tok(stageTpl.v2) || evt.product_price || '';
+
+          // Upload product image to Meta media API → get media_id for header
+          let productMediaId = '';
+          const imgUrl = evt.product_image || '';
+          if (imgUrl) {
+            // Check gallery cache first — avoid re-uploading same product image
+            const cached = (db.gallery_images || []).find(
+              g => g.source_url === imgUrl && g.channel_id === channelId && g.media_id
+            );
+            if (cached) {
+              productMediaId = cached.media_id;
+              console.log(`[AbandonedProductView] Image cache hit for ${evt.phone} — media_id: ${productMediaId}`);
+            } else {
+              try {
+                const { buffer, mimeType } = await whatsappService.downloadImage(imgUrl);
+                productMediaId = await whatsappService.uploadMedia(buffer, `apv_${Date.now()}.jpg`, mimeType);
+                // Cache in gallery under template folder
+                if (!db.gallery_folders) db.gallery_folders = [];
+                if (!db.gallery_images)  db.gallery_images  = [];
+                const folderName = metaTpl.name;
+                let folder = db.gallery_folders.find(f => f.channel_id === channelId && f.name === folderName);
+                if (!folder) {
+                  folder = { id: uuidv4(), channel_id: channelId, name: folderName, created_at: new Date().toISOString() };
+                  db.gallery_folders.push(folder);
+                }
+                db.gallery_images.push({
+                  id: uuidv4(), folder_id: folder.id, channel_id: channelId,
+                  filename: `apv_${evt.phone}_${Date.now()}.jpg`,
+                  media_id: productMediaId, source_url: imgUrl,
+                  product_name: evt.product_name, product_url: evt.product_url,
+                  created_at: new Date().toISOString(),
+                });
+                db.save();
+                console.log(`[AbandonedProductView] Image uploaded for ${evt.phone} → media_id: ${productMediaId}`);
+              } catch (imgErr) {
+                console.warn(`[AbandonedProductView] Image upload failed for ${evt.phone}: ${imgErr.message}`);
+              }
+            }
+          }
+
+          perUserProductConfig = {
+            cards: [{
+              '1':      v1,           // positional key → {{1}} in body (no variable_labels)
+              '2':      v2,           // positional key → {{2}} in body
+              name:     visitorName,
+              title:    v1,
+              price:    v2,
+              link:     evt.product_url   || '',
+              url:      evt.product_url   || '',
+              image:    imgUrl,
+              media_id: productMediaId,   // numeric media_id for header { "image": { "id": "..." } }
+            }],
+          };
+        } else if (!metaTpl.is_carousel && (evt.product_name || evt.product_url)) {
+          const visitorName = visitor?.name || evt.name || 'Customer';
+          perUserProductConfig = { cards: [{ name: visitorName, title: evt.product_name || '', price: evt.product_price || '', link: evt.product_url || '', url: evt.product_url || '', image: evt.product_image || '' }] };
+        }
 
         // Build the exact /messages payload with language override + UTM tracking
         const sendPayload = buildSendMessagePayload(metaTpl, perUserProductConfig, evt.phone, metaLangCode, cam.id);
