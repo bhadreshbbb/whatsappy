@@ -1267,45 +1267,83 @@ export async function createTemplate(req, res) {
         resolvedCards = [];
         tpl.carousel_cards = [];
 
-        // Single product template: upload header image → get media_id → store in gallery folder
-        const headerImageUrl = req.body.header_image_url || '';
-        if (headerImageUrl && tpl.header_type === 'IMAGE') {
-          try {
-            console.log(`[MetaTemplates] Single product: uploading header image for "${cleanName}"…`);
-            const { buffer, mimeType } = await whatsappService.downloadImage(headerImageUrl);
-            const filename = `${cleanName}_header_${Date.now()}.jpg`;
+        if (tpl.header_type === 'IMAGE') {
+          // Resolve image source: prefer URL, fall back to gallery record lookup by header_image_id
+          let headerImageUrl = req.body.header_image_url || '';
+          const headerImageGalleryId = req.body.header_image_id || '';
 
-            // uploadMedia → media_id (used in /messages send payload)
-            const mediaId = await whatsappService.uploadMedia(buffer, filename, mimeType);
-            tpl.header_image_id = mediaId;
+          // If gallery image selected (no URL), look up gallery record for reuse or source_url
+          if (!headerImageUrl && headerImageGalleryId && db.gallery_images) {
+            const galleryRec = db.gallery_images.find(g => g.id === headerImageGalleryId && g.channel_id === channelId);
+            if (galleryRec) {
+              // Reuse existing file_handle + media_id if already uploaded — no re-upload needed
+              if (galleryRec.file_handle && galleryRec.media_id) {
+                tpl.header_file_handle = galleryRec.file_handle;
+                tpl.header_image_id    = galleryRec.media_id;
+                console.log(`[MetaTemplates] Reusing gallery image → media_id: ${galleryRec.media_id}, file_handle: ${galleryRec.file_handle}`);
+              } else {
+                // Has source_url — download + upload
+                headerImageUrl = galleryRec.source_url || '';
+              }
+            }
+          }
 
-            // Also uploadMediaResumable → file_handle (used in template creation example)
-            let fileHandle = '';
+          // Upload if we have a URL and don't already have file_handle
+          if (headerImageUrl && !tpl.header_file_handle) {
             try {
-              fileHandle = await whatsappService.uploadMediaResumable(buffer, filename, mimeType);
-              tpl.header_file_handle = fileHandle; // used by buildMetaComponents for header example
-            } catch (fhErr) {
-              console.warn(`[MetaTemplates] Resumable upload failed (non-fatal): ${fhErr.message}`);
-            }
+              console.log(`[MetaTemplates] Single product: uploading header image for "${cleanName}"…`);
+              const { buffer, mimeType } = await whatsappService.downloadImage(headerImageUrl);
+              const filename = `${cleanName}_header_${Date.now()}.jpg`;
 
-            // Store in gallery under folder named after template
-            if (!db.gallery_folders) db.gallery_folders = [];
-            if (!db.gallery_images)  db.gallery_images  = [];
-            let folder = db.gallery_folders.find(f => f.channel_id === channelId && f.name === cleanName);
-            if (!folder) {
-              folder = { id: uuidv4(), channel_id: channelId, name: cleanName, created_at: new Date().toISOString() };
-              db.gallery_folders.push(folder);
+              // uploadMediaResumable → file_handle (REQUIRED for template creation header example)
+              let fileHandle = '';
+              try {
+                fileHandle = await whatsappService.uploadMediaResumable(buffer, filename, mimeType);
+                tpl.header_file_handle = fileHandle;
+                console.log(`[MetaTemplates] Resumable upload → file_handle: ${fileHandle}`);
+              } catch (fhErr) {
+                console.error(`[MetaTemplates] Resumable upload failed — header_handle will be missing: ${fhErr.message}`);
+              }
+
+              // uploadMedia → media_id (used in /messages send payload)
+              let mediaId = '';
+              try {
+                mediaId = await whatsappService.uploadMedia(buffer, filename, mimeType);
+                tpl.header_image_id = mediaId;
+                console.log(`[MetaTemplates] Media upload → media_id: ${mediaId}`);
+              } catch (mErr) {
+                console.error(`[MetaTemplates] Media upload failed: ${mErr.message}`);
+              }
+
+              // Store in gallery under folder named after template
+              if (!db.gallery_folders) db.gallery_folders = [];
+              if (!db.gallery_images)  db.gallery_images  = [];
+              let folder = db.gallery_folders.find(f => f.channel_id === channelId && f.name === cleanName);
+              if (!folder) {
+                folder = { id: uuidv4(), channel_id: channelId, name: cleanName, created_at: new Date().toISOString() };
+                db.gallery_folders.push(folder);
+              }
+              // Upsert — replace existing record for this template if any
+              const existIdx = db.gallery_images.findIndex(g => g.channel_id === channelId && g.template_name === cleanName && g.card_index === 0);
+              const record = {
+                id: existIdx >= 0 ? db.gallery_images[existIdx].id : uuidv4(),
+                folder_id: folder.id, channel_id: channelId,
+                filename, media_id: mediaId, file_handle: fileHandle,
+                source_url: headerImageUrl, template_name: cleanName, card_index: 0,
+                auto_detected: false,
+                created_at: existIdx >= 0 ? db.gallery_images[existIdx].created_at : new Date().toISOString(),
+                updated_at: new Date().toISOString(),
+              };
+              if (existIdx >= 0) db.gallery_images[existIdx] = record;
+              else db.gallery_images.push(record);
+              db.save();
+            } catch (imgErr) {
+              console.error(`[MetaTemplates] Header image upload failed: ${imgErr.message}`);
             }
-            db.gallery_images.push({
-              id: uuidv4(), folder_id: folder.id, channel_id: channelId,
-              filename, media_id: mediaId, file_handle: fileHandle,
-              source_url: headerImageUrl, template_name: cleanName, card_index: 0,
-              auto_detected: false, created_at: new Date().toISOString(),
-            });
-            db.save();
-            console.log(`[MetaTemplates] Single product header uploaded → media_id: ${mediaId}`);
-          } catch (imgErr) {
-            console.warn(`[MetaTemplates] Header image upload failed (non-fatal): ${imgErr.message}`);
+          }
+
+          if (!tpl.header_file_handle) {
+            console.warn(`[MetaTemplates] ⚠ No file_handle for header — Meta may reject template. Upload image via Gallery first.`);
           }
         }
       } else {
