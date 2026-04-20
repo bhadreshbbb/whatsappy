@@ -142,14 +142,41 @@ export const visitorsController = {
       }));
 
       const cartEvents = bySession(db.cart_events || [], 'created_at').map(c => {
-        let products = [];
-        try { products = JSON.parse(c.products || '[]'); } catch (_) {}
+        let rawProducts = [];
+        try { rawProducts = JSON.parse(c.products || '[]'); } catch (_) {}
+
+        // Normalize every product in the array so each has a guaranteed unique key: product_url
+        // product_url = full product page URL (e.g. https://shop.com/products/blue-kurti)
+        // product_handle = short slug extracted from URL (e.g. "blue-kurti") — used for condition matching
+        const products = rawProducts.map(p => {
+          const url = p.url || p.product_url || p.link || '';
+          const handleMatch = url.match(/\/products\/([^/?#]+)/);
+          return {
+            product_url:    url,
+            product_handle: handleMatch ? handleMatch[1] : '',  // unique short ID for condition matching
+            product_name:   p.name  || p.title || p.product_name || '',
+            product_price:  p.price || p.product_price || '',
+            product_image:  p.image || p.product_image || p.img || '',
+            product_id:     p.id    || p.variant_id || '',
+          };
+        });
+
+        // Also extract handle from the top-level product_url
+        const topUrlMatch = (c.product_url || '').match(/\/products\/([^/?#]+)/);
+        const product_handle = topUrlMatch ? topUrlMatch[1] : '';
+
         return {
-          type: c.event_type || 'add_to_cart', time: c._time,
-          product_name: c.product_name, product_image: c.product_image,
-          product_url: c.product_url, product_price: c.product_price,
-          total_amount: c.total_amount, cart_url: c.cart_url,
-          recovered: !!c.recovered, products,
+          type:           c.event_type || 'add_to_cart',
+          time:           c._time,
+          product_name:   c.product_name,
+          product_image:  c.product_image,
+          product_url:    c.product_url,   // ← unique identifier for the primary product
+          product_handle,                  // ← short slug (use for condition matching: has_product=blue-kurti)
+          product_price:  c.product_price,
+          total_amount:   c.total_amount,
+          cart_url:       c.cart_url,
+          recovered:      !!c.recovered,
+          products,                        // ← all items in cart, each with product_url + product_handle
         };
       });
 

@@ -266,24 +266,61 @@ function EventCard({ event }) {
 
           {/* product_view / add_to_cart */}
           {(event.type === 'product_view' || event.type === 'add_to_cart' || event.type === 'checkout_started') && (
-            <div className="flex gap-3">
-              {event.product_image && (
-                <img src={event.product_image} alt="" className="w-16 h-16 rounded-lg object-cover flex-shrink-0"
-                  style={{ border: "1px solid rgba(255,255,255,0.08)" }} onError={e => e.target.style.display='none'} />
-              )}
-              <div className="min-w-0 flex-1">
-                <p className="text-xs text-white font-semibold leading-tight">{event.product_name || '—'}</p>
-                {event.product_price && <p className="text-sm font-bold mt-0.5" style={{ color: "#4ade80" }}>{event.product_price}</p>}
-                {event.total_amount > 0 && <p className="text-xs mt-0.5" style={{ color: "#94a3b8" }}>Cart total: ₹{event.total_amount}</p>}
-                {event.product_url && (
-                  <a href={event.product_url} target="_blank" rel="noreferrer"
-                    className="text-[10px] font-mono mt-1 block hover:underline truncate" style={{ color: "#3b82f6" }}>{event.product_url}</a>
+            <div className="space-y-2">
+              {/* Primary product (first item or product_view) */}
+              <div className="flex gap-3">
+                {event.product_image && (
+                  <img src={event.product_image} alt="" className="w-14 h-14 rounded-lg object-cover flex-shrink-0"
+                    style={{ border: "1px solid rgba(255,255,255,0.08)" }} onError={e => e.target.style.display='none'} />
                 )}
-                {event.cart_url && (
-                  <a href={event.cart_url} target="_blank" rel="noreferrer"
-                    className="text-[10px] mt-0.5 flex items-center gap-1 hover:underline" style={{ color: "#60a5fa" }}>🛒 View Cart</a>
-                )}
+                <div className="min-w-0 flex-1">
+                  <p className="text-xs text-white font-semibold leading-tight">{event.product_name || '—'}</p>
+                  {event.product_price && <p className="text-sm font-bold mt-0.5" style={{ color: "#4ade80" }}>{event.product_price}</p>}
+                  {event.total_amount > 0 && <p className="text-xs mt-0.5" style={{ color: "#94a3b8" }}>Cart total: ₹{event.total_amount}</p>}
+                  {event.product_url && (
+                    <a href={event.product_url} target="_blank" rel="noreferrer"
+                      className="text-[10px] font-mono mt-1 block hover:underline truncate" style={{ color: "#3b82f6" }}>{event.product_url}</a>
+                  )}
+                  {/* product_handle = unique ID for condition matching */}
+                  {event.product_handle && (
+                    <span className="inline-block mt-1 text-[9px] px-1.5 py-0.5 rounded font-mono"
+                      style={{ background: "rgba(99,102,241,0.1)", border: "1px solid rgba(99,102,241,0.2)", color: "#818cf8" }}>
+                      ID: {event.product_handle}
+                    </span>
+                  )}
+                  {event.cart_url && (
+                    <a href={event.cart_url} target="_blank" rel="noreferrer"
+                      className="text-[10px] mt-1 flex items-center gap-1 hover:underline" style={{ color: "#60a5fa" }}>🛒 View Cart</a>
+                  )}
+                </div>
               </div>
+
+              {/* All products in cart (when multiple items) */}
+              {event.type !== 'product_view' && event.products?.length > 1 && (
+                <div className="mt-1 space-y-1">
+                  <p className="text-[9px] uppercase tracking-wide" style={{ color: "#475569" }}>All {event.products.length} cart items</p>
+                  {event.products.map((p, i) => (
+                    <div key={i} className="flex items-center gap-2 px-2 py-1.5 rounded-lg"
+                      style={{ background: "rgba(251,146,60,0.06)", border: "1px solid rgba(251,146,60,0.12)" }}>
+                      {p.product_image && (
+                        <img src={p.product_image} alt="" className="w-7 h-7 rounded object-cover flex-shrink-0"
+                          onError={e => e.target.style.display='none'} />
+                      )}
+                      <div className="min-w-0 flex-1">
+                        <p className="text-[10px] text-white font-medium truncate">{p.product_name || '—'}</p>
+                        {p.product_price && <span className="text-[9px]" style={{ color: "#4ade80" }}>{p.product_price}</span>}
+                      </div>
+                      {/* product_handle is the unique key for this product */}
+                      {p.product_handle && (
+                        <span className="text-[9px] font-mono flex-shrink-0 px-1.5 py-0.5 rounded"
+                          style={{ background: "rgba(99,102,241,0.1)", color: "#818cf8" }}>
+                          {p.product_handle}
+                        </span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
 

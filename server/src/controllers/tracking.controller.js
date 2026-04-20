@@ -290,8 +290,17 @@ export const trackingController = {
 
       const cid = channelId || 'demo';
 
-      // Auto-fill product fields from first product in array if top-level fields are missing
-      const productsArr = Array.isArray(products) ? products : [];
+      // Normalize products array — ensure each item has a consistent `url` field as unique key
+      // product_url is the canonical unique identifier for a product (e.g. /products/blue-kurti)
+      const rawArr = Array.isArray(products) ? products : [];
+      const productsArr = rawArr.map(p => ({
+        url:   p.url || p.product_url || p.link || '',          // ← unique key
+        name:  p.name  || p.title || p.product_name || '',
+        price: p.price != null ? String(p.price) : (p.product_price || ''),
+        image: p.image || p.product_image || p.img || '',
+        id:    p.id    || p.variant_id || '',
+      }));
+
       const firstProduct = productsArr[0] || {};
       if (!product_name  && firstProduct.name)  product_name  = firstProduct.name;
       if (!product_image && firstProduct.image) product_image = firstProduct.image;
