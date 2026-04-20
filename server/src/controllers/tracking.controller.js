@@ -4,6 +4,19 @@ import { upgradeStatus } from '../utils/statusMachine.js';
 import https from 'https';
 import http from 'http';
 
+// Strip query string + hash + trailing slash from any URL before storing
+// e.g. https://shop.com/products/kurti?variant=123&ref=home → https://shop.com/products/kurti
+function cleanProductUrl(url) {
+  if (!url || typeof url !== 'string') return url || '';
+  try {
+    const u = new URL(url);
+    return (u.origin + u.pathname).replace(/\/$/, '');
+  } catch (_) {
+    // Not a full URL (e.g. relative path) — just strip after ?
+    return url.split('?')[0].split('#')[0].replace(/\/$/, '');
+  }
+}
+
 /**
  * Scrape a URL for product details (name, price, image).
  * Tries Shopify JSON API first, falls back to OpenGraph meta tags.
@@ -203,7 +216,7 @@ export const trackingController = {
             for (const p of products) {
               if (!p.name || !p.url) continue;
               const existing = db.product_catalog.findIndex(c => c.channel_id === (channelId || 'demo') && c.url === p.url);
-              const record = { channel_id: channelId || 'demo', name: p.name, price: p.price || '0', image: p.image || '', url: p.url, updated_at: new Date().toISOString() };
+              const record = { channel_id: channelId || 'demo', name: p.name, price: p.price || '0', image: p.image || '', url: cleanProductUrl(p.url), updated_at: new Date().toISOString() };
               if (existing >= 0) Object.assign(db.product_catalog[existing], record);
               else db.product_catalog.push({ id: (db.product_catalog.length || 0) + 1, ...record });
             }
@@ -294,12 +307,15 @@ export const trackingController = {
       // product_url is the canonical unique identifier for a product (e.g. /products/blue-kurti)
       const rawArr = Array.isArray(products) ? products : [];
       const productsArr = rawArr.map(p => ({
-        url:   p.url || p.product_url || p.link || '',          // ← unique key
+        url:   cleanProductUrl(p.url || p.product_url || p.link || ''),  // ← clean unique key
         name:  p.name  || p.title || p.product_name || '',
         price: p.price != null ? String(p.price) : (p.product_price || ''),
         image: p.image || p.product_image || p.img || '',
         id:    p.id    || p.variant_id || '',
       }));
+
+      // Clean top-level product_url too
+      if (product_url) product_url = cleanProductUrl(product_url);
 
       const firstProduct = productsArr[0] || {};
       if (!product_name  && firstProduct.name)  product_name  = firstProduct.name;
@@ -537,6 +553,9 @@ export const trackingController = {
       const { channelId, sessionId, product, eventType, currency } = req.body;
       let { product_name, product_image, product_url, product_price } = req.body;
       const cid = channelId || 'demo';
+
+      // Strip query params from URL before storing
+      if (product_url) product_url = cleanProductUrl(product_url);
 
       // ── Server-side auto-scrape: if image or name missing but URL provided ──
       // Respond immediately; scrape runs async and patches the record when done.
