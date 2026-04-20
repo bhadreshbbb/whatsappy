@@ -810,7 +810,8 @@ export async function previewPayload(req, res) {
     const db = getDb();
     const channelId = req.headers['x-channel-id'] || 'demo';
     const { name, category, language, body, footer, buttons, header_type, header_text,
-      is_carousel, carousel_cards, variable_labels } = req.body;
+      is_carousel, carousel_cards, variable_labels,
+      header_image_url, header_image_id, example_values } = req.body;
 
     const cleanName = (name || 'preview').toLowerCase().replace(/[^a-z0-9_]/g, '_');
     const langMap = { en: 'en_US', hi: 'hi', gu: 'gu', ta: 'ta', te: 'te', mr: 'mr', bn: 'bn', ar: 'ar', ur: 'ur' };
@@ -821,19 +822,79 @@ export async function previewPayload(req, res) {
       header_type: header_type || 'NONE', header_text: header_text || '',
       body: body || '', footer: footer || '',
       buttons: buttons || [], variable_labels: variable_labels || [],
+      example_values: example_values || {},
       is_carousel: !!is_carousel, carousel_cards: carousel_cards || [],
     };
+
+    // ── For single product: resolve header image → get real file_handle from Meta ──
+    if (!is_carousel && header_type === 'IMAGE') {
+      // Try gallery record first (cheapest — already uploaded)
+      let resolvedFileHandle = '';
+      let resolvedMediaId = '';
+
+      if (header_image_id && db.gallery_images) {
+        const rec = db.gallery_images.find(g => g.id === header_image_id && g.channel_id === channelId);
+        if (rec) {
+          resolvedFileHandle = rec.file_handle || '';
+          resolvedMediaId    = rec.media_id    || '';
+        }
+      }
+
+      // Upload image to Meta to get file_handle if not already cached
+      const imgUrl = header_image_url || '';
+      if (!resolvedFileHandle && imgUrl) {
+        try {
+          const creds = getCreds(channelId);
+          if (creds) {
+            const { buffer, mimeType } = await whatsappService.downloadImage(imgUrl);
+            const filename = `${cleanName}_prev_${Date.now()}.jpg`;
+            resolvedFileHandle = await whatsappService.uploadMediaResumable(buffer, filename, mimeType);
+            if (!resolvedMediaId) {
+              try { resolvedMediaId = await whatsappService.uploadMedia(buffer, filename, mimeType); } catch (_) {}
+            }
+            // Cache in gallery so next preview/creation reuses it
+            if (!db.gallery_folders) db.gallery_folders = [];
+            if (!db.gallery_images)  db.gallery_images  = [];
+            let folder = db.gallery_folders.find(f => f.channel_id === channelId && f.name === cleanName);
+            if (!folder) {
+              folder = { id: uuidv4(), channel_id: channelId, name: cleanName, created_at: new Date().toISOString() };
+              db.gallery_folders.push(folder);
+            }
+            const existIdx = db.gallery_images.findIndex(g => g.channel_id === channelId && g.template_name === cleanName && g.card_index === 0);
+            const record = {
+              id: existIdx >= 0 ? db.gallery_images[existIdx].id : uuidv4(),
+              folder_id: folder.id, channel_id: channelId,
+              filename, media_id: resolvedMediaId, file_handle: resolvedFileHandle,
+              source_url: imgUrl, template_name: cleanName, card_index: 0,
+              auto_detected: false,
+              created_at: existIdx >= 0 ? db.gallery_images[existIdx].created_at : new Date().toISOString(),
+              updated_at: new Date().toISOString(),
+            };
+            if (existIdx >= 0) db.gallery_images[existIdx] = record;
+            else db.gallery_images.push(record);
+            db.save();
+            console.log(`[Preview] Uploaded header image → file_handle: ${resolvedFileHandle}, media_id: ${resolvedMediaId}`);
+          }
+        } catch (uploadErr) {
+          console.warn(`[Preview] Header image upload failed (non-fatal): ${uploadErr.message}`);
+        }
+      }
+
+      if (resolvedFileHandle) tpl.header_file_handle = resolvedFileHandle;
+      if (resolvedMediaId)    tpl.header_image_id    = resolvedMediaId;
+    }
 
     // ── Resolve images if dry-running carousel ──
     if (is_carousel) {
       tpl.carousel_cards = await autoUploadTemplateImages(channelId, carousel_cards, name || 'preview');
     }
 
-    const components = buildMetaComponents(tpl, { preserveVarNumbers: true });
+    const components = buildMetaComponents(tpl, { preserveVarNumbers: !is_carousel ? false : true });
     const payload = {
       name: cleanName,
-      category: (tpl.category || 'MARKETING').toUpperCase(),  // "MARKETING" | "UTILITY" — Meta requires UPPERCASE
+      category: (tpl.category || 'MARKETING').toUpperCase(),
       language: langMap[tpl.language] || tpl.language,
+      ...(is_carousel ? {} : { parameter_format: 'NAMED' }),
       components,
     };
 
