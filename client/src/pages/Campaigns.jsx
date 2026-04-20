@@ -579,24 +579,31 @@ function CreateModal({ onClose, onCreated }) {
                            <p className="text-[10px] text-slate-500 px-1">
                              {type?.carouselOnly
                                ? 'No carousel Meta templates found. Create one in the Templates page.'
-                               : 'No Meta templates found. Create one in the Templates page.'}
+                               : type?.singleProductOnly
+                                 ? 'No single product templates found. Go to Templates → Custom Single Product to create one.'
+                                 : 'No Meta templates found. Create one in the Templates page.'}
                            </p>
                          );
                          return filtered.map(t => {
                            const statusColor = t.meta_status === 'APPROVED' ? 'text-green-400' : t.meta_status === 'PENDING' ? 'text-yellow-400' : 'text-red-400';
+                           const isSingleProd = type?.singleProductOnly;
+                           const selBg    = isSingleProd ? 'bg-cyan-500/10 border-cyan-500/50 text-white'         : 'bg-orange-500/10 border-orange-500/50 text-white';
+                           const hoverBg  = isSingleProd ? 'border-white/5 text-slate-400 hover:border-cyan-500/30 hover:bg-cyan-500/5' : 'border-white/5 text-slate-400 hover:border-orange-500/30 hover:bg-orange-500/5';
+                           const checkCol = isSingleProd ? 'text-cyan-400' : 'text-orange-400';
                            return (
                              <button key={t.id} onClick={() => setMetaTplId(t.id)}
-                               className={`w-full p-3 rounded-2xl border text-left flex justify-between items-center transition-all ${metaTemplateId === t.id ? 'bg-orange-500/10 border-orange-500/50 text-white' : 'border-white/5 text-slate-400 hover:border-orange-500/30 hover:bg-orange-500/5'}`}>
+                               className={`w-full p-3 rounded-2xl border text-left flex justify-between items-center transition-all ${metaTemplateId === t.id ? selBg : hoverBg}`}>
                                <div>
                                  <p className="text-xs font-bold">{t.name}</p>
                                  <div className="flex items-center gap-2 mt-0.5 flex-wrap">
                                    <span className={`text-[10px] font-semibold ${statusColor}`}>{t.meta_status || 'DRAFT'}</span>
+                                   {!t.is_carousel && <span className="text-[10px] text-cyan-500">· Single Product</span>}
                                    {t.is_carousel && <span className="text-[10px] text-orange-400">· {t.carousel_cards?.length} cards</span>}
                                    {t.auto_product_mode && <span className="text-[10px] text-orange-300">· Auto-products</span>}
                                    <span className="text-[10px] text-slate-500">· {t.language?.toUpperCase()}</span>
                                  </div>
                                </div>
-                               {metaTemplateId === t.id && <CheckCircle size={14} className="text-orange-400"/>}
+                               {metaTemplateId === t.id && <CheckCircle size={14} className={checkCol}/>}
                              </button>
                            );
                          });

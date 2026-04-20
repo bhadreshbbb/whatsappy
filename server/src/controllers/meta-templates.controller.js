@@ -222,11 +222,14 @@ function buildMetaComponents(tpl, { preserveVarNumbers = false } = {}) {
   if (tpl.footer?.trim()) components.push({ type: 'FOOTER', text: sanitizeMetaText(tpl.footer) });
 
   if (tpl.buttons?.length) {
+    const exVals = Array.isArray(tpl.example_values) ? {} : (tpl.example_values || {});
     const buttons = tpl.buttons.map(b => {
       const bType = String(b.type || '').toUpperCase();
       if (bType === 'URL') {
         const btn = { type: 'URL', text: b.text, url: b.url };
-        const ex = buildUrlExample(b.url, stdVarMap);
+        // Button URL {{1}} is button-scoped — use btn_1 example key to avoid collision with body {{1}}
+        const btnExVals = { '1': exVals['btn_1'] || exVals['4'] || 'product-slug' };
+        const ex = buildUrlExample(b.url, stdVarMap, btnExVals);
         if (ex) btn.example = ex;
         return btn;
       }
