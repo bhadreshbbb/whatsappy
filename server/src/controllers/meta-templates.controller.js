@@ -52,6 +52,29 @@ function sanitizeVarValue(text) {
     .trim();
 }
 
+/**
+ * Sanitize BUTTON TEXT for Meta API.
+ * Meta rejects: emojis, newlines, bold/italic/strikethrough formatting chars.
+ * Allowed: plain ASCII + Unicode letters/digits, spaces, punctuation.
+ */
+function sanitizeButtonText(text) {
+  if (!text) return text;
+  return text
+    // Strip emoji ranges (broad coverage)
+    .replace(/[\u{1F000}-\u{1FFFF}]/gu, '')
+    .replace(/[\u{2600}-\u{27BF}]/gu, '')
+    .replace(/[\u{FE00}-\u{FEFF}]/gu, '')   // variation selectors
+    .replace(/[\u{1F900}-\u{1F9FF}]/gu, '') // supplemental symbols
+    .replace(/\u200D/g, '')                  // zero-width joiner
+    // Strip WhatsApp formatting: *bold* _italic_ ~strike~ `code`
+    .replace(/[*_~`]/g, '')
+    // No newlines
+    .replace(/[\n\r]/g, ' ')
+    .replace(/ {2,}/g, ' ')
+    .trim()
+    .slice(0, 25); // Meta button text max 25 chars
+}
+
 // ── Variable example values — Meta reviewers see these; use realistic strings ──
 // Mapped from the var_map field options so Meta understands what each {{N}} is.
 const FIELD_EXAMPLES = {
@@ -113,6 +136,15 @@ function buildNamedParams(text, varMap, exampleValues = {}) {
     const example = sanitizeVarValue(String(exampleValues[v] || '').trim() || getVarExample(v, varMap));
     return { param_name: name, example };
   });
+
+  // Meta error 2388299: variables cannot be at the very start or end of body text.
+  // Add minimal static text to satisfy this constraint without changing user intent.
+  if (/^\{\{[^}]+\}\}/.test(namedBody.trimStart())) {
+    namedBody = 'Hi! ' + namedBody;
+  }
+  if (/\{\{[^}]+\}\}$/.test(namedBody.trimEnd())) {
+    namedBody = namedBody + '.';
+  }
 
   return { namedBody, params };
 }
@@ -206,7 +238,7 @@ function buildMetaComponents(tpl, { preserveVarNumbers = false } = {}) {
             const normalizedUrl = preserveVarNumbers
               ? (b.url || '')
               : (b.url || '').replace(/\{\{\d+\}\}/g, '{{1}}');
-            const btn = { type: 'URL', text: b.text, url: normalizedUrl };
+            const btn = { type: 'URL', text: sanitizeButtonText(b.text), url: normalizedUrl };
             if (origVars.length) {
               // example = [slug_value] — the value that replaces {{1}} at send time
               const exVal = String(exV[origVars[0]] || '').trim() || getVarExample(origVars[0], vm);
@@ -258,15 +290,15 @@ function buildMetaComponents(tpl, { preserveVarNumbers = false } = {}) {
     const buttons = tpl.buttons.map(b => {
       const bType = String(b.type || '').toUpperCase();
       if (bType === 'URL') {
-        const btn = { type: 'URL', text: b.text, url: b.url };
+        const btn = { type: 'URL', text: sanitizeButtonText(b.text), url: b.url };
         // Button URL {{1}} is button-scoped — use btn_1 example key
         const btnExVals = { '1': exVals['btn_1'] || exVals['4'] || 'product-slug' };
         const ex = buildUrlExample(b.url, stdVarMap, btnExVals);
         if (ex) btn.example = ex;
         return btn;
       }
-      if (bType === 'QUICK_REPLY')  return { type: 'QUICK_REPLY',  text: b.text };
-      if (bType === 'PHONE_NUMBER') return { type: 'PHONE_NUMBER', text: b.text, phone_number: b.phone_number };
+      if (bType === 'QUICK_REPLY')  return { type: 'QUICK_REPLY',  text: sanitizeButtonText(b.text) };
+      if (bType === 'PHONE_NUMBER') return { type: 'PHONE_NUMBER', text: sanitizeButtonText(b.text), phone_number: b.phone_number };
       return b;
     });
     components.push({ type: 'BUTTONS', buttons });

@@ -77,14 +77,14 @@ const BLANK_SINGLE_TPL = {
   is_carousel: false, auto_product_mode: false,
   header_type: 'IMAGE', header_text: '',
   header_image_id: '', header_image_url: '',
-  body: '{{1}}\n\n{{2}}',
+  body: 'Hi! {{1}}\n\n{{2}} - Don\'t miss out.',
   footer: 'Reply STOP to unsubscribe',
   buttons: [
-    { type: 'URL',         text: 'View Product 🛍️', url: 'https://yourstore.com/products/{{1}}' },
+    { type: 'URL',         text: 'View Product', url: 'https://yourstore.com/products/{{1}}' },
     { type: 'QUICK_REPLY', text: 'Not Interested' },
   ],
   variable_labels: {},
-  example_values:  { '1': 'Hi Priya! 👋 You recently viewed *Blue Cotton Kurti*', '2': '💰 Price: ₹799 — Limited stock, grab it now! 🛍️', btn_1: 'blue-cotton-kurti' },
+  example_values:  { '1': 'You recently viewed Blue Cotton Kurti', '2': 'Price: Rs.799 - Limited stock', btn_1: 'blue-cotton-kurti' },
   carousel_cards: [],
 };
 
