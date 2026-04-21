@@ -139,7 +139,19 @@ export default function Templates() {
 
   async function loadTemplates() {
     setLoading(true);
-    try { const d = await api('/'); setTemplates(d.templates); }
+    try {
+      const d = await api('/');
+      setTemplates(d.templates);
+      // Auto-refresh any PENDING/DRAFT templates from Meta in the background
+      const pending = (d.templates || []).filter(t => !['APPROVED','REJECTED','SUBMIT_ERROR','NO_CREDENTIALS'].includes(t.meta_status) && t.meta_template_id);
+      if (pending.length > 0) {
+        Promise.allSettled(pending.map(t => api(`/${t.id}/refresh`))).then(results => {
+          const updated = [];
+          results.forEach((r, i) => { if (r.status === 'fulfilled' && r.value?.template) updated.push(r.value.template); });
+          if (updated.length > 0) setTemplates(prev => prev.map(t => { const u = updated.find(u => u.id === t.id); return u || t; }));
+        });
+      }
+    }
     catch (e) { setError(e.message); }
     finally { setLoading(false); }
   }
