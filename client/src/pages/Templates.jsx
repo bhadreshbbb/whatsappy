@@ -137,18 +137,46 @@ export default function Templates() {
 
   useEffect(() => { loadTemplates(); }, []);
 
+  // Poll PENDING templates every 10s while list view is open
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setTemplates(prev => {
+        const pending = prev.filter(t => !TERMINAL_STATUSES.includes(t.meta_status) && t.meta_status !== 'NO_CREDENTIALS');
+        if (pending.length === 0) return prev;
+        Promise.allSettled(pending.map(t => api(`/${t.id}/refresh`))).then(results => {
+          setTemplates(cur => {
+            let changed = false;
+            const next = cur.map(t => {
+              const r = results[pending.findIndex(p => p.id === t.id)];
+              if (r?.status === 'fulfilled' && r.value?.template && r.value.template.meta_status !== t.meta_status) {
+                changed = true;
+                return r.value.template;
+              }
+              return t;
+            });
+            return changed ? next : cur;
+          });
+        });
+        return prev;
+      });
+    }, 10000);
+    return () => clearInterval(interval);
+  }, []);
+
   async function loadTemplates() {
     setLoading(true);
     try {
       const d = await api('/');
-      setTemplates(d.templates);
-      // Auto-refresh any PENDING/DRAFT templates from Meta in the background
-      const pending = (d.templates || []).filter(t => !['APPROVED','REJECTED','SUBMIT_ERROR','NO_CREDENTIALS'].includes(t.meta_status) && t.meta_template_id);
+      const tpls = d.templates || [];
+      setTemplates(tpls);
+      // Immediately refresh any non-terminal templates on load
+      const pending = tpls.filter(t => !TERMINAL_STATUSES.includes(t.meta_status) && t.meta_status !== 'NO_CREDENTIALS');
       if (pending.length > 0) {
         Promise.allSettled(pending.map(t => api(`/${t.id}/refresh`))).then(results => {
-          const updated = [];
-          results.forEach((r, i) => { if (r.status === 'fulfilled' && r.value?.template) updated.push(r.value.template); });
-          if (updated.length > 0) setTemplates(prev => prev.map(t => { const u = updated.find(u => u.id === t.id); return u || t; }));
+          setTemplates(prev => prev.map(t => {
+            const r = results[pending.findIndex(p => p.id === t.id)];
+            return (r?.status === 'fulfilled' && r.value?.template) ? r.value.template : t;
+          }));
         });
       }
     }

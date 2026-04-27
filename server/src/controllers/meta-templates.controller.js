@@ -1564,9 +1564,9 @@ export async function refreshStatus(req, res) {
     }
 
     if (found) {
-      // Meta returns "ACTIVE" for approved templates — normalise to "APPROVED"
+      // Meta returns "ACTIVE" or "APPROVED" for approved templates — normalise both
       const rawStatus = found.status || '';
-      tpl.meta_status = rawStatus === 'ACTIVE' ? 'APPROVED' : rawStatus;
+      tpl.meta_status = (rawStatus === 'ACTIVE' || rawStatus === 'APPROVED') ? 'APPROVED' : rawStatus;
       if (found.rejected_reason) tpl.rejected_reason = found.rejected_reason;
       if (found.quality_score)   tpl.quality_score   = found.quality_score;
       tpl.status_refreshed_at = new Date().toISOString();
