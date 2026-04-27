@@ -137,29 +137,9 @@ export default function Templates() {
 
   useEffect(() => { loadTemplates(); }, []);
 
-  // Poll PENDING templates every 10s while list view is open
+  // Auto-reload every 60s so server-side status sync keeps list fresh
   useEffect(() => {
-    const interval = setInterval(() => {
-      setTemplates(prev => {
-        const pending = prev.filter(t => !TERMINAL_STATUSES.includes(t.meta_status) && t.meta_status !== 'NO_CREDENTIALS');
-        if (pending.length === 0) return prev;
-        Promise.allSettled(pending.map(t => api(`/${t.id}/refresh`))).then(results => {
-          setTemplates(cur => {
-            let changed = false;
-            const next = cur.map(t => {
-              const r = results[pending.findIndex(p => p.id === t.id)];
-              if (r?.status === 'fulfilled' && r.value?.template && r.value.template.meta_status !== t.meta_status) {
-                changed = true;
-                return r.value.template;
-              }
-              return t;
-            });
-            return changed ? next : cur;
-          });
-        });
-        return prev;
-      });
-    }, 10000);
+    const interval = setInterval(() => loadTemplates(), 60000);
     return () => clearInterval(interval);
   }, []);
 

@@ -1231,12 +1231,51 @@ export async function getSendPayload(req, res) {
 }
 
 // ── List all meta templates ────────────────────────────────────────────────────
-export function listTemplates(req, res) {
+export async function listTemplates(req, res) {
   const db = getDb();
   const channelId = req.headers['x-channel-id'] || 'demo';
   const templates = (db.meta_templates || [])
     .filter(t => t.channel_id === channelId)
     .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+
+  // Sync PENDING/DRAFT statuses from Meta WABA list before responding
+  const pending = templates.filter(t => t.meta_template_id && !['APPROVED','REJECTED','SUBMIT_ERROR','NO_CREDENTIALS'].includes(t.meta_status));
+  if (pending.length > 0) {
+    try {
+      const creds = getCreds(channelId);
+      if (creds) {
+        const metaRes = await fetch(
+          `https://graph.facebook.com/v25.0/${creds.wabaId}/message_templates?fields=id,name,status&limit=100`,
+          { headers: { Authorization: `Bearer ${creds.token}` } }
+        );
+        if (metaRes.ok) {
+          const metaData = await metaRes.json();
+          const metaMap = {};
+          for (const mt of (metaData.data || [])) {
+            metaMap[mt.id]   = mt;
+            metaMap[mt.name] = mt;
+          }
+          let updated = false;
+          for (const tpl of pending) {
+            const found = metaMap[tpl.meta_template_id] || metaMap[tpl.name];
+            if (!found) continue;
+            const raw = found.status || '';
+            const newStatus = (raw === 'ACTIVE' || raw === 'APPROVED') ? 'APPROVED' : raw;
+            if (newStatus !== tpl.meta_status) {
+              tpl.meta_status = newStatus;
+              tpl.status_refreshed_at = new Date().toISOString();
+              updated = true;
+              console.log(`[listTemplates] "${tpl.name}" synced → ${newStatus}`);
+            }
+          }
+          if (updated) db.save();
+        }
+      }
+    } catch (e) {
+      console.warn(`[listTemplates] Status sync failed (non-fatal): ${e.message}`);
+    }
+  }
+
   res.json({ templates });
 }
 
