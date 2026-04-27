@@ -1033,98 +1033,129 @@ async function sendMultiple(db, cam, events, type) {
         let perUserProductConfig = metaTpl.product_config;
         if (!metaTpl.is_carousel && cam.campaign_type === 'abandoned_product_view') {
           const visitorName = visitor?.name || evt.name || 'Customer';
+          let _apvSkip = false; // set true to skip this user
 
-          // ── Step 1: Ensure product data is complete — scrape if anything missing ──
-          let productName  = evt.product_name  || '';
-          let productPrice = evt.product_price || '';
-          let productImage = evt.product_image || '';
-          const productUrl = evt.product_url   || '';
+          try {
+            // ── Step 1: Ensure product data is complete — scrape if anything missing ──
+            let productName  = evt.product_name  || '';
+            let productPrice = evt.product_price || '';
+            let productImage = evt.product_image || '';
+            const productUrl = evt.product_url   || '';
 
-          if (productUrl && (!productName || !productPrice || !productImage)) {
-            try {
-              console.log(`[AbandonedProductView] Missing product data for ${evt.phone} — scraping ${productUrl}`);
-              const scraped = await scrapeProductData(productUrl);
-              if (!productName  && (scraped.title || scraped.name))  productName  = scraped.title || scraped.name;
-              if (!productPrice && scraped.price)                     productPrice = scraped.price;
-              if (!productImage && (scraped.image_url || scraped.image)) productImage = scraped.image_url || scraped.image;
-
-              // Patch the product_views record so future sends skip scraping
-              const pvIdx = db.product_views.findIndex(v => v.channel_id === channelId && v.phone === evt.phone && v.product_url === productUrl);
-              if (pvIdx >= 0) {
-                if (!db.product_views[pvIdx].product_name  && productName)  db.product_views[pvIdx].product_name  = productName;
-                if (!db.product_views[pvIdx].product_price && productPrice) db.product_views[pvIdx].product_price = productPrice;
-                if (!db.product_views[pvIdx].product_image && productImage) db.product_views[pvIdx].product_image = productImage;
-              }
-              console.log(`[AbandonedProductView] Scraped: "${productName}" ${productPrice} img=${!!productImage}`);
-            } catch (scrapeErr) {
-              console.warn(`[AbandonedProductView] Scrape failed for ${evt.phone}: ${scrapeErr.message}`);
+            // If absolutely no data and no URL to scrape, skip this user
+            if (!productUrl && !productName && !productImage) {
+              console.warn(`[AbandonedProductView] SKIP ${evt.phone} — no product URL or data available`);
+              _apvSkip = true;
             }
-          }
 
-          // ── Step 2: Resolve stage variables ──
-          const sv = cam.stage_vars || {};
-          const sKey = currentStage === 1 ? 's1' : 's2';
-          const stageTpl = sv[sKey] || {};
-          const tok = (s) => (s || '')
-            .replace(/\{product_name\}/g,  productName)
-            .replace(/\{product_price\}/g, productPrice)
-            .replace(/\{product_url\}/g,   productUrl)
-            .replace(/\{customer_name\}/g, visitorName);
-          const v1 = tok(stageTpl.v1) || productName  || '';
-          const v2 = tok(stageTpl.v2) || productPrice || '';
-
-          // ── Step 3: Upload product image to Meta media API → media_id ──
-          let productMediaId = '';
-          if (productImage) {
-            // Check gallery cache first — avoid re-uploading same product image
-            const cached = (db.gallery_images || []).find(
-              g => g.source_url === productImage && g.channel_id === channelId && g.media_id
-            );
-            if (cached) {
-              productMediaId = cached.media_id;
-              console.log(`[AbandonedProductView] Image cache hit for ${evt.phone} — media_id: ${productMediaId}`);
-            } else {
+            if (!_apvSkip && productUrl && (!productName || !productPrice || !productImage)) {
               try {
-                const { buffer, mimeType } = await whatsappService.downloadImage(productImage);
-                productMediaId = await whatsappService.uploadMedia(buffer, `apv_${Date.now()}.jpg`, mimeType);
-                if (!db.gallery_folders) db.gallery_folders = [];
-                if (!db.gallery_images)  db.gallery_images  = [];
-                const folderName = metaTpl.name;
-                let folder = db.gallery_folders.find(f => f.channel_id === channelId && f.name === folderName);
-                if (!folder) {
-                  folder = { id: uuidv4(), channel_id: channelId, name: folderName, created_at: new Date().toISOString() };
-                  db.gallery_folders.push(folder);
+                console.log(`[AbandonedProductView] Missing product data for ${evt.phone} — scraping ${productUrl}`);
+                const scraped = await scrapeProductData(productUrl);
+                if (!productName  && (scraped.title || scraped.name))      productName  = scraped.title || scraped.name;
+                if (!productPrice && scraped.price)                         productPrice = scraped.price;
+                if (!productImage && (scraped.image_url || scraped.image))  productImage = scraped.image_url || scraped.image;
+
+                // Patch the product_views record so future sends skip scraping
+                const pvIdx = db.product_views.findIndex(v => v.channel_id === channelId && v.phone === evt.phone && v.product_url === productUrl);
+                if (pvIdx >= 0) {
+                  if (!db.product_views[pvIdx].product_name  && productName)  db.product_views[pvIdx].product_name  = productName;
+                  if (!db.product_views[pvIdx].product_price && productPrice) db.product_views[pvIdx].product_price = productPrice;
+                  if (!db.product_views[pvIdx].product_image && productImage) db.product_views[pvIdx].product_image = productImage;
                 }
-                db.gallery_images.push({
-                  id: uuidv4(), folder_id: folder.id, channel_id: channelId,
-                  filename: `apv_${evt.phone}_${Date.now()}.jpg`,
-                  media_id: productMediaId, source_url: productImage,
-                  product_name: productName, product_url: productUrl,
-                  created_at: new Date().toISOString(),
-                });
-                db.save();
-                console.log(`[AbandonedProductView] Image uploaded for ${evt.phone} → media_id: ${productMediaId}`);
-              } catch (imgErr) {
-                console.warn(`[AbandonedProductView] Image upload failed for ${evt.phone}: ${imgErr.message}`);
+                console.log(`[AbandonedProductView] Scraped: "${productName}" ${productPrice} img=${!!productImage}`);
+              } catch (scrapeErr) {
+                console.warn(`[AbandonedProductView] Scrape failed for ${evt.phone}: ${scrapeErr.message} — continuing with available data`);
               }
             }
-          } else {
-            console.warn(`[AbandonedProductView] No product image for ${evt.phone} (${productUrl}) — header will be empty`);
+
+            if (!_apvSkip) {
+              // ── Step 2: Resolve stage variables — never send empty strings to Meta ──
+              const sv = cam.stage_vars || {};
+              const sKey = currentStage === 1 ? 's1' : 's2';
+              const stageTpl = sv[sKey] || {};
+              const tok = (s) => (s || '')
+                .replace(/\{product_name\}/g,  productName)
+                .replace(/\{product_price\}/g, productPrice)
+                .replace(/\{product_url\}/g,   productUrl)
+                .replace(/\{customer_name\}/g, visitorName);
+              // Ensure v1/v2 are NEVER empty — Meta rejects empty variable values
+              const v1 = tok(stageTpl.v1) || productName  || 'Check this product';
+              const v2 = tok(stageTpl.v2) || productPrice || 'Limited time offer';
+
+              // ── Step 3: Upload product image to Meta media API → media_id ──
+              let productMediaId = '';
+              if (productImage) {
+                // Check gallery cache first — avoid re-uploading same product image
+                const cached = (db.gallery_images || []).find(
+                  g => g.source_url === productImage && g.channel_id === channelId && g.media_id
+                );
+                if (cached) {
+                  productMediaId = cached.media_id;
+                  console.log(`[AbandonedProductView] Image cache hit for ${evt.phone} — media_id: ${productMediaId}`);
+                } else {
+                  try {
+                    const { buffer, mimeType } = await whatsappService.downloadImage(productImage);
+                    productMediaId = await whatsappService.uploadMedia(buffer, `apv_${Date.now()}.jpg`, mimeType);
+                    if (!db.gallery_folders) db.gallery_folders = [];
+                    if (!db.gallery_images)  db.gallery_images  = [];
+                    const folderName = metaTpl.name;
+                    let folder = db.gallery_folders.find(f => f.channel_id === channelId && f.name === folderName);
+                    if (!folder) {
+                      folder = { id: uuidv4(), channel_id: channelId, name: folderName, created_at: new Date().toISOString() };
+                      db.gallery_folders.push(folder);
+                    }
+                    db.gallery_images.push({
+                      id: uuidv4(), folder_id: folder.id, channel_id: channelId,
+                      filename: `apv_${evt.phone}_${Date.now()}.jpg`,
+                      media_id: productMediaId, source_url: productImage,
+                      product_name: productName, product_url: productUrl,
+                      created_at: new Date().toISOString(),
+                    });
+                    db.save();
+                    console.log(`[AbandonedProductView] Image uploaded for ${evt.phone} → media_id: ${productMediaId}`);
+                  } catch (imgErr) {
+                    console.warn(`[AbandonedProductView] Image upload failed for ${evt.phone}: ${imgErr.message} — falling back to template header`);
+                    // Use the template's own stored header image as fallback
+                    productMediaId = metaTpl.header_image_id || '';
+                  }
+                }
+              } else {
+                // No product image at all — fall back to template's stored header image
+                productMediaId = metaTpl.header_image_id || '';
+                if (productMediaId) {
+                  console.log(`[AbandonedProductView] No product image for ${evt.phone} — using template header image`);
+                } else if (metaTpl.header_type === 'IMAGE') {
+                  console.warn(`[AbandonedProductView] SKIP ${evt.phone} — template requires IMAGE header but no image available`);
+                  _apvSkip = true;
+                }
+              }
+
+              if (!_apvSkip) {
+                perUserProductConfig = {
+                  cards: [{
+                    '1':      v1,            // positional key → {{1}} in body
+                    '2':      v2,            // positional key → {{2}} in body
+                    name:     visitorName,
+                    title:    productName  || v1,
+                    price:    productPrice || v2,
+                    link:     productUrl,
+                    url:      productUrl,
+                    image:    productImage,
+                    media_id: productMediaId,
+                  }],
+                };
+              }
+            }
+          } catch (apvErr) {
+            console.error(`[AbandonedProductView] Unexpected error building config for ${evt.phone}: ${apvErr.message}`);
+            _apvSkip = true;
           }
 
-          perUserProductConfig = {
-            cards: [{
-              '1':      v1,            // positional key → {{1}} in body
-              '2':      v2,            // positional key → {{2}} in body
-              name:     visitorName,
-              title:    productName,
-              price:    productPrice,
-              link:     productUrl,
-              url:      productUrl,
-              image:    productImage,
-              media_id: productMediaId, // numeric media_id → header { "image": { "id": "..." } }
-            }],
-          };
+          if (_apvSkip) {
+            console.warn(`[AbandonedProductView] Skipping send for ${evt.phone} — cannot build valid payload`);
+            continue;
+          }
         } else if (!metaTpl.is_carousel && (evt.product_name || evt.product_url)) {
           const visitorName = visitor?.name || evt.name || 'Customer';
           perUserProductConfig = { cards: [{ name: visitorName, title: evt.product_name || '', price: evt.product_price || '', link: evt.product_url || '', url: evt.product_url || '', image: evt.product_image || '' }] };
@@ -1134,7 +1165,7 @@ async function sendMultiple(db, cam, events, type) {
         const sendPayload = buildSendMessagePayload(metaTpl, perUserProductConfig, evt.phone, metaLangCode, cam.id);
 
         // ── FULL MESSAGE PAYLOAD LOG ─────────────────────────────────────────
-        const pc = metaTpl.product_config;
+        const pc = perUserProductConfig || metaTpl.product_config;
         const cardSummary = (pc?.cards || []).map((c, i) =>
           `  Card ${i + 1}: "${c.title || '—'}"  ${c.price || ''}  ${c.link || ''}`
         ).join('\n');
@@ -1151,7 +1182,23 @@ async function sendMultiple(db, cam, events, type) {
         console.log(JSON.stringify(sendPayload, null, 2));
         console.log('╚══════════════════════════════════════════════════════════════╝\n');
 
-        const sendResult = await whatsappService.sendTemplateMessage(evt.phone, sendPayload);
+        let sendResult;
+        try {
+          sendResult = await whatsappService.sendTemplateMessage(evt.phone, sendPayload);
+        } catch (sendErr) {
+          console.error(`[MetaTemplateSend] FAILED for ${evt.phone} — ${sendErr.message}`);
+          db.abandoned_cart_executions.push({
+            id: (db.abandoned_cart_executions.length || 0) + 1,
+            campaign_id: cam.id, phone: evt.phone, name: evt.name,
+            template_id: metaTpl.id, template_name: metaTpl.name,
+            stage: currentStage, language: metaLangCode,
+            status: 'failed', error: sendErr.message,
+            sent_at: new Date().toISOString(), is_meta_template: true,
+            payload_sent: JSON.stringify(sendPayload),
+          });
+          db.save();
+          continue;
+        }
 
         // Build human-readable text from actual cards (not the generic '[Carousel: name]')
         const sentCards = (metaTpl.product_config?.cards || []);
