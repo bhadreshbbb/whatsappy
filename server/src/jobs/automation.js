@@ -1029,39 +1029,64 @@ async function sendMultiple(db, cam, events, type) {
           }
         }
 
-        // ── SINGLE PRODUCT (abandoned_product_view): per-user image upload + stage vars ──
+        // ── SINGLE PRODUCT (abandoned_product_view): scrape + upload + stage vars ──
         let perUserProductConfig = metaTpl.product_config;
         if (!metaTpl.is_carousel && cam.campaign_type === 'abandoned_product_view') {
           const visitorName = visitor?.name || evt.name || 'Customer';
 
-          // Resolve stage variables — replace {product_name} etc. with real values
+          // ── Step 1: Ensure product data is complete — scrape if anything missing ──
+          let productName  = evt.product_name  || '';
+          let productPrice = evt.product_price || '';
+          let productImage = evt.product_image || '';
+          const productUrl = evt.product_url   || '';
+
+          if (productUrl && (!productName || !productPrice || !productImage)) {
+            try {
+              console.log(`[AbandonedProductView] Missing product data for ${evt.phone} — scraping ${productUrl}`);
+              const scraped = await scrapeProductData(productUrl);
+              if (!productName  && (scraped.title || scraped.name))  productName  = scraped.title || scraped.name;
+              if (!productPrice && scraped.price)                     productPrice = scraped.price;
+              if (!productImage && (scraped.image_url || scraped.image)) productImage = scraped.image_url || scraped.image;
+
+              // Patch the product_views record so future sends skip scraping
+              const pvIdx = db.product_views.findIndex(v => v.channel_id === channelId && v.phone === evt.phone && v.product_url === productUrl);
+              if (pvIdx >= 0) {
+                if (!db.product_views[pvIdx].product_name  && productName)  db.product_views[pvIdx].product_name  = productName;
+                if (!db.product_views[pvIdx].product_price && productPrice) db.product_views[pvIdx].product_price = productPrice;
+                if (!db.product_views[pvIdx].product_image && productImage) db.product_views[pvIdx].product_image = productImage;
+              }
+              console.log(`[AbandonedProductView] Scraped: "${productName}" ${productPrice} img=${!!productImage}`);
+            } catch (scrapeErr) {
+              console.warn(`[AbandonedProductView] Scrape failed for ${evt.phone}: ${scrapeErr.message}`);
+            }
+          }
+
+          // ── Step 2: Resolve stage variables ──
           const sv = cam.stage_vars || {};
           const sKey = currentStage === 1 ? 's1' : 's2';
           const stageTpl = sv[sKey] || {};
           const tok = (s) => (s || '')
-            .replace(/\{product_name\}/g,  evt.product_name  || '')
-            .replace(/\{product_price\}/g, evt.product_price || '')
-            .replace(/\{product_url\}/g,   evt.product_url   || '')
+            .replace(/\{product_name\}/g,  productName)
+            .replace(/\{product_price\}/g, productPrice)
+            .replace(/\{product_url\}/g,   productUrl)
             .replace(/\{customer_name\}/g, visitorName);
-          const v1 = tok(stageTpl.v1) || evt.product_name  || '';
-          const v2 = tok(stageTpl.v2) || evt.product_price || '';
+          const v1 = tok(stageTpl.v1) || productName  || '';
+          const v2 = tok(stageTpl.v2) || productPrice || '';
 
-          // Upload product image to Meta media API → get media_id for header
+          // ── Step 3: Upload product image to Meta media API → media_id ──
           let productMediaId = '';
-          const imgUrl = evt.product_image || '';
-          if (imgUrl) {
+          if (productImage) {
             // Check gallery cache first — avoid re-uploading same product image
             const cached = (db.gallery_images || []).find(
-              g => g.source_url === imgUrl && g.channel_id === channelId && g.media_id
+              g => g.source_url === productImage && g.channel_id === channelId && g.media_id
             );
             if (cached) {
               productMediaId = cached.media_id;
               console.log(`[AbandonedProductView] Image cache hit for ${evt.phone} — media_id: ${productMediaId}`);
             } else {
               try {
-                const { buffer, mimeType } = await whatsappService.downloadImage(imgUrl);
+                const { buffer, mimeType } = await whatsappService.downloadImage(productImage);
                 productMediaId = await whatsappService.uploadMedia(buffer, `apv_${Date.now()}.jpg`, mimeType);
-                // Cache in gallery under template folder
                 if (!db.gallery_folders) db.gallery_folders = [];
                 if (!db.gallery_images)  db.gallery_images  = [];
                 const folderName = metaTpl.name;
@@ -1073,8 +1098,8 @@ async function sendMultiple(db, cam, events, type) {
                 db.gallery_images.push({
                   id: uuidv4(), folder_id: folder.id, channel_id: channelId,
                   filename: `apv_${evt.phone}_${Date.now()}.jpg`,
-                  media_id: productMediaId, source_url: imgUrl,
-                  product_name: evt.product_name, product_url: evt.product_url,
+                  media_id: productMediaId, source_url: productImage,
+                  product_name: productName, product_url: productUrl,
                   created_at: new Date().toISOString(),
                 });
                 db.save();
@@ -1083,19 +1108,21 @@ async function sendMultiple(db, cam, events, type) {
                 console.warn(`[AbandonedProductView] Image upload failed for ${evt.phone}: ${imgErr.message}`);
               }
             }
+          } else {
+            console.warn(`[AbandonedProductView] No product image for ${evt.phone} (${productUrl}) — header will be empty`);
           }
 
           perUserProductConfig = {
             cards: [{
-              '1':      v1,           // positional key → {{1}} in body (no variable_labels)
-              '2':      v2,           // positional key → {{2}} in body
+              '1':      v1,            // positional key → {{1}} in body
+              '2':      v2,            // positional key → {{2}} in body
               name:     visitorName,
-              title:    v1,
-              price:    v2,
-              link:     evt.product_url   || '',
-              url:      evt.product_url   || '',
-              image:    imgUrl,
-              media_id: productMediaId,   // numeric media_id for header { "image": { "id": "..." } }
+              title:    productName,
+              price:    productPrice,
+              link:     productUrl,
+              url:      productUrl,
+              image:    productImage,
+              media_id: productMediaId, // numeric media_id → header { "image": { "id": "..." } }
             }],
           };
         } else if (!metaTpl.is_carousel && (evt.product_name || evt.product_url)) {
