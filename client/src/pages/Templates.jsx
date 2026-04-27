@@ -11,6 +11,13 @@ const BASE        = `/api/meta-templates`;
 const GALLERY_API = `/api/gallery`;
 const CH = () => ({ 'x-channel-id': localStorage.getItem('channelId') || 'demo' });
 
+async function getShopUrl() {
+  try {
+    const d = await fetch('/api/settings', { headers: CH() }).then(r => r.json());
+    return (d?.shop_url || '').replace(/\/+$/, '');
+  } catch { return ''; }
+}
+
 async function api(path, opts = {}) {
   const res = await fetch(`${BASE}${path}`, {
     headers: { ...CH(), 'Content-Type': 'application/json', ...opts.headers },
@@ -273,7 +280,18 @@ export default function Templates() {
     setView('config');
   }
   function openCreate()       { setView('create'); setError(''); setForm({ ...BLANK_TPL });        loadGallery(); }
-  function openCreateSingle() { setView('create'); setError(''); setForm({ ...BLANK_SINGLE_TPL }); loadGallery(); }
+  async function openCreateSingle() {
+    setView('create'); setError(''); loadGallery();
+    const shopUrl = await getShopUrl();
+    const base = shopUrl || 'https://yourstore.com';
+    setForm({
+      ...BLANK_SINGLE_TPL,
+      buttons: [
+        { type: 'URL',         text: 'View Product', url: `${base}/products/{{1}}` },
+        { type: 'QUICK_REPLY', text: 'Not Interested' },
+      ],
+    });
+  }
   function copyName(name) { navigator.clipboard.writeText(name); setCopied(name); setTimeout(()=>setCopied(null),1500); }
 
   async function checkSendPayload(tpl) {
@@ -998,7 +1016,7 @@ function CreateView({ form, setForm, error, setError, loading, onSubmit, onBack,
                 <label className="text-slate-400 text-xs font-medium">Buttons <span className="text-slate-600">(max 3)</span></label>
                 <div className="flex gap-1.5">
                   {(form.buttons||[]).length < 3 && (<>
-                    <button onClick={() => f('buttons', [...(form.buttons||[]), { type:'URL', text:'View Product', url:'https://yourstore.com/products/' }])}
+                    <button onClick={async () => { const shopUrl = await getShopUrl(); const base = shopUrl || 'https://yourstore.com'; f('buttons', [...(form.buttons||[]), { type:'URL', text:'View Product', url:`${base}/products/` }]); }}
                       className="var-btn flex items-center gap-1"><Link size={10}/> URL</button>
                     <button onClick={() => f('buttons', [...(form.buttons||[]), { type:'QUICK_REPLY', text:'Not Interested' }])}
                       className="var-btn flex items-center gap-1"><MessageSquare size={10}/> Quick Reply</button>
