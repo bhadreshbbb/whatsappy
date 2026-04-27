@@ -500,6 +500,8 @@ function CreateModal({ onClose, onCreated }) {
            {step === 2 && (
              <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                 <div className="space-y-6">
+                   {/* ── Language selector — hidden for abandoned_product_view (locked to template language) ── */}
+                   {!type?.singleProductOnly ? (
                    <div>
                       <label className="label flex items-center gap-2">
                         Communication Language
@@ -545,6 +547,23 @@ function CreateModal({ onClose, onCreated }) {
                          ))}
                       </div>
                    </div>
+                   ) : metaTemplateId && (() => {
+                     const selTpl = metaTemplates.find(t => t.id === metaTemplateId);
+                     const tplLang = selTpl?.language || language || 'en';
+                     const langEntry = LANGUAGES.find(l => l.code === tplLang);
+                     return (
+                       <div className="flex items-center gap-3 px-4 py-3 rounded-xl" style={{ background: 'rgba(6,182,212,0.06)', border: '1px solid rgba(6,182,212,0.2)' }}>
+                         <Globe size={14} className="text-cyan-400 shrink-0" />
+                         <div>
+                           <p className="text-[10px] font-bold text-cyan-400 uppercase tracking-widest">Language (from template)</p>
+                           <p className="text-xs text-white font-semibold mt-0.5">
+                             {langEntry?.flag} {langEntry?.label || tplLang.toUpperCase()}
+                           </p>
+                         </div>
+                         <span className="ml-auto text-[9px] bg-cyan-500/10 text-cyan-500 px-2 py-0.5 rounded-full border border-cyan-500/20 font-bold">Auto-locked</span>
+                       </div>
+                     );
+                   })()}
 
                    {/* ── Meta Templates ────────────────────────────────────── */}
                    <div className="space-y-2">
@@ -591,7 +610,11 @@ function CreateModal({ onClose, onCreated }) {
                            const hoverBg  = isSingleProd ? 'border-white/5 text-slate-400 hover:border-cyan-500/30 hover:bg-cyan-500/5' : 'border-white/5 text-slate-400 hover:border-orange-500/30 hover:bg-orange-500/5';
                            const checkCol = isSingleProd ? 'text-cyan-400' : 'text-orange-400';
                            return (
-                             <button key={t.id} onClick={() => setMetaTplId(t.id)}
+                             <button key={t.id} onClick={() => {
+                               setMetaTplId(t.id);
+                               // Auto-lock campaign language to the template's language
+                               if (isSingleProd && t.language) setLang(t.language);
+                             }}
                                className={`w-full p-3 rounded-2xl border text-left flex justify-between items-center transition-all ${metaTemplateId === t.id ? selBg : hoverBg}`}>
                                <div>
                                  <p className="text-xs font-bold">{t.name}</p>
@@ -792,8 +815,8 @@ function CreateModal({ onClose, onCreated }) {
                   </div>
                 )}
 
-                {/* ── Audience Filters ────────────────────────────────── */}
-                <div className="rounded-2xl border border-white/8 overflow-hidden">
+                {/* ── Audience Filters — hidden for abandoned_product_view (auto-targets product_view users) ── */}
+                {!type?.singleProductOnly && <div className="rounded-2xl border border-white/8 overflow-hidden">
                   {/* Header — toggle */}
                   <button onClick={() => setShowFilters(v => !v)}
                     className="w-full flex items-center justify-between px-4 py-3 bg-white/[0.02] hover:bg-white/[0.04] transition-colors">
@@ -977,7 +1000,7 @@ function CreateModal({ onClose, onCreated }) {
                       )}
                     </div>
                   )}
-                </div>
+                </div>}
 
                 {/* Automation Delay */}
                 <div className="p-4 rounded-2xl" style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)' }}>
