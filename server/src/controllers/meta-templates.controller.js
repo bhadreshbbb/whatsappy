@@ -1680,7 +1680,7 @@ export async function autoRefreshPendingStatuses() {
     }
 
     const rawStatus = found.status || '';
-    const newStatus = rawStatus === 'ACTIVE' ? 'APPROVED' : rawStatus;
+    const newStatus = (rawStatus === 'ACTIVE' || rawStatus === 'APPROVED') ? 'APPROVED' : rawStatus;
 
     if (newStatus !== tpl.meta_status) {
       console.log(`[MetaTemplates] "${tpl.name}": ${tpl.meta_status} → ${newStatus}`);

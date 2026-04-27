@@ -299,10 +299,10 @@ export function startAutomation() {
     refreshProductRecommendations().catch(err => console.error('[ProductRefresh] Error:', err));
   }, TWENTY_SIX_HOURS_MS);
 
-  // Template status refresh - check PENDING/DRAFT templates every 30 minutes
+  // Template status refresh - check PENDING/DRAFT templates every 5 minutes
   templateStatusInterval = setInterval(() => {
     autoRefreshPendingStatuses().catch(err => console.error('[TemplateStatus] Error:', err));
-  }, 30 * 60 * 1000);
+  }, 5 * 60 * 1000);
 
   // Check pending template statuses immediately on startup
   autoRefreshPendingStatuses().catch(err => console.error('[TemplateStatus] Initial error:', err));

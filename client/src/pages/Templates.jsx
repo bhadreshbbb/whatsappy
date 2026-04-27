@@ -137,11 +137,33 @@ export default function Templates() {
 
   useEffect(() => { loadTemplates(); }, []);
 
-  // Auto-reload every 60s so server-side status sync keeps list fresh
+  // Auto-reload every 60s for general freshness
   useEffect(() => {
     const interval = setInterval(() => loadTemplates(), 60000);
     return () => clearInterval(interval);
   }, []);
+
+  // Fast-poll every 8s when any template is still PENDING/DRAFT — stop when all resolved
+  useEffect(() => {
+    const hasPending = templates.some(
+      t => t.meta_template_id && !TERMINAL_STATUSES.includes(t.meta_status) && t.meta_status !== 'NO_CREDENTIALS'
+    );
+    if (!hasPending) return;
+    const interval = setInterval(async () => {
+      const still = templates.filter(
+        t => t.meta_template_id && !TERMINAL_STATUSES.includes(t.meta_status) && t.meta_status !== 'NO_CREDENTIALS'
+      );
+      if (still.length === 0) { clearInterval(interval); return; }
+      const results = await Promise.allSettled(still.map(t => api(`/${t.id}/refresh`)));
+      setTemplates(prev => prev.map(t => {
+        const idx = still.findIndex(p => p.id === t.id);
+        if (idx < 0) return t;
+        const r = results[idx];
+        return (r?.status === 'fulfilled' && r.value?.template) ? r.value.template : t;
+      }));
+    }, 8000);
+    return () => clearInterval(interval);
+  }, [templates]);
 
   async function loadTemplates() {
     setLoading(true);
