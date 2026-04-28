@@ -700,6 +700,9 @@ async function runAutomation() {
           return passesAudienceFilters(db, channelId, v.phone, cam);
         }).slice(0, 10);
 
+        if (views.length > 0) {
+          console.log(`[AbandonedProductView] Campaign "${cam.name}" — ${views.length} eligible product_view(s) queued`);
+        }
         await sendMultiple(db, cam, views, 'view');
       }
 
@@ -1014,8 +1017,11 @@ async function sendMultiple(db, cam, events, type) {
       // Used when campaign has a linked approved Meta carousel template.
       // This is the correct format for product recommendation campaigns.
       const metaTpl = cam.meta_template_id
-        ? (db.meta_templates || []).find(t => String(t.id) === String(cam.meta_template_id) && t.meta_status === 'APPROVED')
+        ? (db.meta_templates || []).find(t => String(t.id) === String(cam.meta_template_id) && (t.meta_status === 'APPROVED' || t.meta_status === 'ACTIVE'))
         : null;
+      if (cam.meta_template_id && !metaTpl) {
+        console.warn(`[Automation] Campaign "${cam.name}" — linked Meta template ${cam.meta_template_id} not found or not APPROVED (status may be PENDING/DRAFT/REJECTED)`);
+      }
 
       if (metaTpl) {
         // Refresh products if campaign delay has elapsed since last product refresh

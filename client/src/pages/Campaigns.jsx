@@ -271,7 +271,10 @@ function CreateModal({ onClose, onCreated }) {
   const [metaTemplates, setMetaTemplates] = useState([]);   // approved carousel Meta templates
   const [metaTemplateId, setMetaTplId] = useState("");      // selected Meta template id
   const [metaPayloadPreview, setMetaPayloadPreview] = useState(null); // payload preview from /send-payload
-  const [stageVars, setStageVars] = useState({ s1: { v1: '', v2: '' }, s2: { v1: '', v2: '' } });
+  const [stageVars, setStageVars] = useState({
+    s1: { v1: '{product_name}', v2: '{product_price}' },
+    s2: { v1: '{product_name}', v2: 'Still available — grab it before it sells out!' },
+  });
   const [saving, setSaving] = useState(false);
   const [translating, setTranslating] = useState(false);
   const [translatedTpl, setTranslatedTpl] = useState(null);
@@ -1041,6 +1044,30 @@ function CreateModal({ onClose, onCreated }) {
                 </div>}
 
                 {/* Automation Delay */}
+                {type?.singleProductOnly ? (
+                  <div className="p-4 rounded-2xl" style={{ background: 'rgba(6,182,212,0.04)', border: '1px solid rgba(6,182,212,0.2)' }}>
+                    <label className="text-xs font-semibold text-cyan-400 flex items-center gap-2 mb-3">
+                      <Clock size={13} /> Automation Schedule — Fixed
+                    </label>
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-3 px-3 py-2 rounded-xl" style={{ background: 'rgba(6,182,212,0.08)', border: '1px solid rgba(6,182,212,0.15)' }}>
+                        <span className="text-base">⏱️</span>
+                        <div>
+                          <p className="text-xs font-bold text-cyan-300">Stage 1 — 30 minutes</p>
+                          <p className="text-[10px]" style={{ color: '#64748b' }}>First message sent after 30 min of inactivity since product view</p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-3 px-3 py-2 rounded-xl" style={{ background: 'rgba(167,139,250,0.08)', border: '1px solid rgba(167,139,250,0.15)' }}>
+                        <span className="text-base">🔄</span>
+                        <div>
+                          <p className="text-xs font-bold" style={{ color: '#a78bfa' }}>Stage 2 — 24 hours later</p>
+                          <p className="text-[10px]" style={{ color: '#64748b' }}>Follow-up message sent 24h after Stage 1 if no action taken</p>
+                        </div>
+                      </div>
+                      <p className="text-[10px] mt-1" style={{ color: '#475569' }}>If user adds to cart — automatically exits this campaign and enters Abandoned Cart flow.</p>
+                    </div>
+                  </div>
+                ) : (
                 <div className="p-4 rounded-2xl" style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)' }}>
                   <label className="text-xs font-semibold text-slate-300 flex items-center gap-2 mb-3">
                     <Clock size={13} className="text-green-400" /> Automation Delay
@@ -1068,6 +1095,7 @@ function CreateModal({ onClose, onCreated }) {
                       : `Recommendation: ${(type.id === 'abandoned_cart' || type.id === 'abandoned_checkout') ? '1 hour' : 'Instant (0h)'} is best for conversion.`}
                   </p>
                 </div>
+                )}
 
                 <div className="pt-2 flex gap-4">
                     <button onClick={()=>setStep(2)} className="btn-secondary flex-1">Back</button>
