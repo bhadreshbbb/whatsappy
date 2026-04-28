@@ -1041,10 +1041,24 @@ export function buildSendMessagePayload(tpl, productConfig, recipientPhone = '{{
       const resolveVar = (v) => {
         const fieldVal = getFieldValue(v, stdVarMap, firstCard);
         if (fieldVal) return fieldVal;
-        // Direct positional value stored by automation for no-label templates
         return String(firstCard[v] || firstCard[`v${v}`] || '');
       };
-      components.push({ type: 'body', parameters: vars.map(v => ({ type: 'text', text: sanitizeVarValue(resolveVar(v)) })) });
+      // Non-carousel templates use parameter_format: NAMED — include parameter_name
+      // so Meta can match each value to the correct named placeholder ({{param_1}} etc.)
+      const nameFor = (v) => {
+        const label = stdVarMap[v];
+        if (label && label !== 'custom') return label.replace(/\s+/g, '_').toLowerCase();
+        return `param_${v}`;
+      };
+      const isNamed = !tpl.is_carousel;
+      components.push({
+        type: 'body',
+        parameters: vars.map(v => {
+          const param = { type: 'text', text: sanitizeVarValue(resolveVar(v)) };
+          if (isNamed) param.parameter_name = nameFor(v);
+          return param;
+        }),
+      });
     }
   }
 

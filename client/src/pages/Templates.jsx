@@ -286,8 +286,7 @@ export default function Templates() {
     setForm({
       ...BLANK_SINGLE_TPL,
       buttons: [
-        { type: 'URL',         text: 'View Product', url: `${base}/products/{{1}}` },
-        { type: 'QUICK_REPLY', text: 'Not Interested' },
+        { type: 'URL', text: 'View Product', url: `${base}/products/{{1}}` },
       ],
     });
   }
