@@ -1822,7 +1822,11 @@ export default function Campaigns() {
   const [analyticsOpen, setAnalyticsOpen] = useState({}); // campaignId → bool (panel open)
   const [analyticsLoading, setAnalyticsLoading] = useState({});
   const [payloadOpen, setPayloadOpen] = useState({});     // campaignId → bool
-  const [payloadMap, setPayloadMap] = useState({});       // campaignId → { executions[] }
+  const [payloadMap, setPayloadMap] = useState({});       // campaignId → { executions[], totalSent, totalFailed }
+  const [audienceOpen, setAudienceOpen] = useState({});  // campaignId → bool
+  const [audienceMap, setAudienceMap]   = useState({});  // campaignId → { count, audience[] }
+  const [audienceLoading, setAudienceLoading] = useState({});
+  const [sendResultMap, setSendResultMap] = useState({}); // campaignId → { sent, skipped, errors[] }
   const [testModal, setTestModal] = useState(null);  // { id, name } | null
   const [testPhone, setTestPhone] = useState('');
   const [testSending, setTestSending] = useState(false);
@@ -1850,7 +1854,7 @@ export default function Campaigns() {
 
   const loadPayload = async (campaignId) => {
     try {
-      const res = await fetch(`/api/campaigns/${campaignId}/executions?limit=5`, { headers: CH() });
+      const res = await fetch(`/api/campaigns/${campaignId}/executions`, { headers: CH() });
       const data = await res.json();
       setPayloadMap(p => ({ ...p, [campaignId]: data }));
     } catch (_) {}
@@ -1859,6 +1863,21 @@ export default function Campaigns() {
     const next = !payloadOpen[campaignId];
     setPayloadOpen(p => ({ ...p, [campaignId]: next }));
     if (next) loadPayload(campaignId);
+  };
+
+  const loadAudience = async (campaignId) => {
+    setAudienceLoading(p => ({ ...p, [campaignId]: true }));
+    try {
+      const res = await fetch(`/api/campaigns/${campaignId}/audience`, { headers: CH() });
+      const data = await res.json();
+      setAudienceMap(p => ({ ...p, [campaignId]: data }));
+    } catch (_) {}
+    finally { setAudienceLoading(p => ({ ...p, [campaignId]: false })); }
+  };
+  const toggleAudience = (campaignId) => {
+    const next = !audienceOpen[campaignId];
+    setAudienceOpen(p => ({ ...p, [campaignId]: next }));
+    if (next) loadAudience(campaignId);
   };
 
   const handleSendTest = async () => {
@@ -2046,49 +2065,61 @@ export default function Campaigns() {
                 )}
               </div>
 
-              {/* ── Payload & Send History Panel ── */}
+              {/* ── Send History Panel ── */}
               <div className="mb-4">
                 <button onClick={() => togglePayload(c.id)}
                   className="w-full flex items-center justify-between px-3 py-2 rounded-xl text-[10px] font-semibold transition-all"
                   style={{ background: payloadOpen[c.id] ? "rgba(6,182,212,0.1)" : "rgba(255,255,255,0.03)", border: `1px solid ${payloadOpen[c.id] ? "rgba(6,182,212,0.3)" : "rgba(255,255,255,0.06)"}`, color: payloadOpen[c.id] ? "#22d3ee" : "#64748b" }}>
-                  <span className="flex items-center gap-1.5"><GitBranch size={11}/> Last Sent Payloads</span>
-                  <ChevronDown size={11} style={{ transform: payloadOpen[c.id] ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }}/>
+                  <span className="flex items-center gap-1.5"><GitBranch size={11}/> Send History</span>
+                  <span className="flex items-center gap-1.5">
+                    {payloadMap[c.id] && (
+                      <>
+                        <span className="text-[9px] px-1.5 py-0.5 rounded-full" style={{ background: 'rgba(74,222,128,0.12)', color: '#4ade80' }}>✓ {payloadMap[c.id].totalSent}</span>
+                        {payloadMap[c.id].totalFailed > 0 && <span className="text-[9px] px-1.5 py-0.5 rounded-full" style={{ background: 'rgba(248,113,113,0.12)', color: '#f87171' }}>✗ {payloadMap[c.id].totalFailed}</span>}
+                      </>
+                    )}
+                    <ChevronDown size={11} style={{ transform: payloadOpen[c.id] ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }}/>
+                  </span>
                 </button>
                 {payloadOpen[c.id] && (() => {
-                  const execs = payloadMap[c.id];
-                  if (!execs) return <div className="mt-2 text-[10px] text-center py-3" style={{ color: "#475569" }}>Loading…</div>;
-                  if (!execs.length) return <div className="mt-2 text-[10px] text-center py-3" style={{ color: "#475569" }}>No messages sent yet.</div>;
+                  const data = payloadMap[c.id];
+                  if (!data) return <div className="mt-2 text-[10px] text-center py-3" style={{ color: "#475569" }}>Loading…</div>;
+                  const execs = data.executions || [];
+                  if (!execs.length) return <div className="mt-2 text-[10px] text-center py-3 rounded-xl" style={{ color: "#475569", border: "1px solid rgba(255,255,255,0.05)" }}>No messages sent yet.</div>;
                   return (
-                    <div className="mt-2 rounded-xl overflow-hidden space-y-2" style={{ border: "1px solid rgba(6,182,212,0.15)" }}>
-                      {execs.slice(0, 5).map((ex, i) => {
+                    <div className="mt-2 rounded-xl overflow-hidden" style={{ border: "1px solid rgba(6,182,212,0.15)" }}>
+                      <div className="px-3 py-2 flex items-center gap-3" style={{ background: 'rgba(6,182,212,0.05)', borderBottom: '1px solid rgba(6,182,212,0.1)' }}>
+                        <span className="text-[10px] font-bold" style={{ color: '#4ade80' }}>✓ {data.totalSent} sent</span>
+                        {data.totalFailed > 0 && <span className="text-[10px] font-bold" style={{ color: '#f87171' }}>✗ {data.totalFailed} failed</span>}
+                        <button onClick={() => loadPayload(c.id)} className="ml-auto text-[9px] flex items-center gap-1" style={{ color: '#475569' }}><Repeat size={9}/> Refresh</button>
+                      </div>
+                      {execs.slice(0, 30).map((ex, i) => {
                         let payload = null;
                         try { payload = JSON.parse(ex.payload_sent || 'null'); } catch (_) {}
                         return (
-                          <div key={i} className="p-3 space-y-2" style={{ background: i % 2 === 0 ? "rgba(6,182,212,0.03)" : "transparent", borderTop: i > 0 ? "1px solid rgba(255,255,255,0.04)" : "none" }}>
-                            <div className="flex items-center justify-between">
+                          <div key={i} className="p-3 space-y-1.5" style={{ background: i % 2 === 0 ? "rgba(6,182,212,0.02)" : "transparent", borderTop: i > 0 ? "1px solid rgba(255,255,255,0.04)" : "none" }}>
+                            <div className="flex items-center justify-between flex-wrap gap-1">
                               <div className="flex items-center gap-2">
-                                <span className={`w-1.5 h-1.5 rounded-full`} style={{ background: ex.status === 'sent' ? '#4ade80' : '#f87171' }}/>
-                                <span className="text-[10px] font-semibold" style={{ color: ex.status === 'sent' ? '#4ade80' : '#f87171' }}>
-                                  {ex.status === 'sent' ? '✓ Sent' : '✗ Failed'}
-                                </span>
-                                <span className="text-[10px]" style={{ color: "#64748b" }}>→ {ex.phone}</span>
+                                <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: ex.status === 'sent' ? '#4ade80' : '#f87171' }}/>
+                                <span className="text-[10px] font-semibold" style={{ color: ex.status === 'sent' ? '#4ade80' : '#f87171' }}>{ex.status === 'sent' ? '✓ Sent' : '✗ Failed'}</span>
+                                <span className="text-[10px] text-white font-medium">{ex.name || 'User'}</span>
+                                <span className="text-[9px] font-mono" style={{ color: "#64748b" }}>{ex.phone}</span>
+                                <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(255,255,255,0.04)', color: '#475569' }}>Stage {ex.stage || 1}</span>
                               </div>
                               <span className="text-[9px]" style={{ color: "#334155" }}>{new Date(ex.sent_at).toLocaleString()}</span>
                             </div>
+                            {ex.template_name && <p className="text-[9px]" style={{ color: '#475569' }}>Template: <span style={{ color: '#94a3b8' }}>{ex.template_name}</span></p>}
+                            {ex.error && <p className="text-[9px] font-mono px-2 py-1 rounded" style={{ background: 'rgba(248,113,113,0.08)', color: '#fca5a5' }}>✗ {ex.error}</p>}
                             {payload && (
                               <pre className="text-[9px] rounded-lg p-2 overflow-x-auto leading-relaxed"
-                                style={{ background: "#070d1a", border: "1px solid rgba(6,182,212,0.12)", color: "#67e8f9", maxHeight: "160px", overflowY: "auto" }}>
+                                style={{ background: "#070d1a", border: "1px solid rgba(6,182,212,0.12)", color: "#67e8f9", maxHeight: "140px", overflowY: "auto" }}>
                                 {JSON.stringify(payload, null, 2)}
                               </pre>
                             )}
                           </div>
                         );
                       })}
-                      <div className="px-3 pb-2 flex justify-end">
-                        <button onClick={() => loadPayload(c.id)} className="text-[9px] flex items-center gap-1" style={{ color: "#475569" }}>
-                          <Repeat size={9}/> Refresh
-                        </button>
-                      </div>
+                      {execs.length > 30 && <p className="text-center text-[9px] py-2" style={{ color: '#334155' }}>Showing 30 of {execs.length}</p>}
                     </div>
                   );
                 })()}
@@ -2131,16 +2162,18 @@ export default function Campaigns() {
                        </button>
                        {/* Broadcast send button */}
                        <button onClick={async() => {
-                          const result = await campaignsApi.send(c.id);
-                          console.group(`%c[Campaign Send] "${c.name}" — sent:${result?.sent ?? 0} skipped:${result?.skipped ?? 0}`, 'color:#22c55e;font-weight:bold');
-                          if (result?.payloads?.length) {
-                            result.payloads.forEach((p, i) => {
-                              console.log(`%cMessage ${i+1} → ${p.phone} (${p.template})`, 'color:#60a5fa;font-weight:bold');
-                              console.log('%cMeta API Payload:', 'color:#f59e0b', JSON.stringify(p.payload, null, 2));
-                            });
+                          setSendResultMap(p => ({ ...p, [c.id]: null }));
+                          try {
+                            const result = await campaignsApi.send(c.id);
+                            setSendResultMap(p => ({ ...p, [c.id]: { sent: result?.sent ?? 0, skipped: result?.skipped ?? 0, errors: result?.errors || [] } }));
+                            console.group(`%c[Campaign Send] "${c.name}" — sent:${result?.sent ?? 0} skipped:${result?.skipped ?? 0}`, 'color:#22c55e;font-weight:bold');
+                            if (result?.payloads?.length) result.payloads.forEach((p, i) => { console.log(`%cMessage ${i+1} → ${p.phone}`, 'color:#60a5fa'); console.log('%cPayload:', 'color:#f59e0b', JSON.stringify(p.payload, null, 2)); });
+                            if (result?.errors?.length) console.error('[Campaign Errors]', result.errors);
+                            console.groupEnd();
+                            loadPayload(c.id);
+                          } catch (e) {
+                            setSendResultMap(p => ({ ...p, [c.id]: { sent: 0, skipped: 0, errors: [e.message] } }));
                           }
-                          if (result?.errors?.length) console.error('[Campaign Errors]', result.errors);
-                          console.groupEnd();
                           load();
                        }} title="Send to all matched contacts" className="p-2 bg-white/5 rounded-lg hover:text-green-400 border border-white/5 transition-all"><Play size={14}/></button>
                     </div>
@@ -2177,6 +2210,76 @@ export default function Campaigns() {
                      <p className="text-[9px]" style={{ color: '#475569' }}>Full payload logged in browser console (F12)</p>
                    </div>
                  )}
+
+                 {/* ── Send Result Banner ── */}
+                 {sendResultMap[c.id] && (() => {
+                   const sr = sendResultMap[c.id];
+                   const hasErrors = sr.errors?.length > 0;
+                   return (
+                     <div className="mt-2 rounded-xl p-3 space-y-1.5" style={{ background: hasErrors ? 'rgba(248,113,113,0.06)' : 'rgba(74,222,128,0.06)', border: `1px solid ${hasErrors ? 'rgba(248,113,113,0.2)' : 'rgba(74,222,128,0.2)'}` }}>
+                       <div className="flex items-center gap-3 text-[11px] font-semibold">
+                         <span style={{ color: '#4ade80' }}>✓ {sr.sent} sent</span>
+                         {sr.skipped > 0 && <span style={{ color: '#94a3b8' }}>· {sr.skipped} skipped</span>}
+                         {hasErrors && <span style={{ color: '#f87171' }}>· {sr.errors.length} error{sr.errors.length > 1 ? 's' : ''}</span>}
+                         <button onClick={() => setSendResultMap(p => ({ ...p, [c.id]: null }))} className="ml-auto text-[9px]" style={{ color: '#475569' }}>✕</button>
+                       </div>
+                       {hasErrors && (
+                         <div className="space-y-0.5">
+                           {sr.errors.map((err, i) => (
+                             <p key={i} className="text-[9px] font-mono" style={{ color: '#fca5a5' }}>✗ {err}</p>
+                           ))}
+                         </div>
+                       )}
+                     </div>
+                   );
+                 })()}
+
+                 {/* ── Audience Preview Panel ── */}
+                 <div className="mt-2">
+                   <button onClick={() => toggleAudience(c.id)}
+                     className="w-full flex items-center justify-between px-3 py-2 rounded-xl text-[10px] font-semibold transition-all"
+                     style={{ background: audienceOpen[c.id] ? 'rgba(251,191,36,0.1)' : 'rgba(255,255,255,0.03)', border: `1px solid ${audienceOpen[c.id] ? 'rgba(251,191,36,0.3)' : 'rgba(255,255,255,0.06)'}`, color: audienceOpen[c.id] ? '#fbbf24' : '#64748b' }}>
+                     <span className="flex items-center gap-1.5">👥 Who Will Receive This</span>
+                     <span className="flex items-center gap-1.5">
+                       {audienceMap[c.id] && <span className="px-1.5 py-0.5 rounded-full text-[9px] font-bold" style={{ background: 'rgba(251,191,36,0.15)', color: '#fbbf24' }}>{audienceMap[c.id].count}</span>}
+                       <ChevronDown size={11} style={{ transform: audienceOpen[c.id] ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }}/>
+                     </span>
+                   </button>
+                   {audienceOpen[c.id] && (() => {
+                     if (audienceLoading[c.id]) return <div className="mt-2 text-[10px] text-center py-3" style={{ color: '#475569' }}>Loading audience…</div>;
+                     const aud = audienceMap[c.id];
+                     if (!aud) return null;
+                     if (!aud.audience?.length) return <div className="mt-2 text-[10px] text-center py-3 rounded-xl" style={{ color: '#475569', border: '1px solid rgba(255,255,255,0.05)' }}>No eligible users right now.</div>;
+                     return (
+                       <div className="mt-2 rounded-xl overflow-hidden" style={{ border: '1px solid rgba(251,191,36,0.15)' }}>
+                         <div className="px-3 py-2 flex items-center justify-between" style={{ background: 'rgba(251,191,36,0.05)', borderBottom: '1px solid rgba(251,191,36,0.1)' }}>
+                           <span className="text-[10px] font-bold" style={{ color: '#fbbf24' }}>{aud.count} user{aud.count !== 1 ? 's' : ''} eligible</span>
+                           <button onClick={() => loadAudience(c.id)} className="text-[9px] flex items-center gap-1" style={{ color: '#64748b' }}><Repeat size={9}/> Refresh</button>
+                         </div>
+                         <div className="divide-y" style={{ divideColor: 'rgba(255,255,255,0.04)' }}>
+                           {aud.audience.slice(0, 20).map((u, i) => (
+                             <div key={i} className="flex items-start gap-2 px-3 py-2" style={{ background: i % 2 === 0 ? 'rgba(255,255,255,0.01)' : 'transparent' }}>
+                               <div className="w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold flex-shrink-0" style={{ background: 'rgba(251,191,36,0.1)', color: '#fbbf24' }}>
+                                 {(u.name || u.phone || '?')[0].toUpperCase()}
+                               </div>
+                               <div className="flex-1 min-w-0">
+                                 <div className="flex items-center gap-2">
+                                   <span className="text-[10px] font-semibold text-white truncate">{u.name || 'Unknown'}</span>
+                                   <span className="text-[9px] font-mono" style={{ color: '#475569' }}>{u.phone}</span>
+                                   {u.ready_to_send === false && <span className="text-[9px] px-1.5 rounded" style={{ background: 'rgba(251,191,36,0.1)', color: '#fbbf24' }}>⏱ waiting</span>}
+                                   {u.ready_to_send === true && <span className="text-[9px] px-1.5 rounded" style={{ background: 'rgba(74,222,128,0.1)', color: '#4ade80' }}>ready</span>}
+                                 </div>
+                                 {u.product_name && <p className="text-[9px] truncate" style={{ color: '#64748b' }}>{u.product_name}{u.product_price ? ` · ${u.product_price}` : ''}</p>}
+                                 {u.minutes_since_activity !== undefined && <p className="text-[9px]" style={{ color: '#334155' }}>{u.minutes_since_activity}m since activity · stage {u.followup_count || 0} done</p>}
+                               </div>
+                             </div>
+                           ))}
+                           {aud.count > 20 && <p className="text-center text-[9px] py-2" style={{ color: '#334155' }}>+{aud.count - 20} more users</p>}
+                         </div>
+                       </div>
+                     );
+                   })()}
+                 </div>
               </div>
             </div>
           );

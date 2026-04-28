@@ -318,6 +318,7 @@ export const campaignsController = {
         db.abandoned_cart_executions.push({
           id: (db.abandoned_cart_executions.length || 0) + 1,
           campaign_id: id,
+          campaign_name: campaign.name,
           cart_event_id: target.cart_id || target.id,
           phone: target.phone,
           name: target.name || null,
@@ -574,11 +575,88 @@ export const campaignsController = {
     try {
       const db = getDb();
       const { id } = req.params;
+      const cam = db.abandoned_cart_campaigns.find(c => c.id == id);
       const result = db.abandoned_cart_executions
         .filter(e => e.campaign_id == id)
         .sort((a, b) => new Date(b.sent_at).getTime() - new Date(a.sent_at).getTime())
-        .slice(0, 100);
-      res.json(result);
+        .slice(0, 200)
+        .map(e => ({
+          ...e,
+          campaign_name: e.campaign_name || cam?.name || null,
+        }));
+      const totalSent   = result.filter(e => e.status === 'sent').length;
+      const totalFailed = result.filter(e => e.status === 'failed').length;
+      res.json({ executions: result, totalSent, totalFailed });
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  async getAudience(req, res, next) {
+    try {
+      const db = getDb();
+      const { id } = req.params;
+      const channelId = req.headers['x-channel-id'] || 'demo';
+      const campaign = db.abandoned_cart_campaigns.find(c => c.id == id);
+      if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
+
+      const settingsRow = (db.channel_settings || []).find(s => s.channel_id === channelId);
+      const chSettings = settingsRow ? (() => { try { return JSON.parse(settingsRow.settings || '{}'); } catch(_) { return {}; } })() : {};
+      const productSlug = (chSettings.product_url_slug || '/products').replace(/\/+$/, '');
+
+      let audience = [];
+
+      if (campaign.campaign_type === 'abandoned_product_view') {
+        const now = Date.now();
+        const THIRTY_MIN_MS = 30 * 60 * 1000;
+        audience = (db.product_views || []).filter(v => {
+          if (v.channel_id !== channelId || !v.phone) return false;
+          if (!v.product_url || !v.product_url.includes(productSlug)) return false;
+          if ((v.followup_count || 0) >= 2) return false;
+          const visitor = db.website_visitors.find(vis => vis.phone === v.phone);
+          if (visitor && visitor.status !== 'product_view') return false;
+          return true;
+        }).map(v => {
+          const visitor = db.website_visitors.find(vis => vis.phone === v.phone);
+          const lastActivity = visitor?.visited_at || v.created_at;
+          const minSince = Math.floor((now - new Date(lastActivity).getTime()) / 60000);
+          return {
+            phone: v.phone,
+            name: visitor?.name || v.product_name || 'Unknown',
+            product_name: v.product_name || '',
+            product_url: v.product_url || '',
+            product_price: v.product_price || '',
+            status: visitor?.status || 'product_view',
+            followup_count: v.followup_count || 0,
+            minutes_since_activity: minSince,
+            ready_to_send: minSince >= 30,
+          };
+        });
+      } else if (campaign.campaign_type === 'abandoned_cart') {
+        audience = (db.cart_events || []).filter(c =>
+          c.channel_id === channelId && !c.recovered && c.phone
+        ).map(c => {
+          const visitor = db.website_visitors.find(v => v.phone === c.phone);
+          return { phone: c.phone, name: visitor?.name || c.name || 'Unknown', status: visitor?.status || 'abandoned_cart', product_name: c.product_name || '', total_amount: c.total_amount || 0 };
+        });
+      } else if (campaign.campaign_type === 'product_view') {
+        audience = (db.product_views || []).filter(v =>
+          v.channel_id === channelId && v.phone && v.product_url && v.product_url.includes(productSlug)
+        ).map(v => {
+          const visitor = db.website_visitors.find(vis => vis.phone === v.phone);
+          return { phone: v.phone, name: visitor?.name || 'Unknown', status: visitor?.status, product_name: v.product_name || '', product_url: v.product_url || '' };
+        });
+      } else {
+        audience = (db.website_visitors || []).filter(v =>
+          v.channel_id === channelId && v.phone
+        ).map(v => ({ phone: v.phone, name: v.name || 'Unknown', status: v.status, city: v.city || '' }));
+      }
+
+      // Deduplicate by phone
+      const seen = new Set();
+      audience = audience.filter(u => { if (seen.has(u.phone)) return false; seen.add(u.phone); return true; });
+
+      res.json({ count: audience.length, audience: audience.slice(0, 100) });
     } catch (error) {
       next(error);
     }

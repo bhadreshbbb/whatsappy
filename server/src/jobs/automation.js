@@ -1195,7 +1195,8 @@ async function sendMultiple(db, cam, events, type) {
           console.error(`[MetaTemplateSend] FAILED for ${evt.phone} — ${sendErr.message}`);
           db.abandoned_cart_executions.push({
             id: (db.abandoned_cart_executions.length || 0) + 1,
-            campaign_id: cam.id, phone: evt.phone, name: evt.name,
+            campaign_id: cam.id, campaign_name: cam.name,
+            phone: evt.phone, name: evt.name,
             template_id: metaTpl.id, template_name: metaTpl.name,
             stage: currentStage, language: metaLangCode,
             status: 'failed', error: sendErr.message,
@@ -1223,6 +1224,7 @@ async function sendMultiple(db, cam, events, type) {
         db.abandoned_cart_executions.push({
           id: (db.abandoned_cart_executions.length || 0) + 1,
           campaign_id: cam.id,
+          campaign_name: cam.name,
           phone: evt.phone,
           name: evt.name,
           template_id: metaTpl.id,
@@ -1364,6 +1366,7 @@ async function sendMultiple(db, cam, events, type) {
       db.abandoned_cart_executions.push({
         id: (db.abandoned_cart_executions.length || 0) + 1,
         campaign_id: cam.id,
+        campaign_name: cam.name,
         phone: evt.phone,
         name: evt.name,
         template_id: templateId,

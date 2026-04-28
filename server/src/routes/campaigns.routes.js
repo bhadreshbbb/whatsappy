@@ -12,6 +12,7 @@ router.post('/:id/send', campaignsController.sendCampaign);
 router.post('/:id/send-test', campaignsController.sendTestMessage);
 router.post('/:id/status', campaignsController.updateStatus);
 router.get('/:id/executions', campaignsController.getExecutions);
+router.get('/:id/audience', campaignsController.getAudience);
 router.get('/:id/analytics', campaignsController.getCampaignAnalytics);
 
 export { router as campaignsRoutes };
