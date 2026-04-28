@@ -170,8 +170,14 @@ export const campaignsController = {
         });
       } else if (campaign.campaign_type === 'abandoned_cart') {
         targetEvents = db.cart_events.filter(c => c.channel_id === channelId && !c.recovered && c.phone);
-      } else if (campaign.campaign_type === 'product_view') {
-        targetEvents = db.product_views.filter(v => v.channel_id === channelId && v.phone);
+      } else if (campaign.campaign_type === 'product_view' || campaign.campaign_type === 'abandoned_product_view') {
+        const _sr = (db.channel_settings || []).find(s => s.channel_id === channelId);
+        const _cs = _sr ? (() => { try { return JSON.parse(_sr.settings || '{}'); } catch(_) { return {}; } })() : {};
+        const _slug = (_cs.product_url_slug || '/products').replace(/\/+$/, '');
+        targetEvents = db.product_views.filter(v =>
+          v.channel_id === channelId && v.phone &&
+          v.product_url && v.product_url.includes(_slug)
+        );
       } else {
         targetEvents = db.website_visitors.filter(v => {
           if (v.channel_id !== channelId || !v.phone) return false;
@@ -371,7 +377,12 @@ export const campaignsController = {
 
       if (!metaTpl.is_carousel && campaign.campaign_type === 'abandoned_product_view') {
         // Pick a random product_view record from this channel as the test product
-        const allViews = (db.product_views || []).filter(v => v.channel_id === channelId && v.product_url);
+        const _tsr = (db.channel_settings || []).find(s => s.channel_id === channelId);
+        const _tcs = _tsr ? (() => { try { return JSON.parse(_tsr.settings || '{}'); } catch(_) { return {}; } })() : {};
+        const _tSlug = (_tcs.product_url_slug || '/products').replace(/\/+$/, '');
+        const allViews = (db.product_views || []).filter(v =>
+          v.channel_id === channelId && v.product_url && v.product_url.includes(_tSlug)
+        );
         const randomView = allViews.length > 0
           ? allViews[Math.floor(Math.random() * allViews.length)]
           : null;

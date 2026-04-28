@@ -557,6 +557,16 @@ export const trackingController = {
       // Strip query params from URL before storing
       if (product_url) product_url = cleanProductUrl(product_url);
 
+      // ── Slug gate: only track URLs matching configured product_url_slug ────
+      {
+        const settingsRow = (db.channel_settings || []).find(s => s.channel_id === cid);
+        const chSettings = settingsRow ? (() => { try { return JSON.parse(settingsRow.settings || '{}'); } catch(_) { return {}; } })() : {};
+        const productSlug = (chSettings.product_url_slug || '/products').replace(/\/+$/, '');
+        if (product_url && productSlug && !product_url.includes(productSlug)) {
+          return res.json({ success: true, skipped: true, reason: 'URL does not match product_url_slug' });
+        }
+      }
+
       // ── Server-side auto-scrape: if image or name missing but URL provided ──
       // Respond immediately; scrape runs async and patches the record when done.
       const needsScrape = product_url && (!product_name || !product_image);
