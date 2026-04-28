@@ -1552,7 +1552,16 @@ export async function createTemplate(req, res) {
           }
 
           if (!tpl.header_file_handle) {
-            console.warn(`[MetaTemplates] ⚠ No file_handle for header — Meta may reject template. Upload image via Gallery first.`);
+            // Meta REQUIRES example.header_handle for IMAGE headers — abort before submitting
+            // to avoid SUBMIT_ERROR 2388043. Common cause: App ID missing in Settings.
+            db.meta_templates = (db.meta_templates || []).filter(t => t.id !== tpl.id);
+            db.save();
+            return res.status(400).json({
+              error: 'Header image upload failed — Meta requires a file_handle for IMAGE header templates. ' +
+                     'Check: (1) Facebook App ID is set in Settings → WhatsApp → App ID, ' +
+                     '(2) the image URL is publicly accessible, ' +
+                     '(3) your Access Token has the whatsapp_business_messaging permission.',
+            });
           }
         }
       } else {
