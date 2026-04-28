@@ -563,11 +563,20 @@ export const campaignsController = {
       const addToCarts = cartPhones.size;
 
       // Execution stats
-      const executions = (db.abandoned_cart_executions || []).filter(e => String(e.campaign_id) === String(id));
-      const totalSent  = executions.length;
-      const msgClicked = executions.filter(e => e.clicked).length;
+      const executions  = (db.abandoned_cart_executions || []).filter(e => String(e.campaign_id) === String(id));
+      const totalSent   = executions.filter(e => e.status === 'sent').length;
+      const totalFailed = executions.filter(e => e.status === 'failed').length;
+      const msgClicked  = executions.filter(e => e.clicked).length;
+      const openRate    = totalSent > 0 ? +((msgClicked / totalSent) * 100).toFixed(1) : 0;
+      const cartRate    = clicks    > 0 ? +((addToCarts  / clicks   ) * 100).toFixed(1) : 0;
+      const buyRate     = clicks    > 0 ? +((purchases   / clicks   ) * 100).toFixed(1) : 0;
 
-      res.json({ clicks, add_to_carts: addToCarts, purchases, total_sent: totalSent, msg_clicked: msgClicked });
+      res.json({
+        clicks, add_to_carts: addToCarts, purchases,
+        total_sent: totalSent, total_failed: totalFailed,
+        msg_clicked: msgClicked,
+        open_rate: openRate, cart_rate: cartRate, buy_rate: buyRate,
+      });
     } catch (error) { next(error); }
   },
 

@@ -2030,32 +2030,46 @@ export default function Campaigns() {
                       </div>
                     ) : analyticsMap[c.id] ? (() => {
                       const a = analyticsMap[c.id];
-                      const cr = a.clicks > 0 ? ((a.add_to_carts / a.clicks) * 100).toFixed(0) : 0;
-                      const pr = a.clicks > 0 ? ((a.purchases / a.clicks) * 100).toFixed(0) : 0;
                       return (
                         <div className="p-3 space-y-3">
+                          {/* Row 1: Send stats */}
                           <div className="grid grid-cols-3 gap-2 text-center">
                             {[
-                              { label: 'Site Clicks', value: a.clicks,       color: '#60a5fa', icon: '🖱️' },
-                              { label: 'Add to Cart', value: a.add_to_carts, color: '#fb923c', icon: '🛒' },
-                              { label: 'Purchases',   value: a.purchases,    color: '#4ade80', icon: '✅' },
+                              { label: 'Sent',    value: a.total_sent   || 0, color: '#22d3ee', icon: '📤' },
+                              { label: 'Failed',  value: a.total_failed || 0, color: a.total_failed > 0 ? '#f87171' : '#334155', icon: '✗' },
+                              { label: 'Opened',  value: a.msg_clicked  || 0, color: '#a78bfa', icon: '📬' },
                             ].map(s => (
                               <div key={s.label} className="py-2 rounded-lg" style={{ background: "rgba(255,255,255,0.03)" }}>
-                                <div className="text-base">{s.icon}</div>
+                                <div className="text-sm">{s.icon}</div>
                                 <div className="text-sm font-bold mt-0.5" style={{ color: s.color }}>{s.value}</div>
                                 <div className="text-[9px] uppercase tracking-wide mt-0.5" style={{ color: "#475569" }}>{s.label}</div>
                               </div>
                             ))}
                           </div>
-                          <div className="flex items-center gap-3 text-[10px]" style={{ color: "#64748b" }}>
-                            <span>Cart rate: <span style={{ color: "#fb923c" }}>{cr}%</span></span>
-                            <span>·</span>
-                            <span>Purchase rate: <span style={{ color: "#4ade80" }}>{pr}%</span></span>
+                          {/* Row 2: Conversion funnel */}
+                          <div className="grid grid-cols-3 gap-2 text-center">
+                            {[
+                              { label: 'Link Clicks', value: a.clicks,       color: '#60a5fa', icon: '🖱️' },
+                              { label: 'Add to Cart', value: a.add_to_carts, color: '#fb923c', icon: '🛒' },
+                              { label: 'Purchases',   value: a.purchases,    color: '#4ade80', icon: '✅' },
+                            ].map(s => (
+                              <div key={s.label} className="py-2 rounded-lg" style={{ background: "rgba(255,255,255,0.03)" }}>
+                                <div className="text-sm">{s.icon}</div>
+                                <div className="text-sm font-bold mt-0.5" style={{ color: s.color }}>{s.value}</div>
+                                <div className="text-[9px] uppercase tracking-wide mt-0.5" style={{ color: "#475569" }}>{s.label}</div>
+                              </div>
+                            ))}
+                          </div>
+                          {/* Rates */}
+                          <div className="flex items-center justify-between text-[10px] flex-wrap gap-1" style={{ color: "#64748b" }}>
+                            {a.open_rate > 0 && <span>Open: <span style={{ color: '#a78bfa' }}>{a.open_rate}%</span></span>}
+                            {a.cart_rate > 0 && <><span>·</span><span>Cart: <span style={{ color: '#fb923c' }}>{a.cart_rate}%</span></span></>}
+                            {a.buy_rate  > 0 && <><span>·</span><span>Buy: <span style={{ color: '#4ade80' }}>{a.buy_rate}%</span></span></>}
                             <button onClick={() => loadAnalytics(c.id)} className="ml-auto" title="Refresh" style={{ color: "#475569" }}><Repeat size={10}/></button>
                           </div>
                           {a.clicks === 0 && (
                             <p className="text-[10px] text-center" style={{ color: "#334155" }}>
-                              UTM links active — data appears when users click from WhatsApp
+                              Conversion data appears when users click your WhatsApp message links
                             </p>
                           )}
                         </div>

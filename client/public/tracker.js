@@ -617,6 +617,23 @@
     }
   }, { passive: true });
 
+  // ── WhatsApp Campaign Click Detection ─────────────────────────────────────────
+  // If page was opened from a WhatsApp campaign link (utm_source=whatsapp),
+  // fire a click event so the campaign execution record gets marked as clicked.
+  (function() {
+    try {
+      var params = new URLSearchParams(window.location.search);
+      var utmSource   = params.get('utm_source');
+      var campaignId  = params.get('utm_campaign');
+      if (utmSource === 'whatsapp' && campaignId) {
+        track('click', {
+          eventType:  'whatsapp_click',
+          campaignId: campaignId,
+        });
+      }
+    } catch (_) {}
+  })();
+
   // ── Attach listeners ──────────────────────────────────────────────────────────
   window.addEventListener('scroll',     onScroll,    { passive: true });
   document.addEventListener('click',    onPageClick, { passive: true });

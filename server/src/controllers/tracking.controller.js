@@ -935,12 +935,16 @@ export const trackingController = {
 
       // Mark the execution as clicked if campaignId provided
       if (campaignId) {
-        const exec = db.abandoned_cart_executions.find(e =>
-          String(e.campaign_id) === String(campaignId) && e.session_id === sessionId
-        );
-        if (exec) {
-          exec.clicked = 1;
-          exec.clicked_at = new Date().toISOString();
+        // Resolve phone from session → visitor record
+        const visitor = (db.website_visitors || []).find(v => v.channel_id === cid && v.session_id === sessionId);
+        const phone = visitor?.phone || null;
+        // Find most recent execution for this campaign + phone (or fallback: any unclicked for campaign)
+        const execs = (db.abandoned_cart_executions || []).filter(e =>
+          String(e.campaign_id) === String(campaignId) && (phone ? e.phone === phone : true)
+        ).sort((a, b) => new Date(b.sent_at) - new Date(a.sent_at));
+        if (execs.length > 0 && !execs[0].clicked) {
+          execs[0].clicked = 1;
+          execs[0].clicked_at = new Date().toISOString();
         }
       }
 
