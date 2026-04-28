@@ -1812,12 +1812,27 @@ function CustomCampaignModal({ onClose, onCreated }) {
   );
 }
 
+// ─── Relative time helper ─────────────────────────────────────────────────────
+function timeAgo(iso) {
+  if (!iso) return null;
+  const diff = Date.now() - new Date(iso).getTime();
+  const m = Math.floor(diff / 60000);
+  if (m < 1)  return 'just now';
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  return `${Math.floor(h / 24)}d ago`;
+}
+
 // ─── Main Campaigns Page ──────────────────────────────────────────────────────
 export default function Campaigns() {
   const [campaigns, setCampaigns] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [showCustom, setShowCustom] = useState(false);
+  const [search, setSearch] = useState('');
+  const [typeFilter, setTypeFilter] = useState('all');
+  const [toggling, setToggling] = useState({});
   const [analyticsMap, setAnalyticsMap] = useState({});   // campaignId → analytics data
   const [analyticsOpen, setAnalyticsOpen] = useState({}); // campaignId → bool (panel open)
   const [analyticsLoading, setAnalyticsLoading] = useState({});
@@ -1908,392 +1923,508 @@ export default function Campaigns() {
     setLoading(false);
   };
 
+  const handleToggle = async (c) => {
+    setToggling(p => ({ ...p, [c.id]: true }));
+    try {
+      const newStatus = c.is_active ? 'paused' : 'running';
+      await campaignsApi.toggle(c.id, newStatus);
+      await load();
+    } catch (_) {}
+    setToggling(p => ({ ...p, [c.id]: false }));
+  };
+
+  const filteredCampaigns = useMemo(() => {
+    let list = campaigns;
+    if (search.trim()) list = list.filter(c => c.name.toLowerCase().includes(search.toLowerCase()) || (c.campaign_type || '').toLowerCase().includes(search.toLowerCase()));
+    if (typeFilter !== 'all') list = list.filter(c => c.campaign_type === typeFilter);
+    return list;
+  }, [campaigns, search, typeFilter]);
+
+  const globalStats = useMemo(() => ({
+    total:     campaigns.length,
+    active:    campaigns.filter(c => c.is_active).length,
+    sent:      campaigns.reduce((a, c) => a + (c.total_sent || 0), 0),
+    converted: campaigns.reduce((a, c) => a + (c.total_recovered || 0), 0),
+  }), [campaigns]);
+
   useEffect(() => { load(); }, []);
 
   return (
-    <div className="space-y-8">
-      <div className="flex items-center justify-between">
+    <div className="space-y-6">
+
+      {/* ── Page Header ── */}
+      <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
-           <h2 className="text-2xl font-bold text-white tracking-tight">Automation Engine</h2>
-           <p className="text-xs text-slate-500 mt-1">Cross-channel retargeting with auto-conversion tracking</p>
+          <h2 className="text-2xl font-bold text-white tracking-tight">Automation Engine</h2>
+          <p className="text-xs text-slate-500 mt-1">WhatsApp retargeting · auto-conversion tracking · runs every minute</p>
         </div>
         <div className="flex items-center gap-2">
           <button onClick={() => setShowCustom(true)}
-            className="flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold transition-all"
-            style={{ background: "rgba(59,130,246,0.1)", border: "1px solid rgba(59,130,246,0.3)", color: "#60a5fa" }}
-            onMouseEnter={e => e.currentTarget.style.background = "rgba(59,130,246,0.18)"}
-            onMouseLeave={e => e.currentTarget.style.background = "rgba(59,130,246,0.1)"}>
-            <Sliders size={15} /> Custom Campaign
+            className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all"
+            style={{ background: "rgba(59,130,246,0.1)", border: "1px solid rgba(59,130,246,0.3)", color: "#60a5fa" }}>
+            <Sliders size={14}/> Custom
           </button>
-          <button onClick={() => setShowModal(true)} className="btn-primary px-6 shadow-[0_0_20px_rgba(34,197,94,0.2)]">
-            <Plus size={16}/> New Flow
+          <button onClick={() => setShowModal(true)} className="btn-primary px-5">
+            <Plus size={15}/> New Flow
           </button>
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {loading && <div className="col-span-full py-12 text-center text-slate-500">Scanning automation flows...</div>}
-        
+      {/* ── Global Stats Bar ── */}
+      {!loading && campaigns.length > 0 && (
+        <div className="grid grid-cols-4 gap-3">
+          {[
+            { label: 'Total Flows',   value: globalStats.total,     color: '#94a3b8', icon: '⚡' },
+            { label: 'Active',        value: globalStats.active,    color: '#4ade80', icon: '🟢' },
+            { label: 'Total Sent',    value: globalStats.sent.toLocaleString(), color: '#22d3ee', icon: '📤' },
+            { label: 'Conversions',   value: globalStats.converted.toLocaleString(), color: '#fb923c', icon: '✅' },
+          ].map(s => (
+            <div key={s.label} className="rounded-2xl px-4 py-3 text-center" style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)' }}>
+              <p className="text-lg font-bold" style={{ color: s.color }}>{s.icon} {s.value}</p>
+              <p className="text-[10px] uppercase tracking-widest mt-0.5" style={{ color: '#334155' }}>{s.label}</p>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* ── Search + Type Filter ── */}
+      {!loading && campaigns.length > 0 && (
+        <div className="flex items-center gap-3 flex-wrap">
+          <div className="relative flex-1 min-w-[180px]">
+            <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500"/>
+            <input
+              type="text" placeholder="Search campaigns…"
+              value={search} onChange={e => setSearch(e.target.value)}
+              className="w-full pl-8 pr-3 py-2 text-xs rounded-xl outline-none"
+              style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', color: '#e2e8f0' }}
+            />
+          </div>
+          <div className="flex gap-1.5 flex-wrap">
+            {['all', 'abandoned_product_view', 'abandoned_cart', 'abandoned_checkout', 'website_visit', 'post_purchase', 'post_cart_upsell'].map(t => (
+              <button key={t} onClick={() => setTypeFilter(t)}
+                className="text-[10px] px-2.5 py-1.5 rounded-lg font-semibold transition-all"
+                style={typeFilter === t
+                  ? { background: 'rgba(34,197,94,0.15)', border: '1px solid rgba(34,197,94,0.35)', color: '#4ade80' }
+                  : { background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)', color: '#475569' }}>
+                {t === 'all' ? 'All' : (CAMPAIGN_TYPES.find(ct => ct.id === t)?.icon || '') + ' ' + (t.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()))}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+        {loading && (
+          <div className="col-span-full py-16 text-center">
+            <div className="inline-flex items-center gap-2 text-slate-500 text-sm"><Repeat size={14} className="animate-spin"/> Loading automation flows…</div>
+          </div>
+        )}
         {!loading && campaigns.length === 0 && (
           <div className="col-span-full py-20 px-8 rounded-[2.5rem] bg-white/[0.01] border border-white/5 border-dashed flex flex-col items-center justify-center text-center">
             <div className="w-20 h-20 rounded-3xl bg-green-500/10 flex items-center justify-center text-4xl mb-6 border border-green-500/20">🚀</div>
             <h3 className="text-xl font-bold text-white mb-2">Ready to Launch?</h3>
-            <p className="text-sm text-slate-500 max-w-sm mb-8 leading-relaxed">
-              Your automation engine is currently at a clean slate. Create your first campaign to start recovering abandoned carts automatically.
-            </p>
-            <button onClick={() => setShowModal(true)} className="btn-primary px-10 py-3 shadow-[0_0_30px_rgba(34,197,94,0.3)]">
-              Establish First Flow
-            </button>
+            <p className="text-sm text-slate-500 max-w-sm mb-8 leading-relaxed">No automation flows yet. Create your first campaign to start recovering revenue automatically.</p>
+            <button onClick={() => setShowModal(true)} className="btn-primary px-10 py-3">Establish First Flow</button>
           </div>
         )}
+        {!loading && filteredCampaigns.length === 0 && campaigns.length > 0 && (
+          <div className="col-span-full py-12 text-center text-slate-500 text-sm">No campaigns match your filter.</div>
+        )}
 
-        {campaigns.map(c => {
+        {filteredCampaigns.map(c => {
           const isCustom = c.campaign_type === 'custom';
-          const isProdRec = c.campaign_type === 'product_recommendation';
-          const type = CAMPAIGN_TYPES.find(t=>t.id===c.campaign_type) || CAMPAIGN_TYPES[0];
-          const rate = c.total_sent > 0 ? ((c.total_recovered/c.total_sent)*100).toFixed(1) : "0.0";
+          const type = CAMPAIGN_TYPES.find(t => t.id === c.campaign_type) || CAMPAIGN_TYPES[0];
+          const isActive = !!c.is_active;
+          const convRate = c.total_sent > 0 ? ((c.total_recovered / c.total_sent) * 100).toFixed(1) : '0.0';
+          const isAPV = c.campaign_type === 'abandoned_product_view';
+          const lastRun = timeAgo(c.last_run_at);
           let filters = null;
           try { filters = c.filters ? JSON.parse(c.filters) : null; } catch (_) {}
+
+          // Status badge config
+          const statusBadge = isActive
+            ? { label: 'Active', color: '#4ade80', bg: 'rgba(74,222,128,0.12)', border: 'rgba(74,222,128,0.25)', pulse: true }
+            : { label: 'Paused', color: '#94a3b8', bg: 'rgba(148,163,184,0.08)', border: 'rgba(148,163,184,0.2)', pulse: false };
+
           return (
-            <div key={c.id} className="card p-6 border-white/5 relative bg-white/[0.01] group/card"
-              style={isCustom ? { borderColor: "rgba(59,130,246,0.15)" } : {}}>
-              <div className="absolute top-4 right-4 flex items-center gap-2">
-                {isCustom
-                  ? <span className="py-1 px-2 text-[9px] font-bold rounded-full uppercase tracking-tighter border"
-                      style={{ background: "rgba(59,130,246,0.1)", color: "#60a5fa", borderColor: "rgba(59,130,246,0.25)" }}>Custom</span>
-                  : <span className="py-1 px-2 bg-green-500/10 text-green-400 border border-green-500/20 text-[9px] font-bold rounded-full uppercase tracking-tighter animate-pulse">Running</span>
-                }
-                <button
-                  onClick={async () => { if(confirm('Delete this campaign?')){ await campaignsApi.delete(c.id); load(); } }}
-                  className="p-1.5 bg-red-500/10 text-red-400 border border-red-500/20 rounded-lg opacity-0 group-hover/card:opacity-100 transition-opacity hover:bg-red-500/20"
-                ><Trash2 size={13}/></button>
-              </div>
-              <div className="w-12 h-12 rounded-2xl flex items-center justify-center text-3xl mb-4 border"
-                style={isCustom
-                  ? { background: "rgba(59,130,246,0.08)", borderColor: "rgba(59,130,246,0.2)" }
-                  : { background: "rgba(255,255,255,0.05)", borderColor: "rgba(255,255,255,0.08)" }}>
-                {isCustom ? '🎯' : type.icon}
-              </div>
-              <h3 className="font-bold text-white mb-1">{c.name}</h3>
-              <div className="flex items-center gap-2 mb-3">
-                <p className="text-[10px] text-slate-500 uppercase tracking-widest">
-                  {isCustom ? 'Custom Audience' : type.targetSegment.replace('_',' ')} Target
-                </p>
-                {isCustom && (
-                  <span className="text-[9px] px-1.5 py-0.5 rounded font-bold"
-                    style={{ background: "rgba(168,85,247,0.1)", border: "1px solid rgba(168,85,247,0.2)", color: "#c084fc" }}>
-                    {c.run_times === 0 ? '∞ runs' : `${c.run_times || 1}× · ${c.delay_hours || 0}h`}
-                  </span>
-                )}
-              </div>
-              {isCustom && filters?.rules?.length > 0 && (
-                <div className="flex flex-wrap gap-1 mb-4">
-                  {filters.rules.slice(0, 3).map((r, i) => (
-                    <span key={i} className="text-[9px] px-1.5 py-0.5 rounded font-medium"
-                      style={{ background: "rgba(59,130,246,0.1)", border: "1px solid rgba(59,130,246,0.15)", color: "#60a5fa" }}>
-                      {r.field.replace(/_/g, ' ')} {r.op === 'gte' ? '≥' : r.op === 'lte' ? '≤' : '='} {r.value}
-                    </span>
-                  ))}
-                  {filters.rules.length > 3 && (
-                    <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ color: "#475569" }}>
-                      +{filters.rules.length - 3} more
-                    </span>
-                  )}
+            <div key={c.id} className="rounded-2xl flex flex-col overflow-hidden group/card"
+              style={{
+                background: 'rgba(255,255,255,0.015)',
+                border: `1px solid ${isActive ? 'rgba(74,222,128,0.12)' : 'rgba(255,255,255,0.06)'}`,
+                boxShadow: isActive ? '0 0 0 1px rgba(74,222,128,0.05) inset' : 'none',
+                transition: 'border-color 0.3s',
+              }}>
+
+              {/* ── Card Header ── */}
+              <div className="px-5 pt-5 pb-4" style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                <div className="flex items-start gap-3">
+                  {/* Icon */}
+                  <div className="w-11 h-11 rounded-xl flex items-center justify-center text-2xl flex-shrink-0"
+                    style={{ background: isCustom ? 'rgba(59,130,246,0.1)' : 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)' }}>
+                    {isCustom ? '🎯' : type.icon}
+                  </div>
+
+                  {/* Name + meta */}
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <h3 className="font-bold text-white text-sm leading-tight truncate">{c.name}</h3>
+                      {/* Status badge */}
+                      <span className="flex items-center gap-1 text-[9px] font-bold px-2 py-0.5 rounded-full flex-shrink-0"
+                        style={{ background: statusBadge.bg, border: `1px solid ${statusBadge.border}`, color: statusBadge.color }}>
+                        {statusBadge.pulse && <span className="w-1.5 h-1.5 rounded-full animate-pulse" style={{ background: statusBadge.color }}/>}
+                        {statusBadge.label}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2 mt-1 flex-wrap">
+                      <span className="text-[10px]" style={{ color: '#475569' }}>
+                        {isCustom ? '🎯 Custom' : `${type.icon} ${type.label}`}
+                      </span>
+                      {lastRun && (
+                        <span className="text-[9px]" style={{ color: '#334155' }}>· last run {lastRun}</span>
+                      )}
+                      {isAPV && (
+                        <span className="text-[9px] px-1.5 py-0.5 rounded font-bold"
+                          style={{ background: 'rgba(6,182,212,0.1)', border: '1px solid rgba(6,182,212,0.2)', color: '#22d3ee' }}>
+                          Single Product
+                        </span>
+                      )}
+                      {isCustom && (
+                        <span className="text-[9px] px-1.5 py-0.5 rounded font-bold"
+                          style={{ background: 'rgba(168,85,247,0.1)', border: '1px solid rgba(168,85,247,0.2)', color: '#c084fc' }}>
+                          {c.run_times === 0 ? '∞ runs' : `${c.run_times || 1}× runs`}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Controls */}
+                  <div className="flex items-center gap-1.5 flex-shrink-0">
+                    {/* Pause / Resume toggle */}
+                    <button
+                      onClick={() => handleToggle(c)}
+                      disabled={!!toggling[c.id]}
+                      title={isActive ? 'Pause campaign' : 'Resume campaign'}
+                      className="flex items-center gap-1 text-[10px] px-2.5 py-1.5 rounded-lg font-semibold transition-all"
+                      style={{
+                        background: isActive ? 'rgba(251,191,36,0.1)' : 'rgba(74,222,128,0.1)',
+                        border: `1px solid ${isActive ? 'rgba(251,191,36,0.25)' : 'rgba(74,222,128,0.25)'}`,
+                        color: isActive ? '#fbbf24' : '#4ade80',
+                        opacity: toggling[c.id] ? 0.5 : 1,
+                      }}>
+                      {toggling[c.id]
+                        ? <Repeat size={10} className="animate-spin"/>
+                        : isActive ? '⏸' : '▶'}
+                    </button>
+                    {/* Delete */}
+                    <button
+                      onClick={async () => { if (confirm('Delete this campaign?')) { await campaignsApi.delete(c.id); load(); } }}
+                      title="Delete campaign"
+                      className="p-1.5 rounded-lg opacity-0 group-hover/card:opacity-100 transition-opacity"
+                      style={{ background: 'rgba(248,113,113,0.08)', border: '1px solid rgba(248,113,113,0.2)', color: '#f87171' }}>
+                      <Trash2 size={12}/>
+                    </button>
+                  </div>
                 </div>
-              )}
-              
-              <div className="grid grid-cols-2 gap-4 mb-4">
-                 <div>
-                    <p className="text-[9px] text-slate-500 uppercase">Messages Sent</p>
-                    <p className="text-lg font-bold text-white">{c.total_sent}</p>
-                 </div>
-                 <div>
-                    <p className="text-[9px] text-slate-500 uppercase">Auto-Converted</p>
-                    <p className="text-lg font-bold text-green-400">{c.total_recovered}</p>
-                 </div>
-              </div>
 
-              {/* ── Analytics Panel ── */}
-              <div className="mb-4">
-                <button onClick={() => toggleAnalytics(c.id)}
-                  className="w-full flex items-center justify-between px-3 py-2 rounded-xl text-[10px] font-semibold transition-all"
-                  style={{ background: analyticsOpen[c.id] ? "rgba(59,130,246,0.1)" : "rgba(255,255,255,0.03)", border: `1px solid ${analyticsOpen[c.id] ? "rgba(59,130,246,0.3)" : "rgba(255,255,255,0.06)"}`, color: analyticsOpen[c.id] ? "#60a5fa" : "#64748b" }}>
-                  <span className="flex items-center gap-1.5"><TrendingDown size={11}/> Campaign Analytics</span>
-                  <ChevronDown size={11} style={{ transform: analyticsOpen[c.id] ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }}/>
-                </button>
-
-                {analyticsOpen[c.id] && (
-                  <div className="mt-2 rounded-xl overflow-hidden" style={{ border: "1px solid rgba(59,130,246,0.15)" }}>
-                    {analyticsLoading[c.id] ? (
-                      <div className="flex items-center justify-center gap-2 py-4 text-xs" style={{ color: "#64748b" }}>
-                        <Repeat size={12} className="animate-spin"/> Loading…
-                      </div>
-                    ) : analyticsMap[c.id] ? (() => {
-                      const a = analyticsMap[c.id];
-                      return (
-                        <div className="p-3 space-y-3">
-                          {/* Row 1: Send stats */}
-                          <div className="grid grid-cols-3 gap-2 text-center">
-                            {[
-                              { label: 'Sent',    value: a.total_sent   || 0, color: '#22d3ee', icon: '📤' },
-                              { label: 'Failed',  value: a.total_failed || 0, color: a.total_failed > 0 ? '#f87171' : '#334155', icon: '✗' },
-                              { label: 'Opened',  value: a.msg_clicked  || 0, color: '#a78bfa', icon: '📬' },
-                            ].map(s => (
-                              <div key={s.label} className="py-2 rounded-lg" style={{ background: "rgba(255,255,255,0.03)" }}>
-                                <div className="text-sm">{s.icon}</div>
-                                <div className="text-sm font-bold mt-0.5" style={{ color: s.color }}>{s.value}</div>
-                                <div className="text-[9px] uppercase tracking-wide mt-0.5" style={{ color: "#475569" }}>{s.label}</div>
-                              </div>
-                            ))}
-                          </div>
-                          {/* Row 2: Conversion funnel */}
-                          <div className="grid grid-cols-3 gap-2 text-center">
-                            {[
-                              { label: 'Link Clicks', value: a.clicks,       color: '#60a5fa', icon: '🖱️' },
-                              { label: 'Add to Cart', value: a.add_to_carts, color: '#fb923c', icon: '🛒' },
-                              { label: 'Purchases',   value: a.purchases,    color: '#4ade80', icon: '✅' },
-                            ].map(s => (
-                              <div key={s.label} className="py-2 rounded-lg" style={{ background: "rgba(255,255,255,0.03)" }}>
-                                <div className="text-sm">{s.icon}</div>
-                                <div className="text-sm font-bold mt-0.5" style={{ color: s.color }}>{s.value}</div>
-                                <div className="text-[9px] uppercase tracking-wide mt-0.5" style={{ color: "#475569" }}>{s.label}</div>
-                              </div>
-                            ))}
-                          </div>
-                          {/* Rates */}
-                          <div className="flex items-center justify-between text-[10px] flex-wrap gap-1" style={{ color: "#64748b" }}>
-                            {a.open_rate > 0 && <span>Open: <span style={{ color: '#a78bfa' }}>{a.open_rate}%</span></span>}
-                            {a.cart_rate > 0 && <><span>·</span><span>Cart: <span style={{ color: '#fb923c' }}>{a.cart_rate}%</span></span></>}
-                            {a.buy_rate  > 0 && <><span>·</span><span>Buy: <span style={{ color: '#4ade80' }}>{a.buy_rate}%</span></span></>}
-                            <button onClick={() => loadAnalytics(c.id)} className="ml-auto" title="Refresh" style={{ color: "#475569" }}><Repeat size={10}/></button>
-                          </div>
-                          {a.clicks === 0 && (
-                            <p className="text-[10px] text-center" style={{ color: "#334155" }}>
-                              Conversion data appears when users click your WhatsApp message links
-                            </p>
-                          )}
-                        </div>
-                      );
-                    })() : null}
+                {/* Filter tags for custom campaigns */}
+                {isCustom && filters?.rules?.length > 0 && (
+                  <div className="flex flex-wrap gap-1 mt-3">
+                    {filters.rules.slice(0, 3).map((r, i) => (
+                      <span key={i} className="text-[9px] px-1.5 py-0.5 rounded font-medium"
+                        style={{ background: 'rgba(59,130,246,0.08)', border: '1px solid rgba(59,130,246,0.15)', color: '#60a5fa' }}>
+                        {r.field.replace(/_/g, ' ')} {r.op === 'gte' ? '≥' : '='} {r.value}
+                      </span>
+                    ))}
+                    {filters.rules.length > 3 && (
+                      <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ color: '#334155' }}>+{filters.rules.length - 3} more</span>
+                    )}
                   </div>
                 )}
               </div>
 
-              {/* ── Send History Panel ── */}
-              <div className="mb-4">
-                <button onClick={() => togglePayload(c.id)}
-                  className="w-full flex items-center justify-between px-3 py-2 rounded-xl text-[10px] font-semibold transition-all"
-                  style={{ background: payloadOpen[c.id] ? "rgba(6,182,212,0.1)" : "rgba(255,255,255,0.03)", border: `1px solid ${payloadOpen[c.id] ? "rgba(6,182,212,0.3)" : "rgba(255,255,255,0.06)"}`, color: payloadOpen[c.id] ? "#22d3ee" : "#64748b" }}>
-                  <span className="flex items-center gap-1.5"><GitBranch size={11}/> Send History</span>
-                  <span className="flex items-center gap-1.5">
-                    {payloadMap[c.id] && (
-                      <>
-                        <span className="text-[9px] px-1.5 py-0.5 rounded-full" style={{ background: 'rgba(74,222,128,0.12)', color: '#4ade80' }}>✓ {payloadMap[c.id].totalSent}</span>
-                        {payloadMap[c.id].totalFailed > 0 && <span className="text-[9px] px-1.5 py-0.5 rounded-full" style={{ background: 'rgba(248,113,113,0.12)', color: '#f87171' }}>✗ {payloadMap[c.id].totalFailed}</span>}
-                      </>
-                    )}
-                    <ChevronDown size={11} style={{ transform: payloadOpen[c.id] ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }}/>
-                  </span>
-                </button>
-                {payloadOpen[c.id] && (() => {
-                  const data = payloadMap[c.id];
-                  if (!data) return <div className="mt-2 text-[10px] text-center py-3" style={{ color: "#475569" }}>Loading…</div>;
-                  const execs = data.executions || [];
-                  if (!execs.length) return <div className="mt-2 text-[10px] text-center py-3 rounded-xl" style={{ color: "#475569", border: "1px solid rgba(255,255,255,0.05)" }}>No messages sent yet.</div>;
-                  return (
-                    <div className="mt-2 rounded-xl overflow-hidden" style={{ border: "1px solid rgba(6,182,212,0.15)" }}>
-                      <div className="px-3 py-2 flex items-center gap-3" style={{ background: 'rgba(6,182,212,0.05)', borderBottom: '1px solid rgba(6,182,212,0.1)' }}>
-                        <span className="text-[10px] font-bold" style={{ color: '#4ade80' }}>✓ {data.totalSent} sent</span>
-                        {data.totalFailed > 0 && <span className="text-[10px] font-bold" style={{ color: '#f87171' }}>✗ {data.totalFailed} failed</span>}
-                        <button onClick={() => loadPayload(c.id)} className="ml-auto text-[9px] flex items-center gap-1" style={{ color: '#475569' }}><Repeat size={9}/> Refresh</button>
-                      </div>
-                      {execs.slice(0, 30).map((ex, i) => {
-                        let payload = null;
-                        try { payload = JSON.parse(ex.payload_sent || 'null'); } catch (_) {}
+              {/* ── Quick Stats Strip ── */}
+              <div className="grid grid-cols-4 px-5 py-3" style={{ background: 'rgba(0,0,0,0.2)', borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+                {[
+                  { icon: '📤', label: 'Sent',    value: c.total_sent      || 0, color: '#22d3ee' },
+                  { icon: '🖱️', label: 'Clicked', value: analyticsMap[c.id]?.msg_clicked ?? '—', color: '#a78bfa' },
+                  { icon: '🛒', label: 'Cart',    value: analyticsMap[c.id]?.add_to_carts ?? '—', color: '#fb923c' },
+                  { icon: '✅', label: 'Bought',  value: c.total_recovered  || 0, color: '#4ade80' },
+                ].map(s => (
+                  <div key={s.label} className="text-center">
+                    <div className="text-sm font-bold" style={{ color: s.color }}>{s.value}</div>
+                    <div className="text-[9px] uppercase tracking-wide mt-0.5" style={{ color: '#334155' }}>{s.label}</div>
+                  </div>
+                ))}
+              </div>
+
+              {/* ── Collapsible Panels ── */}
+              <div className="flex-1 px-5 py-4 space-y-2">
+
+                {/* Analytics */}
+                <div>
+                  <button onClick={() => toggleAnalytics(c.id)}
+                    className="w-full flex items-center justify-between px-3 py-2 rounded-xl text-[10px] font-semibold transition-all"
+                    style={{ background: analyticsOpen[c.id] ? 'rgba(59,130,246,0.1)' : 'rgba(255,255,255,0.03)', border: `1px solid ${analyticsOpen[c.id] ? 'rgba(59,130,246,0.3)' : 'rgba(255,255,255,0.05)'}`, color: analyticsOpen[c.id] ? '#60a5fa' : '#64748b' }}>
+                    <span className="flex items-center gap-1.5"><TrendingDown size={10}/> Analytics</span>
+                    <ChevronDown size={10} style={{ transform: analyticsOpen[c.id] ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }}/>
+                  </button>
+                  {analyticsOpen[c.id] && (
+                    <div className="mt-2 rounded-xl overflow-hidden" style={{ border: '1px solid rgba(59,130,246,0.15)' }}>
+                      {analyticsLoading[c.id] ? (
+                        <div className="flex items-center justify-center gap-2 py-5 text-xs" style={{ color: '#64748b' }}><Repeat size={11} className="animate-spin"/> Loading…</div>
+                      ) : analyticsMap[c.id] ? (() => {
+                        const a = analyticsMap[c.id];
                         return (
-                          <div key={i} className="p-3 space-y-1.5" style={{ background: i % 2 === 0 ? "rgba(6,182,212,0.02)" : "transparent", borderTop: i > 0 ? "1px solid rgba(255,255,255,0.04)" : "none" }}>
-                            <div className="flex items-center justify-between flex-wrap gap-1">
-                              <div className="flex items-center gap-2">
-                                <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: ex.status === 'sent' ? '#4ade80' : '#f87171' }}/>
-                                <span className="text-[10px] font-semibold" style={{ color: ex.status === 'sent' ? '#4ade80' : '#f87171' }}>{ex.status === 'sent' ? '✓ Sent' : '✗ Failed'}</span>
-                                <span className="text-[10px] text-white font-medium">{ex.name || 'User'}</span>
-                                <span className="text-[9px] font-mono" style={{ color: "#64748b" }}>{ex.phone}</span>
-                                <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(255,255,255,0.04)', color: '#475569' }}>Stage {ex.stage || 1}</span>
-                              </div>
-                              <span className="text-[9px]" style={{ color: "#334155" }}>{new Date(ex.sent_at).toLocaleString()}</span>
+                          <div className="p-3 space-y-3">
+                            <div className="grid grid-cols-3 gap-2 text-center">
+                              {[
+                                { label: 'Sent',   value: a.total_sent   || 0, color: '#22d3ee', icon: '📤' },
+                                { label: 'Failed', value: a.total_failed || 0, color: a.total_failed > 0 ? '#f87171' : '#334155', icon: '✗' },
+                                { label: 'Opened', value: a.msg_clicked  || 0, color: '#a78bfa', icon: '📬' },
+                              ].map(s => (
+                                <div key={s.label} className="py-2 rounded-lg" style={{ background: 'rgba(255,255,255,0.03)' }}>
+                                  <div className="text-sm">{s.icon}</div>
+                                  <div className="text-sm font-bold mt-0.5" style={{ color: s.color }}>{s.value}</div>
+                                  <div className="text-[9px] uppercase tracking-wide mt-0.5" style={{ color: '#475569' }}>{s.label}</div>
+                                </div>
+                              ))}
                             </div>
-                            {ex.template_name && <p className="text-[9px]" style={{ color: '#475569' }}>Template: <span style={{ color: '#94a3b8' }}>{ex.template_name}</span></p>}
-                            {ex.error && <p className="text-[9px] font-mono px-2 py-1 rounded" style={{ background: 'rgba(248,113,113,0.08)', color: '#fca5a5' }}>✗ {ex.error}</p>}
-                            {payload && (
-                              <pre className="text-[9px] rounded-lg p-2 overflow-x-auto leading-relaxed"
-                                style={{ background: "#070d1a", border: "1px solid rgba(6,182,212,0.12)", color: "#67e8f9", maxHeight: "140px", overflowY: "auto" }}>
-                                {JSON.stringify(payload, null, 2)}
-                              </pre>
-                            )}
+                            <div className="grid grid-cols-3 gap-2 text-center">
+                              {[
+                                { label: 'Link Clicks', value: a.clicks,       color: '#60a5fa', icon: '🖱️' },
+                                { label: 'Add to Cart', value: a.add_to_carts, color: '#fb923c', icon: '🛒' },
+                                { label: 'Purchases',   value: a.purchases,    color: '#4ade80', icon: '✅' },
+                              ].map(s => (
+                                <div key={s.label} className="py-2 rounded-lg" style={{ background: 'rgba(255,255,255,0.03)' }}>
+                                  <div className="text-sm">{s.icon}</div>
+                                  <div className="text-sm font-bold mt-0.5" style={{ color: s.color }}>{s.value}</div>
+                                  <div className="text-[9px] uppercase tracking-wide mt-0.5" style={{ color: '#475569' }}>{s.label}</div>
+                                </div>
+                              ))}
+                            </div>
+                            <div className="flex items-center justify-between text-[10px] flex-wrap gap-1" style={{ color: '#64748b' }}>
+                              {a.open_rate > 0 && <span>Open: <span style={{ color: '#a78bfa' }}>{a.open_rate}%</span></span>}
+                              {a.cart_rate > 0 && <><span>·</span><span>Cart: <span style={{ color: '#fb923c' }}>{a.cart_rate}%</span></span></>}
+                              {a.buy_rate  > 0 && <><span>·</span><span>Buy: <span style={{ color: '#4ade80' }}>{a.buy_rate}%</span></span></>}
+                              <button onClick={() => loadAnalytics(c.id)} className="ml-auto" title="Refresh" style={{ color: '#334155' }}><Repeat size={10}/></button>
+                            </div>
+                            {a.clicks === 0 && <p className="text-[10px] text-center" style={{ color: '#334155' }}>Conversion data appears once users click your WhatsApp message links.</p>}
                           </div>
                         );
-                      })}
-                      {execs.length > 30 && <p className="text-center text-[9px] py-2" style={{ color: '#334155' }}>Showing 30 of {execs.length}</p>}
+                      })() : (
+                        <div className="p-3 text-[10px] text-center" style={{ color: '#475569' }}>No analytics yet.</div>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {/* Send History */}
+                <div>
+                  <button onClick={() => togglePayload(c.id)}
+                    className="w-full flex items-center justify-between px-3 py-2 rounded-xl text-[10px] font-semibold transition-all"
+                    style={{ background: payloadOpen[c.id] ? 'rgba(6,182,212,0.1)' : 'rgba(255,255,255,0.03)', border: `1px solid ${payloadOpen[c.id] ? 'rgba(6,182,212,0.3)' : 'rgba(255,255,255,0.05)'}`, color: payloadOpen[c.id] ? '#22d3ee' : '#64748b' }}>
+                    <span className="flex items-center gap-1.5"><GitBranch size={10}/> Send History</span>
+                    <span className="flex items-center gap-1.5">
+                      {payloadMap[c.id] && (
+                        <>
+                          <span className="text-[9px] px-1.5 py-0.5 rounded-full" style={{ background: 'rgba(74,222,128,0.12)', color: '#4ade80' }}>✓ {payloadMap[c.id].totalSent}</span>
+                          {payloadMap[c.id].totalFailed > 0 && <span className="text-[9px] px-1.5 py-0.5 rounded-full" style={{ background: 'rgba(248,113,113,0.12)', color: '#f87171' }}>✗ {payloadMap[c.id].totalFailed}</span>}
+                        </>
+                      )}
+                      <ChevronDown size={10} style={{ transform: payloadOpen[c.id] ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }}/>
+                    </span>
+                  </button>
+                  {payloadOpen[c.id] && (() => {
+                    const data = payloadMap[c.id];
+                    if (!data) return <div className="mt-2 text-[10px] text-center py-3" style={{ color: '#475569' }}>Loading…</div>;
+                    const execs = data.executions || [];
+                    if (!execs.length) return <div className="mt-2 text-[10px] text-center py-3 rounded-xl" style={{ color: '#475569', border: '1px solid rgba(255,255,255,0.05)' }}>No messages sent yet.</div>;
+                    return (
+                      <div className="mt-2 rounded-xl overflow-hidden" style={{ border: '1px solid rgba(6,182,212,0.15)' }}>
+                        <div className="px-3 py-2 flex items-center gap-3" style={{ background: 'rgba(6,182,212,0.05)', borderBottom: '1px solid rgba(6,182,212,0.08)' }}>
+                          <span className="text-[10px] font-bold" style={{ color: '#4ade80' }}>✓ {data.totalSent} sent</span>
+                          {data.totalFailed > 0 && <span className="text-[10px] font-bold" style={{ color: '#f87171' }}>✗ {data.totalFailed} failed</span>}
+                          <button onClick={() => loadPayload(c.id)} className="ml-auto text-[9px] flex items-center gap-1" style={{ color: '#475569' }}><Repeat size={9}/> Refresh</button>
+                        </div>
+                        <div style={{ maxHeight: 320, overflowY: 'auto' }}>
+                          {execs.slice(0, 30).map((ex, i) => {
+                            let payload = null;
+                            try { payload = JSON.parse(ex.payload_sent || 'null'); } catch (_) {}
+                            return (
+                              <div key={i} className="p-3 space-y-1.5" style={{ background: i % 2 === 0 ? 'rgba(6,182,212,0.02)' : 'transparent', borderTop: i > 0 ? '1px solid rgba(255,255,255,0.04)' : 'none' }}>
+                                <div className="flex items-center justify-between flex-wrap gap-1">
+                                  <div className="flex items-center gap-2 flex-wrap">
+                                    <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: ex.status === 'sent' ? '#4ade80' : '#f87171' }}/>
+                                    <span className="text-[10px] font-semibold" style={{ color: ex.status === 'sent' ? '#4ade80' : '#f87171' }}>{ex.status === 'sent' ? '✓ Sent' : '✗ Failed'}</span>
+                                    <span className="text-[10px] text-white font-medium">{ex.name || 'User'}</span>
+                                    <span className="text-[9px] font-mono" style={{ color: '#64748b' }}>{ex.phone}</span>
+                                    <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(255,255,255,0.04)', color: '#475569' }}>Stage {ex.stage || 1}</span>
+                                    {ex.clicked && <span className="text-[9px] px-1 py-0.5 rounded" style={{ background: 'rgba(167,139,250,0.1)', color: '#a78bfa' }}>🖱 clicked</span>}
+                                  </div>
+                                  <span className="text-[9px]" style={{ color: '#334155' }}>{new Date(ex.sent_at).toLocaleString()}</span>
+                                </div>
+                                {ex.campaign_name && ex.campaign_name !== c.name && <p className="text-[9px]" style={{ color: '#334155' }}>Campaign: {ex.campaign_name}</p>}
+                                {ex.template_name && <p className="text-[9px]" style={{ color: '#475569' }}>Template: <span style={{ color: '#94a3b8' }}>{ex.template_name}</span></p>}
+                                {ex.error && <p className="text-[9px] font-mono px-2 py-1 rounded" style={{ background: 'rgba(248,113,113,0.08)', color: '#fca5a5' }}>✗ {ex.error}</p>}
+                                {payload && (
+                                  <pre className="text-[9px] rounded-lg p-2 overflow-x-auto leading-relaxed"
+                                    style={{ background: '#070d1a', border: '1px solid rgba(6,182,212,0.12)', color: '#67e8f9', maxHeight: 140, overflowY: 'auto' }}>
+                                    {JSON.stringify(payload, null, 2)}
+                                  </pre>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                        {execs.length > 30 && <p className="text-center text-[9px] py-2" style={{ color: '#334155' }}>Showing 30 of {execs.length}</p>}
+                      </div>
+                    );
+                  })()}
+                </div>
+
+                {/* Who Will Receive */}
+                <div>
+                  <button onClick={() => toggleAudience(c.id)}
+                    className="w-full flex items-center justify-between px-3 py-2 rounded-xl text-[10px] font-semibold transition-all"
+                    style={{ background: audienceOpen[c.id] ? 'rgba(251,191,36,0.1)' : 'rgba(255,255,255,0.03)', border: `1px solid ${audienceOpen[c.id] ? 'rgba(251,191,36,0.3)' : 'rgba(255,255,255,0.05)'}`, color: audienceOpen[c.id] ? '#fbbf24' : '#64748b' }}>
+                    <span className="flex items-center gap-1.5">👥 Who Will Receive</span>
+                    <span className="flex items-center gap-1.5">
+                      {audienceMap[c.id] && <span className="px-1.5 py-0.5 rounded-full text-[9px] font-bold" style={{ background: 'rgba(251,191,36,0.15)', color: '#fbbf24' }}>{audienceMap[c.id].count}</span>}
+                      <ChevronDown size={10} style={{ transform: audienceOpen[c.id] ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }}/>
+                    </span>
+                  </button>
+                  {audienceOpen[c.id] && (() => {
+                    if (audienceLoading[c.id]) return <div className="mt-2 text-[10px] text-center py-3" style={{ color: '#475569' }}>Loading audience…</div>;
+                    const aud = audienceMap[c.id];
+                    if (!aud) return null;
+                    if (!aud.audience?.length) return <div className="mt-2 text-[10px] text-center py-3 rounded-xl" style={{ color: '#475569', border: '1px solid rgba(255,255,255,0.05)' }}>No eligible users right now.</div>;
+                    return (
+                      <div className="mt-2 rounded-xl overflow-hidden" style={{ border: '1px solid rgba(251,191,36,0.15)' }}>
+                        <div className="px-3 py-2 flex items-center justify-between" style={{ background: 'rgba(251,191,36,0.05)', borderBottom: '1px solid rgba(251,191,36,0.08)' }}>
+                          <span className="text-[10px] font-bold" style={{ color: '#fbbf24' }}>{aud.count} user{aud.count !== 1 ? 's' : ''} eligible</span>
+                          <button onClick={() => loadAudience(c.id)} className="text-[9px] flex items-center gap-1" style={{ color: '#64748b' }}><Repeat size={9}/> Refresh</button>
+                        </div>
+                        <div style={{ maxHeight: 240, overflowY: 'auto' }}>
+                          {aud.audience.slice(0, 20).map((u, i) => (
+                            <div key={i} className="flex items-start gap-2 px-3 py-2.5" style={{ background: i % 2 === 0 ? 'rgba(255,255,255,0.01)' : 'transparent', borderTop: i > 0 ? '1px solid rgba(255,255,255,0.04)' : 'none' }}>
+                              <div className="w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold flex-shrink-0 mt-0.5" style={{ background: 'rgba(251,191,36,0.1)', color: '#fbbf24' }}>
+                                {(u.name || u.phone || '?')[0].toUpperCase()}
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <span className="text-[10px] font-semibold text-white truncate">{u.name || 'Unknown'}</span>
+                                  <span className="text-[9px] font-mono" style={{ color: '#475569' }}>{u.phone}</span>
+                                  {u.ready_to_send === false && <span className="text-[9px] px-1.5 rounded" style={{ background: 'rgba(251,191,36,0.1)', color: '#fbbf24' }}>⏱ waiting</span>}
+                                  {u.ready_to_send === true && <span className="text-[9px] px-1.5 rounded" style={{ background: 'rgba(74,222,128,0.1)', color: '#4ade80' }}>ready</span>}
+                                </div>
+                                {u.product_name && <p className="text-[9px] truncate mt-0.5" style={{ color: '#64748b' }}>{u.product_name}{u.product_price ? ` · ₹${u.product_price}` : ''}</p>}
+                                {u.minutes_since_activity !== undefined && <p className="text-[9px]" style={{ color: '#334155' }}>{u.minutes_since_activity}m ago · stage {u.followup_count || 0} done</p>}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                        {aud.count > 20 && <p className="text-center text-[9px] py-2" style={{ color: '#334155' }}>+{aud.count - 20} more</p>}
+                      </div>
+                    );
+                  })()}
+                </div>
+
+                {/* Send Result Banner */}
+                {sendResultMap[c.id] && (() => {
+                  const sr = sendResultMap[c.id];
+                  const hasErrors = sr.errors?.length > 0;
+                  return (
+                    <div className="rounded-xl p-3 space-y-1.5" style={{ background: hasErrors ? 'rgba(248,113,113,0.06)' : 'rgba(74,222,128,0.06)', border: `1px solid ${hasErrors ? 'rgba(248,113,113,0.2)' : 'rgba(74,222,128,0.2)'}` }}>
+                      <div className="flex items-center gap-3 text-[11px] font-semibold">
+                        <span style={{ color: '#4ade80' }}>✓ {sr.sent} sent</span>
+                        {sr.skipped > 0 && <span style={{ color: '#94a3b8' }}>· {sr.skipped} skipped</span>}
+                        {hasErrors && <span style={{ color: '#f87171' }}>· {sr.errors.length} error{sr.errors.length > 1 ? 's' : ''}</span>}
+                        <button onClick={() => setSendResultMap(p => ({ ...p, [c.id]: null }))} className="ml-auto text-[9px]" style={{ color: '#475569' }}>✕</button>
+                      </div>
+                      {hasErrors && sr.errors.map((err, i) => (
+                        <p key={i} className="text-[9px] font-mono" style={{ color: '#fca5a5' }}>✗ {err}</p>
+                      ))}
                     </div>
                   );
                 })()}
+
+                {/* Test Send Panel */}
+                {testModal?.id === c.id && (
+                  <div className="rounded-xl p-3 space-y-2" style={{ background: 'rgba(167,139,250,0.07)', border: '1px solid rgba(167,139,250,0.2)' }}>
+                    <p className="text-[10px] font-semibold" style={{ color: '#a78bfa' }}>Test Send</p>
+                    <div className="flex gap-2">
+                      <input
+                        type="tel"
+                        placeholder="91XXXXXXXXXX"
+                        value={testPhone}
+                        onChange={e => { setTestPhone(e.target.value); setTestResult(null); }}
+                        onKeyDown={e => e.key === 'Enter' && handleSendTest()}
+                        className="flex-1 text-[11px] px-2.5 py-1.5 rounded-lg outline-none"
+                        style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(167,139,250,0.25)', color: '#e2e8f0' }}
+                      />
+                      <button onClick={handleSendTest} disabled={testSending || !testPhone.trim()}
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-semibold transition-all"
+                        style={{ background: 'rgba(167,139,250,0.2)', border: '1px solid rgba(167,139,250,0.3)', color: '#a78bfa', opacity: (!testPhone.trim() || testSending) ? 0.5 : 1 }}>
+                        {testSending ? <Repeat size={11} className="animate-spin"/> : <Send size={11}/>}
+                        {testSending ? 'Sending…' : 'Send'}
+                      </button>
+                    </div>
+                    {testResult && (
+                      <div className="text-[10px] px-2.5 py-1.5 rounded-lg"
+                        style={{ background: testResult.success ? 'rgba(74,222,128,0.08)' : 'rgba(248,113,113,0.08)', border: `1px solid ${testResult.success ? 'rgba(74,222,128,0.2)' : 'rgba(248,113,113,0.2)'}`, color: testResult.success ? '#4ade80' : '#f87171' }}>
+                        {testResult.success ? `✓ Sent! wamid: ${testResult.wamid}` : `✗ ${testResult.error || 'Failed'}`}
+                      </div>
+                    )}
+                    <p className="text-[9px]" style={{ color: '#334155' }}>Full payload logged in browser console (F12)</p>
+                  </div>
+                )}
               </div>
 
-              <div className="pt-4 border-t border-white/5 space-y-4">
-                 {(c.campaign_type === 'abandoned_cart' || c.campaign_type === 'abandoned_checkout' || c.campaign_type === 'product_view') && (
-                    <div className="flex gap-1 justify-between">
-                       {[1,2,3,4].map(stg => (
-                          <div key={stg} className={`w-1/4 h-1 rounded-full ${c.total_sent >= stg ? 'bg-green-500' : 'bg-white/10'}`} title={`Follow-up Stage ${stg}`}></div>
-                       ))}
-                    </div>
-                 )}
-                 <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                       <div className="w-8 h-1 bg-white/5 rounded-full overflow-hidden">
-                          <div className="h-full bg-green-500" style={{width: `${rate}%`}}></div>
-                       </div>
-                       <span className="text-[10px] text-green-400 font-bold">{rate}% rate</span>
-                    </div>
-                    <div className="flex items-center gap-1.5">
-                       {/* Flow Diagram button */}
-                       <button
-                         title="View campaign flow diagram"
-                         onClick={() => setFlowModal(flowModal?.id === c.id ? null : c)}
-                         className="p-2 rounded-lg border transition-all text-xs"
-                         style={{ background: flowModal?.id === c.id ? 'rgba(6,182,212,0.15)' : 'rgba(255,255,255,0.05)', borderColor: flowModal?.id === c.id ? 'rgba(6,182,212,0.4)' : 'rgba(255,255,255,0.08)', color: flowModal?.id === c.id ? '#22d3ee' : '#64748b' }}>
-                         <GitBranch size={13}/>
-                       </button>
-                       {/* Test Send button */}
-                       <button
-                         title="Send test message to a specific number"
-                         onClick={() => {
-                           if (testModal?.id === c.id) { setTestModal(null); setTestResult(null); }
-                           else { setTestModal({ id: c.id, name: c.name }); setTestPhone(''); setTestResult(null); }
-                         }}
-                         className="p-2 rounded-lg border transition-all text-xs"
-                         style={{ background: testModal?.id === c.id ? 'rgba(167,139,250,0.15)' : 'rgba(255,255,255,0.05)', borderColor: testModal?.id === c.id ? 'rgba(167,139,250,0.4)' : 'rgba(255,255,255,0.08)', color: testModal?.id === c.id ? '#a78bfa' : '#64748b' }}>
-                         <Send size={13}/>
-                       </button>
-                       {/* Broadcast send button */}
-                       <button onClick={async() => {
-                          setSendResultMap(p => ({ ...p, [c.id]: null }));
-                          try {
-                            const result = await campaignsApi.send(c.id);
-                            setSendResultMap(p => ({ ...p, [c.id]: { sent: result?.sent ?? 0, skipped: result?.skipped ?? 0, errors: result?.errors || [] } }));
-                            console.group(`%c[Campaign Send] "${c.name}" — sent:${result?.sent ?? 0} skipped:${result?.skipped ?? 0}`, 'color:#22c55e;font-weight:bold');
-                            if (result?.payloads?.length) result.payloads.forEach((p, i) => { console.log(`%cMessage ${i+1} → ${p.phone}`, 'color:#60a5fa'); console.log('%cPayload:', 'color:#f59e0b', JSON.stringify(p.payload, null, 2)); });
-                            if (result?.errors?.length) console.error('[Campaign Errors]', result.errors);
-                            console.groupEnd();
-                            loadPayload(c.id);
-                          } catch (e) {
-                            setSendResultMap(p => ({ ...p, [c.id]: { sent: 0, skipped: 0, errors: [e.message] } }));
-                          }
-                          load();
-                       }} title="Send to all matched contacts" className="p-2 bg-white/5 rounded-lg hover:text-green-400 border border-white/5 transition-all"><Play size={14}/></button>
-                    </div>
-                 </div>
+              {/* ── Card Footer Actions ── */}
+              <div className="px-5 py-3 flex items-center gap-2" style={{ borderTop: '1px solid rgba(255,255,255,0.05)', background: 'rgba(0,0,0,0.15)' }}>
+                {/* Conversion rate pill */}
+                <div className="flex-1 flex items-center gap-1.5">
+                  <div className="flex-1 h-1 rounded-full overflow-hidden" style={{ background: 'rgba(255,255,255,0.05)' }}>
+                    <div className="h-full rounded-full" style={{ width: `${Math.min(parseFloat(convRate), 100)}%`, background: 'linear-gradient(90deg,#4ade80,#22d3ee)' }}/>
+                  </div>
+                  <span className="text-[10px] font-bold" style={{ color: '#4ade80' }}>{convRate}%</span>
+                </div>
 
-                 {/* ── Test Send Panel ── */}
-                 {testModal?.id === c.id && (
-                   <div className="mt-3 rounded-xl p-3 space-y-2" style={{ background: 'rgba(167,139,250,0.07)', border: '1px solid rgba(167,139,250,0.2)' }}>
-                     <p className="text-[10px] font-semibold" style={{ color: '#a78bfa' }}>Send Test Message</p>
-                     <div className="flex gap-2">
-                       <input
-                         type="tel"
-                         placeholder="91XXXXXXXXXX"
-                         value={testPhone}
-                         onChange={e => { setTestPhone(e.target.value); setTestResult(null); }}
-                         onKeyDown={e => e.key === 'Enter' && handleSendTest()}
-                         className="flex-1 text-[11px] px-2.5 py-1.5 rounded-lg outline-none"
-                         style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(167,139,250,0.25)', color: '#e2e8f0' }}
-                       />
-                       <button
-                         onClick={handleSendTest}
-                         disabled={testSending || !testPhone.trim()}
-                         className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-semibold transition-all"
-                         style={{ background: testSending ? 'rgba(167,139,250,0.1)' : 'rgba(167,139,250,0.2)', border: '1px solid rgba(167,139,250,0.3)', color: '#a78bfa', opacity: (!testPhone.trim() || testSending) ? 0.5 : 1 }}>
-                         {testSending ? <Repeat size={11} className="animate-spin"/> : <Send size={11}/>}
-                         {testSending ? 'Sending…' : 'Send'}
-                       </button>
-                     </div>
-                     {testResult && (
-                       <div className="text-[10px] px-2.5 py-1.5 rounded-lg" style={{ background: testResult.success ? 'rgba(74,222,128,0.08)' : 'rgba(248,113,113,0.08)', border: `1px solid ${testResult.success ? 'rgba(74,222,128,0.2)' : 'rgba(248,113,113,0.2)'}`, color: testResult.success ? '#4ade80' : '#f87171' }}>
-                         {testResult.success ? `✓ Sent! wamid: ${testResult.wamid}` : `✗ ${testResult.error || 'Failed'}`}
-                       </div>
-                     )}
-                     <p className="text-[9px]" style={{ color: '#475569' }}>Full payload logged in browser console (F12)</p>
-                   </div>
-                 )}
+                {/* Flow diagram */}
+                <button title="View flow diagram" onClick={() => setFlowModal(flowModal?.id === c.id ? null : c)}
+                  className="p-2 rounded-lg border transition-all"
+                  style={{ background: flowModal?.id === c.id ? 'rgba(6,182,212,0.15)' : 'rgba(255,255,255,0.04)', borderColor: flowModal?.id === c.id ? 'rgba(6,182,212,0.4)' : 'rgba(255,255,255,0.07)', color: flowModal?.id === c.id ? '#22d3ee' : '#64748b' }}>
+                  <GitBranch size={13}/>
+                </button>
 
-                 {/* ── Send Result Banner ── */}
-                 {sendResultMap[c.id] && (() => {
-                   const sr = sendResultMap[c.id];
-                   const hasErrors = sr.errors?.length > 0;
-                   return (
-                     <div className="mt-2 rounded-xl p-3 space-y-1.5" style={{ background: hasErrors ? 'rgba(248,113,113,0.06)' : 'rgba(74,222,128,0.06)', border: `1px solid ${hasErrors ? 'rgba(248,113,113,0.2)' : 'rgba(74,222,128,0.2)'}` }}>
-                       <div className="flex items-center gap-3 text-[11px] font-semibold">
-                         <span style={{ color: '#4ade80' }}>✓ {sr.sent} sent</span>
-                         {sr.skipped > 0 && <span style={{ color: '#94a3b8' }}>· {sr.skipped} skipped</span>}
-                         {hasErrors && <span style={{ color: '#f87171' }}>· {sr.errors.length} error{sr.errors.length > 1 ? 's' : ''}</span>}
-                         <button onClick={() => setSendResultMap(p => ({ ...p, [c.id]: null }))} className="ml-auto text-[9px]" style={{ color: '#475569' }}>✕</button>
-                       </div>
-                       {hasErrors && (
-                         <div className="space-y-0.5">
-                           {sr.errors.map((err, i) => (
-                             <p key={i} className="text-[9px] font-mono" style={{ color: '#fca5a5' }}>✗ {err}</p>
-                           ))}
-                         </div>
-                       )}
-                     </div>
-                   );
-                 })()}
+                {/* Test Send toggle */}
+                <button title="Test send" onClick={() => { if (testModal?.id === c.id) { setTestModal(null); setTestResult(null); } else { setTestModal({ id: c.id, name: c.name }); setTestPhone(''); setTestResult(null); } }}
+                  className="p-2 rounded-lg border transition-all"
+                  style={{ background: testModal?.id === c.id ? 'rgba(167,139,250,0.15)' : 'rgba(255,255,255,0.04)', borderColor: testModal?.id === c.id ? 'rgba(167,139,250,0.4)' : 'rgba(255,255,255,0.07)', color: testModal?.id === c.id ? '#a78bfa' : '#64748b' }}>
+                  <Send size={13}/>
+                </button>
 
-                 {/* ── Audience Preview Panel ── */}
-                 <div className="mt-2">
-                   <button onClick={() => toggleAudience(c.id)}
-                     className="w-full flex items-center justify-between px-3 py-2 rounded-xl text-[10px] font-semibold transition-all"
-                     style={{ background: audienceOpen[c.id] ? 'rgba(251,191,36,0.1)' : 'rgba(255,255,255,0.03)', border: `1px solid ${audienceOpen[c.id] ? 'rgba(251,191,36,0.3)' : 'rgba(255,255,255,0.06)'}`, color: audienceOpen[c.id] ? '#fbbf24' : '#64748b' }}>
-                     <span className="flex items-center gap-1.5">👥 Who Will Receive This</span>
-                     <span className="flex items-center gap-1.5">
-                       {audienceMap[c.id] && <span className="px-1.5 py-0.5 rounded-full text-[9px] font-bold" style={{ background: 'rgba(251,191,36,0.15)', color: '#fbbf24' }}>{audienceMap[c.id].count}</span>}
-                       <ChevronDown size={11} style={{ transform: audienceOpen[c.id] ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }}/>
-                     </span>
-                   </button>
-                   {audienceOpen[c.id] && (() => {
-                     if (audienceLoading[c.id]) return <div className="mt-2 text-[10px] text-center py-3" style={{ color: '#475569' }}>Loading audience…</div>;
-                     const aud = audienceMap[c.id];
-                     if (!aud) return null;
-                     if (!aud.audience?.length) return <div className="mt-2 text-[10px] text-center py-3 rounded-xl" style={{ color: '#475569', border: '1px solid rgba(255,255,255,0.05)' }}>No eligible users right now.</div>;
-                     return (
-                       <div className="mt-2 rounded-xl overflow-hidden" style={{ border: '1px solid rgba(251,191,36,0.15)' }}>
-                         <div className="px-3 py-2 flex items-center justify-between" style={{ background: 'rgba(251,191,36,0.05)', borderBottom: '1px solid rgba(251,191,36,0.1)' }}>
-                           <span className="text-[10px] font-bold" style={{ color: '#fbbf24' }}>{aud.count} user{aud.count !== 1 ? 's' : ''} eligible</span>
-                           <button onClick={() => loadAudience(c.id)} className="text-[9px] flex items-center gap-1" style={{ color: '#64748b' }}><Repeat size={9}/> Refresh</button>
-                         </div>
-                         <div className="divide-y" style={{ divideColor: 'rgba(255,255,255,0.04)' }}>
-                           {aud.audience.slice(0, 20).map((u, i) => (
-                             <div key={i} className="flex items-start gap-2 px-3 py-2" style={{ background: i % 2 === 0 ? 'rgba(255,255,255,0.01)' : 'transparent' }}>
-                               <div className="w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold flex-shrink-0" style={{ background: 'rgba(251,191,36,0.1)', color: '#fbbf24' }}>
-                                 {(u.name || u.phone || '?')[0].toUpperCase()}
-                               </div>
-                               <div className="flex-1 min-w-0">
-                                 <div className="flex items-center gap-2">
-                                   <span className="text-[10px] font-semibold text-white truncate">{u.name || 'Unknown'}</span>
-                                   <span className="text-[9px] font-mono" style={{ color: '#475569' }}>{u.phone}</span>
-                                   {u.ready_to_send === false && <span className="text-[9px] px-1.5 rounded" style={{ background: 'rgba(251,191,36,0.1)', color: '#fbbf24' }}>⏱ waiting</span>}
-                                   {u.ready_to_send === true && <span className="text-[9px] px-1.5 rounded" style={{ background: 'rgba(74,222,128,0.1)', color: '#4ade80' }}>ready</span>}
-                                 </div>
-                                 {u.product_name && <p className="text-[9px] truncate" style={{ color: '#64748b' }}>{u.product_name}{u.product_price ? ` · ${u.product_price}` : ''}</p>}
-                                 {u.minutes_since_activity !== undefined && <p className="text-[9px]" style={{ color: '#334155' }}>{u.minutes_since_activity}m since activity · stage {u.followup_count || 0} done</p>}
-                               </div>
-                             </div>
-                           ))}
-                           {aud.count > 20 && <p className="text-center text-[9px] py-2" style={{ color: '#334155' }}>+{aud.count - 20} more users</p>}
-                         </div>
-                       </div>
-                     );
-                   })()}
-                 </div>
+                {/* Broadcast now */}
+                <button title="Send to all matched contacts now"
+                  onClick={async () => {
+                    setSendResultMap(p => ({ ...p, [c.id]: null }));
+                    try {
+                      const result = await campaignsApi.send(c.id);
+                      setSendResultMap(p => ({ ...p, [c.id]: { sent: result?.sent ?? 0, skipped: result?.skipped ?? 0, errors: result?.errors || [] } }));
+                      console.group(`%c[Campaign Send] "${c.name}" — sent:${result?.sent ?? 0} skipped:${result?.skipped ?? 0}`, 'color:#22c55e;font-weight:bold');
+                      if (result?.payloads?.length) result.payloads.forEach((p, i) => { console.log(`%cMessage ${i+1} → ${p.phone}`, 'color:#60a5fa'); console.log('%cPayload:', 'color:#f59e0b', JSON.stringify(p.payload, null, 2)); });
+                      if (result?.errors?.length) console.error('[Errors]', result.errors);
+                      console.groupEnd();
+                      loadPayload(c.id);
+                    } catch (e) {
+                      setSendResultMap(p => ({ ...p, [c.id]: { sent: 0, skipped: 0, errors: [e.message] } }));
+                    }
+                    load();
+                  }}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[10px] font-semibold border transition-all"
+                  style={{ background: 'rgba(34,197,94,0.1)', borderColor: 'rgba(34,197,94,0.3)', color: '#4ade80' }}>
+                  <Play size={11}/> Send Now
+                </button>
               </div>
             </div>
           );
