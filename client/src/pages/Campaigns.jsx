@@ -5,7 +5,7 @@ import {
   Zap, Clock, CheckCircle, Globe, MessageSquare, ShoppingCart,
   Eye, TrendingDown, Package, Users, Settings, ToggleLeft, Gift, Layout,
   Filter, Sliders, UserCheck, Search, Target, ChevronRight, AlertCircle,
-  Flame, Smartphone, Monitor, Repeat, Send, GitBranch,
+  Flame, Smartphone, Monitor, Repeat, Send, GitBranch, Image,
 } from "lucide-react";
 import { campaignsApi, templatesApi, analyticsApi } from "../api";
 
@@ -697,33 +697,71 @@ function CreateModal({ onClose, onCreated }) {
                       </div>
                    )}
 
-                   {/* Meta carousel template preview */}
+                   {/* Meta template preview */}
                    {metaTemplateId && metaPayloadPreview ? (
                      <div className="space-y-2">
-                       <div className="p-2 bg-orange-500/5 border border-orange-500/20 rounded-xl text-[10px] text-orange-400 font-mono">
+                       <div className="p-2 rounded-xl text-[10px] font-mono"
+                         style={{ background: metaPayloadPreview.is_single_product ? 'rgba(6,182,212,0.05)' : 'rgba(251,146,60,0.05)', border: `1px solid ${metaPayloadPreview.is_single_product ? 'rgba(6,182,212,0.2)' : 'rgba(251,146,60,0.2)'}`, color: metaPayloadPreview.is_single_product ? '#22d3ee' : '#fb923c' }}>
                          POST {metaPayloadPreview.api_url || 'https://graph.facebook.com/v25.0/.../messages'}
                        </div>
-                       <div className="flex items-center gap-2 text-[10px] text-slate-500">
-                         <span>Lang code: <span className="text-white font-mono">{metaPayloadPreview.payload?.template?.language?.code}</span></span>
-                         {metaPayloadPreview.last_refresh && (
-                           <span>· Refreshed: {new Date(metaPayloadPreview.last_refresh).toLocaleTimeString()}</span>
-                         )}
+                       <div className="flex items-center gap-2 text-[10px] text-slate-500 flex-wrap">
+                         <span>Lang: <span className="text-white font-mono">{metaPayloadPreview.payload?.template?.language?.code}</span></span>
+                         {metaPayloadPreview.is_single_product && <span className="text-cyan-500 font-bold">· Single Product</span>}
+                         {metaPayloadPreview.last_refresh && <span>· Refreshed: {new Date(metaPayloadPreview.last_refresh).toLocaleTimeString()}</span>}
                        </div>
-                       <div className="space-y-1 max-h-52 overflow-y-auto">
-                         {(metaPayloadPreview.products || []).filter(p => p.title).map((p, i) => (
-                           <div key={i} className="flex items-center gap-2 bg-white/[0.03] border border-white/5 rounded-lg px-2 py-1.5">
-                             {p.image && <img src={p.image} alt="" className="w-8 h-8 object-cover rounded shrink-0" onError={e=>e.target.style.display='none'}/>}
-                             <div className="flex-1 min-w-0">
-                               <p className="text-white text-[11px] font-medium truncate">Card {i+1}: {p.title}</p>
-                               {p.price && <p className="text-green-400 text-[10px]">{p.price}</p>}
+
+                       {/* ── Single product template info ── */}
+                       {metaPayloadPreview.is_single_product && metaPayloadPreview.single_product_info && (() => {
+                         const sp = metaPayloadPreview.single_product_info;
+                         return (
+                           <div className="space-y-2">
+                             <div className="px-3 py-2 rounded-xl text-[11px]" style={{ background: 'rgba(6,182,212,0.06)', border: '1px solid rgba(6,182,212,0.15)' }}>
+                               <p className="text-[10px] font-bold text-cyan-400 mb-1.5 uppercase tracking-widest">Template Structure</p>
+                               {sp.header_type === 'IMAGE' && (
+                                 <div className="flex items-center gap-1.5 text-slate-400 text-[10px] mb-1">
+                                   <Image size={10} className="text-cyan-400"/> <span>Header image → auto-uploaded per user's product</span>
+                                 </div>
+                               )}
+                               <div className="text-slate-300 text-[10px] mb-1 font-mono whitespace-pre-wrap">{sp.body}</div>
+                               {sp.footer && <div className="text-slate-600 text-[10px] italic">{sp.footer}</div>}
+                               <div className="flex flex-wrap gap-1 mt-2">
+                                 {sp.buttons.map((b, i) => (
+                                   <span key={i} className="text-[9px] px-2 py-0.5 rounded-full font-bold"
+                                     style={{ background: b.type === 'COPY_CODE' ? 'rgba(168,85,247,0.15)' : 'rgba(59,130,246,0.15)', color: b.type === 'COPY_CODE' ? '#c084fc' : '#60a5fa', border: `1px solid ${b.type === 'COPY_CODE' ? 'rgba(168,85,247,0.3)' : 'rgba(59,130,246,0.3)'}` }}>
+                                     {b.type === 'COPY_CODE' ? `🎟 ${b.coupon_code || 'Coupon'}` : `🔗 ${b.text}`}
+                                   </span>
+                                 ))}
+                               </div>
+                             </div>
+                             <div className="flex items-start gap-2 px-3 py-2 rounded-xl text-[10px]" style={{ background: 'rgba(6,182,212,0.04)', border: '1px solid rgba(6,182,212,0.1)' }}>
+                               <Zap size={10} className="text-cyan-400 mt-0.5 shrink-0"/>
+                               <p className="text-slate-400">{sp.note}</p>
                              </div>
                            </div>
-                         ))}
-                         {!(metaPayloadPreview.products || []).some(p => p.title) && (
-                           <p className="text-slate-500 text-[10px] py-2 text-center">Products auto-fill every 6h from trending data.</p>
-                         )}
-                       </div>
-                       <div className="bg-black/20 rounded-xl p-2 max-h-40 overflow-y-auto">
+                         );
+                       })()}
+
+                       {/* ── Carousel product cards ── */}
+                       {!metaPayloadPreview.is_single_product && (
+                         <div className="space-y-1 max-h-40 overflow-y-auto">
+                           {(metaPayloadPreview.products || []).filter(p => p.title).map((p, i) => (
+                             <div key={i} className="flex items-center gap-2 bg-white/[0.03] border border-white/5 rounded-lg px-2 py-1.5">
+                               {p.image && <img src={p.image} alt="" className="w-8 h-8 object-cover rounded shrink-0" onError={e=>e.target.style.display='none'}/>}
+                               <div className="flex-1 min-w-0">
+                                 <p className="text-white text-[11px] font-medium truncate">Card {i+1}: {p.title}</p>
+                                 {p.price && <p className="text-green-400 text-[10px]">{p.price}</p>}
+                               </div>
+                             </div>
+                           ))}
+                           {!(metaPayloadPreview.products || []).some(p => p.title) && (
+                             <p className="text-slate-500 text-[10px] py-2 text-center">Products auto-fill every 6h from trending data.</p>
+                           )}
+                         </div>
+                       )}
+
+                       {/* Payload JSON */}
+                       <div className="bg-black/20 rounded-xl p-2 max-h-48 overflow-y-auto">
+                         <p className="text-[9px] text-slate-600 font-bold uppercase tracking-widest mb-1">Message Payload (sample)</p>
                          <pre className="text-[10px] font-mono text-slate-400 whitespace-pre-wrap">{JSON.stringify(metaPayloadPreview.payload, null, 2)}</pre>
                        </div>
                      </div>

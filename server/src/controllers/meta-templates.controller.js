@@ -1205,8 +1205,31 @@ export async function getSendPayload(req, res) {
     const tpl = (db.meta_templates || []).find(t => t.id === id && t.channel_id === channelId);
     if (!tpl) return res.status(404).json({ error: 'Template not found' });
 
-    const langOverride = req.query.lang || null;  // e.g. ?lang=hi or ?lang=en_US
-    const payload = buildSendMessagePayload(tpl, tpl.product_config, req.query.to || '{{RECIPIENT_PHONE}}', langOverride);
+    const langOverride = req.query.lang || null;
+
+    // For single-product (non-carousel) templates, product data comes per-user at send time.
+    // Build a sample config from example_values so the preview payload is meaningful.
+    let previewConfig = tpl.product_config;
+    if (!tpl.is_carousel && (!previewConfig?.cards?.length)) {
+      const ex = Array.isArray(tpl.example_values) ? {} : (tpl.example_values || {});
+      const buttons = Array.isArray(tpl.buttons) ? tpl.buttons
+        : (typeof tpl.buttons === 'string' ? (() => { try { return JSON.parse(tpl.buttons); } catch { return []; } })() : []);
+      const copyBtn = buttons.find(b => String(b.type || '').toUpperCase() === 'COPY_CODE');
+      const sampleLink = 'https://yourstore.com/products/sample-product';
+      previewConfig = {
+        cards: [{
+          '1':      ex['1']     || 'Product Name - Customer',
+          '2':      ex['2']     || 'Price: Rs.999',
+          link:     sampleLink,
+          url:      sampleLink,
+          media_id: tpl.header_image_id || '',
+          image:    tpl.header_image_url || '',
+          coupon:   copyBtn?.coupon_code || '',
+        }],
+      };
+    }
+
+    const payload = buildSendMessagePayload(tpl, previewConfig, req.query.to || '{{RECIPIENT_PHONE}}', langOverride);
     const creds = getCreds(channelId);
 
     const sendApiUrl = creds
@@ -1221,12 +1244,17 @@ export async function getSendPayload(req, res) {
     console.log('\n[MetaTemplates] SEND PAYLOAD:\n', JSON.stringify(payload, null, 2));
     console.log('[MetaTemplates] SEND CURL:\n', curlCommand);
 
+    // Parse buttons for single-product metadata
+    const tplButtons = Array.isArray(tpl.buttons) ? tpl.buttons
+      : (typeof tpl.buttons === 'string' ? (() => { try { return JSON.parse(tpl.buttons); } catch { return []; } })() : []);
+
     res.json({
       payload,
       api_url: sendApiUrl,
       method: 'POST',
       auth_header: authDisplay,
       curl_command: curlCommand,
+      is_single_product: !tpl.is_carousel,
       last_refresh:  tpl.product_config?.last_auto_refresh || null,
       next_refresh:  tpl.product_config?.next_auto_refresh
         || (tpl.product_config?.last_auto_refresh
@@ -1239,15 +1267,29 @@ export async function getSendPayload(req, res) {
         price:    c.price          || '',
         link:     c.link           || '',
         image:    c._hot_image_url || '',
-        media_id: c.media_id       || '',   // numeric ID for /messages
+        media_id: c.media_id       || '',
         score:    c._hot_score     || 0,
         carts:    c._hot_carts     || 0,
         views:    c._hot_views     || 0,
       })),
+      // Single-product template metadata for campaign preview UI
+      single_product_info: !tpl.is_carousel ? {
+        body:        tpl.body || '',
+        footer:      tpl.footer || '',
+        header_type: tpl.header_type || '',
+        buttons:     tplButtons.map(b => ({
+          type:        b.type,
+          text:        b.text,
+          url:         b.url || null,
+          coupon_code: b.coupon_code || null,
+        })),
+        var_count:   [...(tpl.body || '').matchAll(/\{\{(\d+)\}\}/g)].length,
+        note:        'Header image, body variables & button URL auto-filled per user from their product view at send time.',
+      } : null,
       template_structure: {
         body:        tpl.body || '',
         card_count:  tpl.carousel_cards?.length || 0,
-        note:        'Template structure (body text, variables, buttons) is fixed at creation. Only product data in messages refreshes every 24h.',
+        note:        'Template structure fixed at creation. Product data refreshes every 24h.',
       },
     });
   } catch (err) {
