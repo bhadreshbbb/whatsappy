@@ -299,6 +299,10 @@ function buildMetaComponents(tpl, { preserveVarNumbers = false } = {}) {
       }
       if (bType === 'QUICK_REPLY')  return { type: 'QUICK_REPLY',  text: sanitizeButtonText(b.text) };
       if (bType === 'PHONE_NUMBER') return { type: 'PHONE_NUMBER', text: sanitizeButtonText(b.text), phone_number: b.phone_number };
+      if (bType === 'COPY_CODE') {
+        const coupon = String(b.coupon_code || b.example || '').trim().toUpperCase() || 'DISCOUNT10';
+        return { type: 'COPY_CODE', example: coupon };
+      }
       return b;
     });
     components.push({ type: 'BUTTONS', buttons });
@@ -1050,7 +1054,8 @@ export function buildSendMessagePayload(tpl, productConfig, recipientPhone = '{{
       ? tpl.buttons
       : (typeof tpl.buttons === 'string' ? (() => { try { return JSON.parse(tpl.buttons); } catch (_) { return []; } })() : []);
     buttons.forEach((btn, bi) => {
-      if (String(btn.type || '').toUpperCase() === 'URL' && btn.url?.includes('{{')) {
+      const bType = String(btn.type || '').toUpperCase();
+      if (bType === 'URL' && btn.url?.includes('{{')) {
         const urlVars = [...btn.url.matchAll(/\{\{(\d+)\}\}/g)].map(m => m[1]);
         const varStart = btn.url.indexOf('{{');
         const staticPrefix = varStart > 0 ? btn.url.substring(0, varStart) : '';
@@ -1066,6 +1071,12 @@ export function buildSendMessagePayload(tpl, productConfig, recipientPhone = '{{
         }
         if (paramVal) {
           components.push({ type: 'button', sub_type: 'url', index: String(bi), parameters: [{ type: 'text', text: paramVal }] });
+        }
+      }
+      if (bType === 'COPY_CODE') {
+        const coupon = String(btn.coupon_code || btn.example || '').trim();
+        if (coupon) {
+          components.push({ type: 'button', sub_type: 'copy_code', index: String(bi), parameters: [{ type: 'coupon_code', coupon_code: coupon }] });
         }
       }
     });

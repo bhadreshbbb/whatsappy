@@ -87,8 +87,7 @@ const BLANK_SINGLE_TPL = {
   body: 'Hi! {{1}}\n\n{{2}} - Don\'t miss out.',
   footer: 'Reply STOP to unsubscribe',
   buttons: [
-    { type: 'URL',         text: 'View Product', url: 'https://yourstore.com/products/{{1}}' },
-    { type: 'QUICK_REPLY', text: 'Not Interested' },
+    { type: 'URL', text: 'View Product', url: 'https://yourstore.com/products/{{1}}' },
   ],
   variable_labels: {},
   example_values:  { '1': 'You recently viewed Blue Cotton Kurti', '2': 'Price: Rs.799 - Limited stock', btn_1: 'blue-cotton-kurti' },
@@ -1018,33 +1017,57 @@ function CreateView({ form, setForm, error, setError, loading, onSubmit, onBack,
                   {(form.buttons||[]).length < 3 && (<>
                     <button onClick={async () => { const shopUrl = await getShopUrl(); const base = shopUrl || 'https://yourstore.com'; f('buttons', [...(form.buttons||[]), { type:'URL', text:'View Product', url:`${base}/products/` }]); }}
                       className="var-btn flex items-center gap-1"><Link size={10}/> URL</button>
-                    <button onClick={() => f('buttons', [...(form.buttons||[]), { type:'QUICK_REPLY', text:'Not Interested' }])}
-                      className="var-btn flex items-center gap-1"><MessageSquare size={10}/> Quick Reply</button>
+                    {/* COPY_CODE only for single-product; QUICK_REPLY only for carousel */}
+                    {!form.is_carousel && !(form.buttons||[]).some(b => b.type === 'COPY_CODE') && (
+                      <button onClick={() => f('buttons', [...(form.buttons||[]), { type:'COPY_CODE', text:'Copy Coupon', coupon_code:'' }])}
+                        className="var-btn flex items-center gap-1"><Copy size={10}/> Copy Code</button>
+                    )}
+                    {form.is_carousel && (
+                      <button onClick={() => f('buttons', [...(form.buttons||[]), { type:'QUICK_REPLY', text:'Not Interested' }])}
+                        className="var-btn flex items-center gap-1"><MessageSquare size={10}/> Quick Reply</button>
+                    )}
                     <button onClick={() => f('buttons', [...(form.buttons||[]), { type:'PHONE_NUMBER', text:'Call Us', phone_number:'+91XXXXXXXXXX' }])}
                       className="var-btn flex items-center gap-1"><Phone size={10}/> Phone</button>
                   </>)}
                 </div>
               </div>
-              {(form.buttons||[]).map((btn, bi) => (
-                <div key={bi} className="flex items-center gap-2 px-3 py-2 rounded-xl" style={{ background:'rgba(255,255,255,0.03)', border:'1px solid rgba(255,255,255,0.08)' }}>
-                  <span className="text-[10px] px-1.5 py-0.5 rounded font-bold shrink-0"
-                    style={{ background: btn.type==='URL'?'rgba(59,130,246,0.15)':btn.type==='QUICK_REPLY'?'rgba(34,197,94,0.12)':'rgba(251,146,60,0.12)',
-                             color: btn.type==='URL'?'#60a5fa':btn.type==='QUICK_REPLY'?'#4ade80':'#fb923c' }}>
-                    {btn.type}
-                  </span>
-                  <input value={btn.text} onChange={e => { const bs=[...form.buttons]; bs[bi]={...bs[bi],text:e.target.value}; f('buttons',bs); }}
-                    placeholder="Button label" className="input text-xs flex-1" />
-                  {btn.type === 'URL' && (
-                    <input value={btn.url||''} onChange={e => { const bs=[...form.buttons]; bs[bi]={...bs[bi],url:e.target.value}; f('buttons',bs); }}
-                      placeholder="https://yourstore.com/..." className="input text-xs flex-1 font-mono" />
-                  )}
-                  {btn.type === 'PHONE_NUMBER' && (
-                    <input value={btn.phone_number||''} onChange={e => { const bs=[...form.buttons]; bs[bi]={...bs[bi],phone_number:e.target.value}; f('buttons',bs); }}
-                      placeholder="+91XXXXXXXXXX" className="input text-xs w-36 font-mono" />
-                  )}
-                  <button onClick={() => f('buttons', form.buttons.filter((_,i)=>i!==bi))} className="p-1 hover:text-red-400 text-slate-500 transition-all shrink-0"><X size={13}/></button>
-                </div>
-              ))}
+              {(form.buttons||[]).map((btn, bi) => {
+                const tagBg = btn.type==='URL'?'rgba(59,130,246,0.15)':btn.type==='COPY_CODE'?'rgba(168,85,247,0.15)':btn.type==='QUICK_REPLY'?'rgba(34,197,94,0.12)':'rgba(251,146,60,0.12)';
+                const tagColor = btn.type==='URL'?'#60a5fa':btn.type==='COPY_CODE'?'#c084fc':btn.type==='QUICK_REPLY'?'#4ade80':'#fb923c';
+                return (
+                  <div key={bi}>
+                    <div className="flex items-center gap-2 px-3 py-2 rounded-xl" style={{ background:'rgba(255,255,255,0.03)', border:'1px solid rgba(255,255,255,0.08)' }}>
+                      <span className="text-[10px] px-1.5 py-0.5 rounded font-bold shrink-0" style={{ background: tagBg, color: tagColor }}>
+                        {btn.type === 'COPY_CODE' ? 'COPY CODE' : btn.type}
+                      </span>
+                      <input value={btn.text} onChange={e => { const bs=[...form.buttons]; bs[bi]={...bs[bi],text:e.target.value}; f('buttons',bs); }}
+                        placeholder="Button label" className="input text-xs flex-1" />
+                      {btn.type === 'URL' && (
+                        <input value={btn.url||''} onChange={e => { const bs=[...form.buttons]; bs[bi]={...bs[bi],url:e.target.value}; f('buttons',bs); }}
+                          placeholder="https://yourstore.com/..." className="input text-xs flex-1 font-mono" />
+                      )}
+                      {btn.type === 'PHONE_NUMBER' && (
+                        <input value={btn.phone_number||''} onChange={e => { const bs=[...form.buttons]; bs[bi]={...bs[bi],phone_number:e.target.value}; f('buttons',bs); }}
+                          placeholder="+91XXXXXXXXXX" className="input text-xs w-36 font-mono" />
+                      )}
+                      <button onClick={() => f('buttons', form.buttons.filter((_,i)=>i!==bi))} className="p-1 hover:text-red-400 text-slate-500 transition-all shrink-0"><X size={13}/></button>
+                    </div>
+                    {btn.type === 'COPY_CODE' && (
+                      <div className="flex items-center gap-2 mt-1 ml-2 px-3 py-2 rounded-xl" style={{ background:'rgba(168,85,247,0.05)', border:'1px solid rgba(168,85,247,0.15)' }}>
+                        <span className="text-[10px] font-bold text-purple-400 shrink-0">Coupon Code</span>
+                        <input
+                          value={btn.coupon_code||''}
+                          onChange={e => { const bs=[...form.buttons]; bs[bi]={...bs[bi],coupon_code:e.target.value.toUpperCase()}; f('buttons',bs); }}
+                          placeholder="e.g. SAVE20  (optional — leave blank to skip)"
+                          className="input text-xs flex-1 font-mono tracking-widest"
+                          style={{ letterSpacing: '0.1em' }}
+                        />
+                        <span className="text-[10px] text-slate-600 shrink-0">Users tap to copy</span>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           </>)}
 
