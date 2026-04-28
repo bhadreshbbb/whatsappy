@@ -137,14 +137,9 @@ export const whatsappService = {
       const langCode = templatePayload?.template?.language?.code || 'en_US';
       console.log(`[WhatsApp] Template "${tplName}" (${langCode}) → ${to}`);
       console.log('[WhatsApp] Template payload:', JSON.stringify(body, null, 2));
-      try {
-        const result = await callMetaApi(creds.phoneId, creds.token, body);
-        console.log(`[WhatsApp] ✓ Template sent wamid: ${result.wamid}`);
-        return { messageId: result.wamid, resolvedText: `[Carousel: ${tplName}]`, wamid: result.wamid };
-      } catch (err) {
-        console.error(`[WhatsApp] ✗ Template send failed for ${to}:`, err.message);
-        return { messageId: null, resolvedText: `[Carousel: ${tplName}]` };
-      }
+      const result = await callMetaApi(creds.phoneId, creds.token, body);
+      console.log(`[WhatsApp] ✓ Template sent wamid: ${result.wamid}`);
+      return { messageId: result.wamid, resolvedText: `[Carousel: ${tplName}]`, wamid: result.wamid };
     }
 
     // Simulation mode — no real credentials
