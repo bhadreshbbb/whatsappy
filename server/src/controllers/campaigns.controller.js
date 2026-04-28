@@ -1,7 +1,8 @@
 import { getDb } from '../services/database.js';
 import { whatsappService } from '../services/whatsapp.service.js';
 import { saveChatMessage } from './chat.controller.js';
-import { buildSendMessagePayload, LANG_MAP } from './meta-templates.controller.js';
+import { buildSendMessagePayload, LANG_MAP, scrapeProductData } from './meta-templates.controller.js';
+import { v4 as uuidv4 } from 'uuid';
 
 // Sanitize text before sending to Meta — collapse multi-space, trim newlines
 function sanitizeMetaText(text) {
@@ -347,6 +348,7 @@ export const campaignsController = {
       const { phone } = req.body;
       if (!phone) return res.status(400).json({ error: 'phone is required' });
 
+      const channelId = req.headers['x-channel-id'] || 'demo';
       const campaign = db.abandoned_cart_campaigns.find(c => c.id == id);
       if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
 
@@ -357,15 +359,119 @@ export const campaignsController = {
       const tplLang = metaTpl?.language || campaign.target_language || 'en';
       const metaLangCode = LANG_MAP[tplLang] || tplLang;
 
-      const result = { phone, campaign: campaign.name, template: null, payload: null, wamid: null, success: false, error: null };
+      const result = { phone, campaign: campaign.name, template: null, payload: null, wamid: null, success: false, error: null, product_used: null };
 
       if (!metaTpl) {
         result.error = 'No Meta template linked to this campaign — link a Meta template first';
-        console.warn(`[TestSend] Campaign "${campaign.name}" has no meta_template_id`);
         return res.json(result);
       }
 
-      const sendPayload = buildSendMessagePayload(metaTpl, metaTpl.product_config, phone, metaLangCode, campaign.id);
+      // ── Build per-user product config for abandoned_product_view ──────────────
+      let productConfig = metaTpl.product_config;
+
+      if (!metaTpl.is_carousel && campaign.campaign_type === 'abandoned_product_view') {
+        // Pick a random product_view record from this channel as the test product
+        const allViews = (db.product_views || []).filter(v => v.channel_id === channelId && v.product_url);
+        const randomView = allViews.length > 0
+          ? allViews[Math.floor(Math.random() * allViews.length)]
+          : null;
+
+        let productName  = randomView?.product_name  || '';
+        let productPrice = randomView?.product_price || '';
+        let productImage = randomView?.product_image || '';
+        let productUrl   = randomView?.product_url   || '';
+
+        console.log(`[TestSend] Picked product view: ${productUrl || '(none)'}`);
+
+        // Scrape if data is missing and URL exists
+        if (productUrl && (!productName || !productPrice || !productImage)) {
+          try {
+            console.log(`[TestSend] Scraping ${productUrl}…`);
+            const scraped = await scrapeProductData(productUrl);
+            if (!productName  && (scraped.title || scraped.name))      productName  = scraped.title || scraped.name;
+            if (!productPrice && scraped.price)                         productPrice = scraped.price;
+            if (!productImage && (scraped.image_url || scraped.image))  productImage = scraped.image_url || scraped.image;
+            console.log(`[TestSend] Scraped: "${productName}" ${productPrice} img=${!!productImage}`);
+          } catch (scrapeErr) {
+            console.warn(`[TestSend] Scrape failed: ${scrapeErr.message}`);
+          }
+        }
+
+        // Fallback to template example_values if still no data
+        if (!productName || !productImage) {
+          const ex = Array.isArray(metaTpl.example_values) ? {} : (metaTpl.example_values || {});
+          if (!productName)  productName  = ex['1'] || 'Sample Product';
+          if (!productPrice) productPrice = ex['2'] || '';
+          if (!productUrl)   productUrl   = metaTpl.header_image_url ? '' : '';
+        }
+
+        // Stage vars from campaign
+        const sv = campaign.stage_vars || {};
+        const stageTpl = sv['s1'] || {};
+        const tok = (s) => (s || '')
+          .replace(/\{product_name\}/g,  productName)
+          .replace(/\{product_price\}/g, productPrice)
+          .replace(/\{product_url\}/g,   productUrl)
+          .replace(/\{customer_name\}/g, 'Test Customer');
+        const v1 = tok(stageTpl.v1) || productName  || 'Check this product';
+        const v2 = tok(stageTpl.v2) || productPrice || 'Limited time offer';
+
+        // Upload product image to Meta → media_id
+        let productMediaId = '';
+        if (productImage) {
+          const cached = (db.gallery_images || []).find(
+            g => g.source_url === productImage && g.channel_id === channelId && g.media_id
+          );
+          if (cached) {
+            productMediaId = cached.media_id;
+            console.log(`[TestSend] Image cache hit — media_id: ${productMediaId}`);
+          } else {
+            try {
+              const { buffer, mimeType } = await whatsappService.downloadImage(productImage);
+              productMediaId = await whatsappService.uploadMedia(buffer, `test_${Date.now()}.jpg`, mimeType);
+              // Cache it
+              if (!db.gallery_folders) db.gallery_folders = [];
+              if (!db.gallery_images)  db.gallery_images  = [];
+              const folderName = metaTpl.name;
+              let folder = db.gallery_folders.find(f => f.channel_id === channelId && f.name === folderName);
+              if (!folder) {
+                folder = { id: uuidv4(), channel_id: channelId, name: folderName, created_at: new Date().toISOString() };
+                db.gallery_folders.push(folder);
+              }
+              db.gallery_images.push({
+                id: uuidv4(), folder_id: folder.id, channel_id: channelId,
+                filename: `test_${Date.now()}.jpg`, media_id: productMediaId,
+                source_url: productImage, created_at: new Date().toISOString(),
+              });
+              db.save();
+              console.log(`[TestSend] Image uploaded → media_id: ${productMediaId}`);
+            } catch (imgErr) {
+              console.warn(`[TestSend] Image upload failed: ${imgErr.message} — using template header fallback`);
+              productMediaId = metaTpl.header_image_id || '';
+            }
+          }
+        } else {
+          productMediaId = metaTpl.header_image_id || '';
+        }
+
+        productConfig = {
+          cards: [{
+            '1':      v1,
+            '2':      v2,
+            name:     'Test Customer',
+            title:    productName,
+            price:    productPrice,
+            link:     productUrl,
+            url:      productUrl,
+            image:    productImage,
+            media_id: productMediaId,
+          }],
+        };
+
+        result.product_used = { name: productName, price: productPrice, url: productUrl, image: productImage, media_id: productMediaId, v1, v2 };
+      }
+
+      const sendPayload = buildSendMessagePayload(metaTpl, productConfig, phone, metaLangCode, campaign.id);
       result.template = metaTpl.name;
       result.payload  = sendPayload;
 
@@ -373,8 +479,11 @@ export const campaignsController = {
       console.log(`[TestSend] Campaign : "${campaign.name}"`);
       console.log(`[TestSend] Template : "${metaTpl.name}" (${metaLangCode})`);
       console.log(`[TestSend] To       : ${phone}`);
-      console.log(`[TestSend] Payload  :`);
-      console.log(JSON.stringify(sendPayload, null, 2));
+      if (result.product_used) {
+        console.log(`[TestSend] Product  : "${result.product_used.name}" | ${result.product_used.price}`);
+        console.log(`[TestSend] v1="${result.product_used.v1}" v2="${result.product_used.v2}"`);
+      }
+      console.log(`[TestSend] Payload  :\n${JSON.stringify(sendPayload, null, 2)}`);
 
       try {
         const apiResult = await whatsappService.sendTemplateMessage(phone, sendPayload);
