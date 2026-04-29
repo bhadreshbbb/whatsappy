@@ -42,6 +42,9 @@ function buildOrderProductConfig(order, visitorName) {
       delivery_date:    '3–5 business days',
       image:            order.product_image || '',
       image_url:        order.product_image || '',
+      // Fallback for URL button suffix (e.g. https://store.com/orders/{{1}})
+      link:             orderId,
+      url:              orderId,
     }],
   };
 }
