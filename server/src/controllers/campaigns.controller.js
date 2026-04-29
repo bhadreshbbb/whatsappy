@@ -125,13 +125,66 @@ export const campaignsController = {
     try {
       const db = getDb();
       const { id } = req.params;
-      const idx = db.abandoned_cart_campaigns.findIndex(c => c.id == id);
-      if (idx < 0) {
-        return res.status(404).json({ error: 'Campaign not found' });
+      const idx = db.abandoned_cart_campaigns.findIndex(c => String(c.id) === String(id));
+      if (idx < 0) return res.status(404).json({ error: 'Campaign not found' });
+
+      const campaign = db.abandoned_cart_campaigns[idx];
+
+      // 1. Remove execution history for this campaign
+      if (db.abandoned_cart_executions) {
+        db.abandoned_cart_executions = db.abandoned_cart_executions.filter(
+          e => String(e.campaign_id) !== String(id)
+        );
       }
+
+      // 2. For automation campaigns — reset the whatsapp_sent flags so automation
+      //    stops targeting these events (no orphaned state left behind).
+      const type = campaign.campaign_type;
+
+      if (type === 'abandoned_product_view' || type === 'product_view') {
+        // Reset product_view records that were sent by this campaign
+        (db.product_views || []).forEach(v => {
+          if (String(v.campaign_id) === String(id) || !v.campaign_id) {
+            // Only reset if followup not complete (i.e. campaign was mid-flight)
+            if ((v.followup_count || 0) < 2) {
+              v.whatsapp_sent    = 0;
+              v.whatsapp_sent_at = null;
+              v.followup_count   = 0;
+              delete v.campaign_id;
+            }
+          }
+        });
+      } else if (type === 'abandoned_cart' || type === 'abandoned_checkout' || type === 'discount') {
+        (db.cart_events || []).forEach(e => {
+          if (String(e.campaign_id) === String(id)) {
+            e.whatsapp_sent    = 0;
+            e.whatsapp_sent_at = null;
+            e.followup_count   = 0;
+            delete e.campaign_id;
+          }
+        });
+      } else if (type === 'post_cart_upsell') {
+        (db.website_visitors || []).forEach(v => {
+          if (String(v.upsell_campaign_id) === String(id)) {
+            v.upsell_sent    = 0;
+            v.upsell_sent_at = null;
+            delete v.upsell_campaign_id;
+          }
+        });
+      } else if (type === 'post_purchase') {
+        (db.website_visitors || []).forEach(v => {
+          if (String(v.purchase_campaign_id) === String(id)) {
+            v.whatsapp_sent = 0;
+            delete v.purchase_campaign_id;
+          }
+        });
+      }
+
+      // 3. Remove the campaign itself
       db.abandoned_cart_campaigns.splice(idx, 1);
       db.save();
-      res.json({ success: true });
+
+      res.json({ success: true, deleted: id, type });
     } catch (error) {
       next(error);
     }

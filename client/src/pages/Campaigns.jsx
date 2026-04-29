@@ -2117,7 +2117,17 @@ export default function Campaigns() {
                     </button>
                     {/* Delete */}
                     <button
-                      onClick={async () => { if (confirm('Delete this campaign?')) { await campaignsApi.delete(c.id); load(); } }}
+                      onClick={async () => {
+                        if (!confirm(`Delete "${c.name}"?\n\nThis will:\n• Stop all future messages immediately\n• Delete all send history\n• Reset automation state for affected users\n\nThis cannot be undone.`)) return;
+                        await campaignsApi.delete(c.id);
+                        setAnalyticsMap(p => { const n = {...p}; delete n[c.id]; return n; });
+                        setPayloadMap(p => { const n = {...p}; delete n[c.id]; return n; });
+                        setAudienceMap(p => { const n = {...p}; delete n[c.id]; return n; });
+                        setSendResultMap(p => { const n = {...p}; delete n[c.id]; return n; });
+                        if (testModal?.id === c.id) { setTestModal(null); setTestResult(null); }
+                        if (flowModal?.id === c.id) setFlowModal(null);
+                        load();
+                      }}
                       title="Delete campaign"
                       className="p-1.5 rounded-lg opacity-0 group-hover/card:opacity-100 transition-opacity"
                       style={{ background: 'rgba(248,113,113,0.08)', border: '1px solid rgba(248,113,113,0.2)', color: '#f87171' }}>
