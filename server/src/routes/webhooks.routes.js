@@ -6,6 +6,9 @@ const router = Router();
 // Shopify Order webhook (POST from Shopify Admin)
 router.post('/shopify/order', webhooksController.shopifyOrder);
 
+// Custom website / any platform order (universal)
+router.post('/order', webhooksController.customOrder);
+
 // Meta WhatsApp incoming messages webhook
 router.get('/whatsapp',  webhooksController.webhookVerify);    // verification
 router.post('/whatsapp', webhooksController.webhookIncoming);   // incoming messages + statuses

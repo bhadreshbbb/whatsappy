@@ -830,23 +830,6 @@ async function runAutomation() {
             );
             if (alreadySent) continue;
 
-            // Build variables from order
-            let lineItems = [];
-            try { lineItems = JSON.parse(order.products || '[]'); } catch (_) {}
-            const productsSummary = order.products_summary ||
-              lineItems.map(i => `${i.title} × ${i.quantity || 1}`).join(', ');
-
-            const orderVars = {
-              customer_name:  order.name || visitor?.name || 'Customer',
-              order_id:       order.order_number || String(order.id),
-              order_products: productsSummary,
-              order_total:    String(order.total_amount || 0),
-              payment_method: order.payment_method || 'Cash on Delivery',
-              delivery_date:  '3–5 business days',
-              product_image:  order.product_image || '',
-              name:           order.name || visitor?.name || 'Customer',
-            };
-
             // Resolve the Meta template
             const metaTpl = cam.meta_template_id
               ? (db.meta_templates || []).find(t =>
@@ -856,20 +839,55 @@ async function runAutomation() {
               : null;
 
             if (!metaTpl) {
-              console.warn(`[OrderConfirmation] No approved Meta template for campaign "${cam.name}"`);
+              console.warn(`[OrderConfirmation] No APPROVED Meta template for campaign "${cam.name}" — check template status`);
               break;
             }
 
-            // Build and send the WhatsApp template message
+            // Build variable values from order data
+            let lineItems = [];
+            try { lineItems = JSON.parse(order.products || '[]'); } catch (_) {}
+            const productsSummary = order.products_summary ||
+              lineItems.map(i => `${i.title || i.name} × ${i.quantity || 1}`).join(', ') || '';
+            const customerName = order.name || visitor?.name || 'Customer';
+            const orderId      = order.order_number || String(order.id);
+            const orderTotal   = String(order.total_amount || 0);
+            const payMethod    = order.payment_method || 'Cash on Delivery';
+
+            // productConfig.cards[0] — this is what buildSendMessagePayload reads
+            // field names must match getFieldValue() cases in meta-templates.controller.js
+            const productConfig = {
+              cards: [{
+                // customer_name variable
+                name:           customerName,
+                customer_name:  customerName,
+                // order_id variable
+                order_id:       orderId,
+                order_number:   orderId,
+                // order_products variable
+                order_products: productsSummary,
+                products_summary: productsSummary,
+                // order_total variable
+                order_total:    orderTotal,
+                total_amount:   order.total_amount || 0,
+                // payment_method variable
+                payment_method: payMethod,
+                // delivery_date variable
+                delivery_date:  '3–5 business days',
+                // header image
+                image:          order.product_image || '',
+                image_url:      order.product_image || '',
+              }],
+            };
+
             const { buildSendMessagePayload, LANG_MAP } = await import('../controllers/meta-templates.controller.js');
-            const userLang = cam.target_language || 'en';
+            const userLang    = cam.target_language || 'en';
             const metaLangCode = LANG_MAP[userLang] || userLang;
-            const payload = buildSendMessagePayload(metaTpl, order.phone, metaLangCode, orderVars);
+
+            // Build the full /messages payload
+            const msgPayload = buildSendMessagePayload(metaTpl, productConfig, order.phone, metaLangCode);
 
             const { whatsappService } = await import('../services/whatsapp.service.js');
-            const result = await whatsappService.sendTemplateMessage(
-              order.phone, metaTpl, metaLangCode, orderVars
-            );
+            const result = await whatsappService.sendTemplateMessage(order.phone, msgPayload);
 
             // Record execution
             const execRecord = {
@@ -882,9 +900,11 @@ async function runAutomation() {
               name:          order.name || visitor?.name || '',
               order_id:      order.id,
               order_number:  order.order_number,
+              template_name: metaTpl.name,
               status:        result?.messageId ? 'sent' : 'failed',
               wamid:         result?.messageId || null,
               error:         result?.error || null,
+              payload_sent:  JSON.stringify(msgPayload),
               stage:         1,
               sent_at:       new Date().toISOString(),
             };

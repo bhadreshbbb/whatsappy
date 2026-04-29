@@ -9,11 +9,116 @@ import { getDb } from '../services/database.js';
 import { whatsappService } from '../services/whatsapp.service.js';
 import { upgradeStatus } from '../utils/statusMachine.js';
 
-// ── COD gateway keywords ──────────────────────────────────────────────────────
-const COD_KEYWORDS = ['cash on delivery', 'cod', 'pay on delivery', 'cash', 'manual'];
-function isCOD(gateway = '') {
-  const g = gateway.toLowerCase();
-  return COD_KEYWORDS.some(k => g.includes(k));
+// ── COD detection — covers Shopify + custom payment gateways ─────────────────
+// financial_status 'pending' alone is NOT reliable (UPI/bank also start pending)
+// Primary: gateway name matching. Secondary: explicit is_cod flag.
+const COD_GATEWAY_KEYWORDS = [
+  'cash on delivery', 'cod', 'pay on delivery', 'pay at door',
+  'cash', 'manual', 'offline payment', 'collect on delivery',
+];
+function isCOD(gateway = '', financialStatus = '', explicitCodFlag = null) {
+  if (explicitCodFlag === true)  return true;
+  if (explicitCodFlag === false) return false;
+  const g = (gateway || '').toLowerCase().trim();
+  if (!g || g === '') return false; // empty gateway = online payment gateway
+  return COD_GATEWAY_KEYWORDS.some(k => g.includes(k));
+}
+
+// ── Build productConfig for buildSendMessagePayload ───────────────────────────
+function buildOrderProductConfig(order, visitorName) {
+  const customerName = order.name || visitorName || 'Customer';
+  const orderId      = order.order_number || String(order.id);
+  return {
+    cards: [{
+      name:             customerName,
+      customer_name:    customerName,
+      order_id:         orderId,
+      order_number:     orderId,
+      order_products:   order.products_summary || '',
+      products_summary: order.products_summary || '',
+      order_total:      String(order.total_amount || 0),
+      total_amount:     order.total_amount || 0,
+      payment_method:   order.payment_method || 'Cash on Delivery',
+      delivery_date:    '3–5 business days',
+      image:            order.product_image || '',
+      image_url:        order.product_image || '',
+    }],
+  };
+}
+
+// ── Fire order confirmation WhatsApp immediately ──────────────────────────────
+async function sendOrderConfirmationNow(db, order) {
+  try {
+    // Find an active order_confirmation campaign for this channel
+    const cam = (db.abandoned_cart_campaigns || []).find(c =>
+      c.channel_id === order.channel_id &&
+      c.campaign_type === 'order_confirmation' &&
+      c.is_active &&
+      c.meta_template_id
+    );
+    if (!cam) {
+      console.log('[OrderConfirmation] No active order_confirmation campaign — will send on next automation run');
+      return;
+    }
+
+    const metaTpl = (db.meta_templates || []).find(t =>
+      String(t.id) === String(cam.meta_template_id) &&
+      (t.meta_status === 'APPROVED' || t.meta_status === 'ACTIVE')
+    );
+    if (!metaTpl) {
+      console.warn('[OrderConfirmation] Meta template not APPROVED yet — will retry on automation run');
+      return;
+    }
+
+    // Dedup
+    const alreadySent = (db.abandoned_cart_executions || []).find(e =>
+      e.campaign_id === cam.id && e.phone === order.phone && e.order_id === order.id
+    );
+    if (alreadySent) return;
+
+    const visitor = (db.website_visitors || []).find(v =>
+      v.channel_id === order.channel_id && v.phone === order.phone
+    );
+    if (visitor?.is_opted_out) return;
+
+    const { buildSendMessagePayload, LANG_MAP } = await import('./meta-templates.controller.js');
+    const langCode  = LANG_MAP[cam.target_language || 'en'] || 'en_US';
+    const productConfig = buildOrderProductConfig(order, visitor?.name);
+    const msgPayload = buildSendMessagePayload(metaTpl, productConfig, order.phone, langCode);
+
+    const { whatsappService } = await import('../services/whatsapp.service.js');
+    const result = await whatsappService.sendTemplateMessage(order.phone, msgPayload);
+
+    const execRecord = {
+      id:            (db.abandoned_cart_executions.length || 0) + 1,
+      campaign_id:   cam.id,
+      campaign_name: cam.name,
+      campaign_type: 'order_confirmation',
+      channel_id:    order.channel_id,
+      phone:         order.phone,
+      name:          order.name || visitor?.name || '',
+      order_id:      order.id,
+      order_number:  order.order_number,
+      template_name: metaTpl.name,
+      status:        result?.messageId ? 'sent' : 'failed',
+      wamid:         result?.messageId || null,
+      error:         result?.error     || null,
+      payload_sent:  JSON.stringify(msgPayload),
+      stage:         1,
+      sent_at:       new Date().toISOString(),
+    };
+    db.abandoned_cart_executions.push(execRecord);
+
+    if (result?.messageId) {
+      order.confirmation_sent    = true;
+      order.confirmation_sent_at = new Date().toISOString();
+      console.log(`[OrderConfirmation] ✓ Instant send — order ${order.order_number} → ${order.phone} wamid=${result.messageId}`);
+    } else {
+      console.error(`[OrderConfirmation] ✗ Instant send failed — ${order.order_number}: ${result?.error}`);
+    }
+  } catch (err) {
+    console.error('[OrderConfirmation] Instant send error:', err.message);
+  }
 }
 
 // ── Normalize phone: ensure 91XXXXXXXXXX format ───────────────────────────────
@@ -55,26 +160,40 @@ export const webhooksController = {
       const body = req.body;
       const channelId = req.headers['x-channel-id'] || 'demo';
 
-      // Extract core fields from Shopify order payload
+      // ── Extract fields from Shopify order payload ─────────────────────────────
       const shopifyOrderId = String(body.id || body.order_id || '');
       const orderNumber    = String(body.order_number || body.name || shopifyOrderId);
-      const rawPhone       = body.phone || body.billing_address?.phone || body.shipping_address?.phone || '';
-      const phone          = normalizePhone(rawPhone);
-      const gateway        = body.gateway || body.payment_gateway || '';
-      const financialStatus= body.financial_status || '';
-      const totalPrice     = parseFloat(body.total_price || body.subtotal_price || 0);
-      const currency       = body.currency || 'INR';
-      const lineItems      = body.line_items || [];
-      const customerName   = body.customer?.first_name
-        ? `${body.customer.first_name} ${body.customer.last_name || ''}`.trim()
-        : (body.shipping_address?.name || body.billing_address?.name || 'Customer');
-      const cancelled      = !!body.cancelled_at;
-      const confirmed      = body.confirmed !== false && !cancelled;
 
-      // Detect COD
-      const cod = isCOD(gateway) || gateway === '' && financialStatus === 'pending';
+      // Phone: check multiple locations Shopify may put it
+      const rawPhone = body.phone
+        || body.customer?.phone
+        || body.billing_address?.phone
+        || body.shipping_address?.phone
+        || '';
+      const phone = normalizePhone(rawPhone);
 
-      console.log(`[Shopify Webhook] Order ${orderNumber} — gateway="${gateway}" cod=${cod} phone=${phone} total=${totalPrice}`);
+      const gateway         = body.gateway || body.payment_gateway || '';
+      const financialStatus = body.financial_status || '';
+      const totalPrice      = parseFloat(body.total_price || body.subtotal_price || 0);
+      const currency        = body.currency || 'INR';
+      const lineItems       = body.line_items || [];
+
+      const customerName = [
+        body.customer?.first_name,
+        body.customer?.last_name,
+      ].filter(Boolean).join(' ').trim()
+        || body.shipping_address?.name
+        || body.billing_address?.name
+        || 'Customer';
+
+      const cancelled = !!body.cancelled_at;
+      const confirmed = body.confirmed !== false && !cancelled;
+
+      // ── COD detection ─────────────────────────────────────────────────────────
+      // Use explicit is_cod flag if provided, else detect from gateway name
+      const cod = isCOD(gateway, financialStatus, body.is_cod ?? null);
+
+      console.log(`[Shopify Webhook] Order ${orderNumber} — gateway="${gateway}" financial="${financialStatus}" COD=${cod} phone=${phone} ₹${totalPrice}`);
 
       // Skip if already recorded (idempotency)
       if (shopifyOrderId) {
@@ -163,6 +282,16 @@ export const webhooksController = {
       db.save();
       console.log(`[Shopify Webhook] Saved order ${orderNumber} — COD=${cod} phone=${phone}`);
 
+      // ── Immediately fire WhatsApp confirmation for COD orders ─────────────────
+      // Don't await — respond to Shopify immediately, send in background
+      if (cod && phone) {
+        setImmediate(() => {
+          sendOrderConfirmationNow(db, order)
+            .then(() => db.save())
+            .catch(e => console.error('[OrderConfirmation] Background send error:', e.message));
+        });
+      }
+
       res.json({ success: true, order_id: order.id, order_number: orderNumber, is_cod: cod, phone });
     } catch (err) {
       console.error('[Shopify Webhook] Error:', err.message);
@@ -170,7 +299,100 @@ export const webhooksController = {
     }
   },
 
-  // ── 2. Meta WhatsApp incoming message webhook ────────────────────────────────
+  // ── Custom Website Order endpoint ─────────────────────────────────────────────
+  // For non-Shopify websites: POST /api/webhooks/order
+  // Body: { phone, name, order_number, products, total_amount, payment_method, is_cod }
+  async customOrder(req, res) {
+    try {
+      const db        = getDb();
+      const channelId = req.headers['x-channel-id'] || 'demo';
+      const {
+        phone: rawPhone, name, order_number, order_id,
+        products, total_amount, currency = 'INR',
+        payment_method = '', is_cod,
+        product_image,
+      } = req.body;
+
+      const phone = normalizePhone(rawPhone);
+      if (!phone) return res.status(400).json({ error: 'Phone number required' });
+
+      // Detect COD
+      const cod = isCOD(payment_method, '', is_cod ?? null);
+
+      // Build products summary
+      let lineItems = [];
+      let productsSummary = '';
+      if (Array.isArray(products)) {
+        lineItems = products;
+        productsSummary = products.map(p => `${p.title || p.name} × ${p.quantity || 1}`).join(', ');
+      } else if (typeof products === 'string') {
+        productsSummary = products;
+      }
+
+      if (!db.orders) db.orders = [];
+      const orderId = String(order_id || order_number || (db.orders.length + 1));
+
+      // Idempotency
+      const existing = db.orders.find(o => o.channel_id === channelId && o.order_number === orderId);
+      if (existing) return res.json({ success: true, duplicate: true });
+
+      const order = {
+        id:               (db.orders.length || 0) + 1,
+        channel_id:       channelId,
+        shopify_order_id: null,
+        order_number:     orderId,
+        phone,
+        name:             name || 'Customer',
+        gateway:          payment_method,
+        is_cod:           cod,
+        financial_status: cod ? 'pending' : 'paid',
+        total_amount:     parseFloat(total_amount || 0),
+        currency,
+        products:         JSON.stringify(lineItems),
+        products_summary: productsSummary,
+        product_image:    product_image || null,
+        payment_method:   cod ? 'Cash on Delivery' : (payment_method || 'Online Payment'),
+        status:           'pending',
+        confirmation_sent: false,
+        confirmation_sent_at: null,
+        created_at:       new Date().toISOString(),
+        source:           'custom',
+      };
+      db.orders.push(order);
+
+      // Update visitor + cart
+      const vi = db.website_visitors.findIndex(v => v.channel_id === channelId && v.phone === phone);
+      if (vi >= 0) {
+        upgradeStatus(db.website_visitors[vi], 'purchased');
+        db.website_visitors[vi].last_purchased_at = new Date().toISOString();
+        db.website_visitors[vi].purchase_count = (db.website_visitors[vi].purchase_count || 0) + 1;
+      }
+      (db.cart_events || []).forEach(c => {
+        if (c.channel_id === channelId && c.phone === phone && !c.recovered) {
+          c.recovered = 1; c.recovered_at = new Date().toISOString();
+        }
+      });
+
+      db.save();
+      console.log(`[CustomOrder] Order ${orderId} — COD=${cod} phone=${phone}`);
+
+      // Immediate WhatsApp send for COD
+      if (cod && phone) {
+        setImmediate(() => {
+          sendOrderConfirmationNow(db, order)
+            .then(() => db.save())
+            .catch(e => console.error('[OrderConfirmation] Custom order send error:', e.message));
+        });
+      }
+
+      res.json({ success: true, order_id: order.id, order_number: orderId, is_cod: cod });
+    } catch (err) {
+      console.error('[CustomOrder] Error:', err.message);
+      res.status(500).json({ error: err.message });
+    }
+  },
+
+  // ── 2. Meta WhatsApp incoming message webhook ─────────────────────────────────
   // Meta sends user replies here (GET for verification, POST for messages)
   // Set in Meta App Dashboard → WhatsApp → Configuration → Webhook
   // Subscribed fields: messages
