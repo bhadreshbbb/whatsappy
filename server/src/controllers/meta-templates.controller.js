@@ -292,31 +292,42 @@ function buildMetaComponents(tpl, { preserveVarNumbers = false } = {}) {
   if (tpl.footer?.trim()) components.push({ type: 'FOOTER', text: sanitizeMetaText(tpl.footer) });
 
   if (tpl.buttons?.length) {
-    const buttons = tpl.buttons.map(b => {
-      const bType = String(b.type || '').toUpperCase();
-      if (bType === 'URL') {
-        const btn = { type: 'URL', text: sanitizeButtonText(b.text), url: b.url };
-        // Button URL {{1}} is button-scoped — use btn_1 example key
-        const btnExVals = { '1': exVals['btn_1'] || exVals['4'] || 'product-slug' };
-        const ex = buildUrlExample(b.url, stdVarMap, btnExVals);
-        if (ex) btn.example = ex;
-        return btn;
-      }
-      if (bType === 'QUICK_REPLY')  return { type: 'QUICK_REPLY',  text: sanitizeButtonText(b.text) };
-      if (bType === 'PHONE_NUMBER') return { type: 'PHONE_NUMBER', text: sanitizeButtonText(b.text), phone_number: b.phone_number };
-      if (bType === 'COPY_CODE') {
-        const coupon = String(b.coupon_code || b.example || '').trim().toUpperCase() || 'DISCOUNT10';
-        return { type: 'COPY_CODE', example: coupon };
-      }
-      if (bType === 'FLOW') {
-        const flowBtn = { type: 'FLOW', text: sanitizeButtonText(b.text) };
-        if (b.flow_id) flowBtn.flow_id = String(b.flow_id).trim();
-        if (b.navigate_screen) flowBtn.navigate_screen = String(b.navigate_screen).trim();
-        return flowBtn;
-      }
-      return b;
-    });
-    components.push({ type: 'BUTTONS', buttons });
+    const rawButtons = tpl.buttons
+      // Skip FLOW buttons with no flow_id — Meta rejects empty flow_id
+      .filter(b => !(String(b.type || '').toUpperCase() === 'FLOW' && !b.flow_id?.trim()))
+      .map(b => {
+        const bType = String(b.type || '').toUpperCase();
+        if (bType === 'URL') {
+          const btn = { type: 'URL', text: sanitizeButtonText(b.text), url: b.url };
+          const btnExVals = { '1': exVals['btn_1'] || exVals['4'] || 'product-slug' };
+          const ex = buildUrlExample(b.url, stdVarMap, btnExVals);
+          if (ex) btn.example = ex;
+          return btn;
+        }
+        if (bType === 'QUICK_REPLY')  return { type: 'QUICK_REPLY',  text: sanitizeButtonText(b.text) };
+        if (bType === 'PHONE_NUMBER') return { type: 'PHONE_NUMBER', text: sanitizeButtonText(b.text), phone_number: b.phone_number };
+        if (bType === 'COPY_CODE') {
+          const coupon = String(b.coupon_code || b.example || '').trim().toUpperCase() || 'DISCOUNT10';
+          return { type: 'COPY_CODE', example: coupon };
+        }
+        if (bType === 'FLOW') {
+          const flowBtn = { type: 'FLOW', text: sanitizeButtonText(b.text) };
+          if (b.flow_id) flowBtn.flow_id = String(b.flow_id).trim();
+          if (b.navigate_screen) flowBtn.navigate_screen = String(b.navigate_screen).trim();
+          return flowBtn;
+        }
+        return null;
+      })
+      .filter(Boolean);
+
+    // Meta rule: CTA buttons (URL, PHONE_NUMBER, FLOW) MUST come before QUICK_REPLY buttons.
+    // Mixing is only allowed when CTAs appear first in the array.
+    const CTA_TYPES = new Set(['URL', 'PHONE_NUMBER', 'FLOW', 'COPY_CODE']);
+    const ctaBtns = rawButtons.filter(b => CTA_TYPES.has(b.type));
+    const qrBtns  = rawButtons.filter(b => b.type === 'QUICK_REPLY');
+    const buttons  = [...ctaBtns, ...qrBtns];
+
+    if (buttons.length) components.push({ type: 'BUTTONS', buttons });
   }
 
   return components;

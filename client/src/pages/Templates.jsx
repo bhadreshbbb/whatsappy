@@ -113,9 +113,9 @@ const BLANK_ORDER_CONF_TPL = {
   body: 'Hello {{1}} 👋\n\n✅ Your order *#{{2}}* is confirmed!\n\n📦 *Items:* {{3}}\n💰 *Total:* ₹{{4}}\n🚚 *Payment:* {{5}}\n\nWe\'ll notify you once your order is shipped. Thank you for shopping with us!',
   footer: 'Reply HELP for support',
   buttons: [
-    { type: 'QUICK_REPLY', text: '✅ Yes, Confirmed' },
     { type: 'URL',         text: 'Track My Order', url: 'https://yourstore.com/orders/{{1}}' },
-    { type: 'QUICK_REPLY', text: '❌ Cancel Order' },
+    { type: 'QUICK_REPLY', text: 'Yes, Confirmed' },
+    { type: 'QUICK_REPLY', text: 'Cancel Order' },
   ],
   variable_labels: {
     '1': 'customer_name',
@@ -344,9 +344,9 @@ export default function Templates() {
       ...BLANK_ORDER_CONF_TPL,
       _templateType: 'order_confirmation',
       buttons: [
-        { type: 'QUICK_REPLY', text: '✅ Yes, Confirmed' },
         { type: 'URL',         text: 'Track My Order', url: `${base}/orders/{{1}}` },
-        { type: 'QUICK_REPLY', text: '❌ Cancel Order'  },
+        { type: 'QUICK_REPLY', text: 'Yes, Confirmed' },
+        { type: 'QUICK_REPLY', text: 'Cancel Order'   },
       ],
     });
   }
