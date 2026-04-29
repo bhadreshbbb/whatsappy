@@ -2474,47 +2474,109 @@ export default function Campaigns() {
                       style={{ background: responsesOpen[c.id] ? 'rgba(167,139,250,0.1)' : 'rgba(255,255,255,0.03)', border: `1px solid ${responsesOpen[c.id] ? 'rgba(167,139,250,0.3)' : 'rgba(255,255,255,0.05)'}`, color: responsesOpen[c.id] ? '#a78bfa' : '#64748b' }}>
                       <span className="flex items-center gap-1.5">💬 User Responses</span>
                       <span className="flex items-center gap-1.5">
-                        {responsesMap[c.id] && <span className="px-1.5 py-0.5 rounded-full text-[9px] font-bold" style={{ background: 'rgba(167,139,250,0.15)', color: '#a78bfa' }}>{responsesMap[c.id].summary?.total || 0}</span>}
+                        {responsesMap[c.id]?.summary?.total > 0 && (
+                          <span className="px-1.5 py-0.5 rounded-full text-[9px] font-bold" style={{ background: 'rgba(167,139,250,0.15)', color: '#a78bfa' }}>
+                            {responsesMap[c.id].summary.total}
+                          </span>
+                        )}
                         <ChevronDown size={10} style={{ transform: responsesOpen[c.id] ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }}/>
                       </span>
                     </button>
+
                     {responsesOpen[c.id] && (() => {
-                      if (responsesLoading[c.id]) return <div className="mt-2 text-[10px] text-center py-3" style={{ color: '#475569' }}>Loading responses…</div>;
+                      if (responsesLoading[c.id]) return <div className="mt-2 text-[10px] text-center py-3" style={{ color: '#475569' }}>Loading…</div>;
                       const rd = responsesMap[c.id];
                       if (!rd) return null;
-                      const { responses = [], summary = {} } = rd;
+                      const { per_user = [], summary = {} } = rd;
+
                       return (
                         <div className="mt-2 space-y-2">
-                          {/* Summary */}
+                          {/* Summary strip */}
                           <div className="grid grid-cols-3 gap-2 text-center">
                             {[
-                              { label: 'Confirmed', value: summary.confirmed || 0, color: '#4ade80', bg: 'rgba(74,222,128,0.08)' },
-                              { label: 'Cancelled',  value: summary.cancelled  || 0, color: '#f87171', bg: 'rgba(248,113,113,0.08)' },
-                              { label: 'Custom Reply', value: summary.custom  || 0, color: '#fbbf24', bg: 'rgba(251,191,36,0.08)' },
+                              { label: 'Confirmed',    value: summary.confirmed || 0, color: '#4ade80', bg: 'rgba(74,222,128,0.08)' },
+                              { label: 'Cancelled',    value: summary.cancelled || 0, color: '#f87171', bg: 'rgba(248,113,113,0.08)' },
+                              { label: 'Custom Reply', value: summary.custom    || 0, color: '#fbbf24', bg: 'rgba(251,191,36,0.08)' },
                             ].map(s => (
-                              <div key={s.label} className="py-2 rounded-lg" style={{ background: s.bg, border: `1px solid ${s.bg}` }}>
+                              <div key={s.label} className="py-2 rounded-lg" style={{ background: s.bg }}>
                                 <div className="text-sm font-bold" style={{ color: s.color }}>{s.value}</div>
                                 <div className="text-[9px] uppercase tracking-wide mt-0.5" style={{ color: '#475569' }}>{s.label}</div>
                               </div>
                             ))}
                           </div>
-                          {/* Response list */}
-                          {responses.length > 0 ? (
-                            <div className="rounded-xl overflow-hidden" style={{ border: '1px solid rgba(167,139,250,0.15)', maxHeight: 240, overflowY: 'auto' }}>
-                              {responses.slice(0, 30).map((r, i) => {
-                                const rColor = r.response_type === 'confirmed' ? '#4ade80' : r.response_type === 'cancelled' ? '#f87171' : '#fbbf24';
-                                const rIcon  = r.response_type === 'confirmed' ? '✓' : r.response_type === 'cancelled' ? '✗' : '💬';
+
+                          {/* Extra stats */}
+                          {summary.total > 0 && (
+                            <div className="flex items-center gap-3 text-[9px] px-1" style={{ color: '#475569' }}>
+                              <span>⚡ Quick replies: <span style={{ color: '#a78bfa' }}>{summary.quick_replies || 0}</span></span>
+                              <span>✍️ Custom text: <span style={{ color: '#fbbf24' }}>{summary.custom_texts || 0}</span></span>
+                              <button onClick={() => loadResponses(c.id)} className="ml-auto flex items-center gap-1" style={{ color: '#334155' }}><Repeat size={8}/> Refresh</button>
+                            </div>
+                          )}
+
+                          {/* Per-user list */}
+                          {per_user.length > 0 ? (
+                            <div className="rounded-xl overflow-hidden" style={{ border: '1px solid rgba(167,139,250,0.15)', maxHeight: 320, overflowY: 'auto' }}>
+                              {per_user.map((u, ui) => {
+                                const latestColor = u.latest_type === 'confirmed' ? '#4ade80' : u.latest_type === 'cancelled' ? '#f87171' : '#fbbf24';
+                                const latestBg    = u.latest_type === 'confirmed' ? 'rgba(74,222,128,0.1)' : u.latest_type === 'cancelled' ? 'rgba(248,113,113,0.1)' : 'rgba(251,191,36,0.1)';
+                                const latestIcon  = u.latest_type === 'confirmed' ? '✓' : u.latest_type === 'cancelled' ? '✗' : '💬';
                                 return (
-                                  <div key={i} className="flex items-start gap-2 px-3 py-2.5" style={{ background: i % 2 === 0 ? 'rgba(167,139,250,0.03)' : 'transparent', borderTop: i > 0 ? '1px solid rgba(255,255,255,0.04)' : 'none' }}>
-                                    <span className="text-xs font-bold mt-0.5" style={{ color: rColor }}>{rIcon}</span>
-                                    <div className="flex-1 min-w-0">
-                                      <div className="flex items-center gap-2 flex-wrap">
-                                        <span className="text-[10px] font-semibold text-white">{r.phone}</span>
-                                        {r.order_number && <span className="text-[9px]" style={{ color: '#64748b' }}>#{r.order_number}</span>}
-                                        <span className="text-[9px] px-1.5 rounded font-bold" style={{ background: 'rgba(255,255,255,0.05)', color: rColor }}>{r.response_type}</span>
+                                  <div key={ui} style={{ borderTop: ui > 0 ? '1px solid rgba(255,255,255,0.05)' : 'none', background: ui % 2 === 0 ? 'rgba(167,139,250,0.03)' : 'transparent' }}>
+                                    {/* User header row */}
+                                    <div className="flex items-start gap-2 px-3 py-2.5">
+                                      <div className="w-7 h-7 rounded-full flex items-center justify-center text-[11px] font-bold flex-shrink-0"
+                                        style={{ background: latestBg, color: latestColor }}>
+                                        {(u.name || u.phone)[0].toUpperCase()}
                                       </div>
-                                      <p className="text-[10px] mt-0.5 italic" style={{ color: '#94a3b8' }}>"{r.response_text}"</p>
-                                      <p className="text-[9px] mt-0.5" style={{ color: '#334155' }}>{new Date(r.responded_at).toLocaleString()}</p>
+                                      <div className="flex-1 min-w-0">
+                                        <div className="flex items-center gap-2 flex-wrap">
+                                          <span className="text-[10px] font-semibold text-white">{u.name}</span>
+                                          <span className="text-[9px] font-mono" style={{ color: '#475569' }}>{u.phone}</span>
+                                          {u.order_number && <span className="text-[9px]" style={{ color: '#64748b' }}>#{u.order_number}</span>}
+                                          <span className="text-[9px] px-1.5 py-0.5 rounded font-bold" style={{ background: latestBg, color: latestColor }}>
+                                            {latestIcon} {u.latest_type}
+                                          </span>
+                                          {u.reply_count > 1 && (
+                                            <span className="text-[9px]" style={{ color: '#475569' }}>{u.reply_count} replies</span>
+                                          )}
+                                        </div>
+                                        {/* All replies for this user */}
+                                        <div className="mt-1.5 space-y-1">
+                                          {u.replies.map((r, ri) => {
+                                            const rc = r.response_type === 'confirmed' ? '#4ade80' : r.response_type === 'cancelled' ? '#f87171' : '#fbbf24';
+                                            let rawObj = null;
+                                            try { rawObj = JSON.parse(r.raw_payload || 'null'); } catch (_) {}
+                                            return (
+                                              <div key={ri}>
+                                                <div className="flex items-start gap-1.5">
+                                                  <span className="text-[9px] font-bold mt-0.5 flex-shrink-0" style={{ color: rc }}>
+                                                    {r.response_type === 'confirmed' ? '✓' : r.response_type === 'cancelled' ? '✗' : '›'}
+                                                  </span>
+                                                  <div className="flex-1 min-w-0">
+                                                    <div className="flex items-center gap-1.5 flex-wrap">
+                                                      <span className="text-[10px] text-white font-medium">"{r.response_text}"</span>
+                                                      <span className="text-[9px] px-1 rounded" style={{ background: r.is_quick_reply ? 'rgba(34,197,94,0.1)' : 'rgba(255,255,255,0.05)', color: r.is_quick_reply ? '#4ade80' : '#64748b' }}>
+                                                        {r.is_quick_reply ? '⚡ Quick Reply' : '✍️ Text'}
+                                                      </span>
+                                                      <span className="text-[9px]" style={{ color: '#334155' }}>{new Date(r.responded_at).toLocaleTimeString()}</span>
+                                                    </div>
+                                                    {/* Raw Meta payload toggle */}
+                                                    {rawObj && (
+                                                      <details className="mt-1">
+                                                        <summary className="text-[9px] cursor-pointer select-none" style={{ color: '#475569' }}>Meta payload</summary>
+                                                        <pre className="text-[8px] rounded p-1.5 mt-1 overflow-x-auto" style={{ background: '#070d1a', color: '#67e8f9', border: '1px solid rgba(6,182,212,0.15)', maxHeight: 100, overflowY: 'auto' }}>
+                                                          {JSON.stringify(rawObj, null, 2)}
+                                                        </pre>
+                                                      </details>
+                                                    )}
+                                                  </div>
+                                                </div>
+                                              </div>
+                                            );
+                                          })}
+                                        </div>
+                                      </div>
                                     </div>
                                   </div>
                                 );
@@ -2522,10 +2584,9 @@ export default function Campaigns() {
                             </div>
                           ) : (
                             <div className="text-[10px] text-center py-4 rounded-xl" style={{ color: '#334155', border: '1px solid rgba(255,255,255,0.05)' }}>
-                              No replies yet — messages sent, waiting for user responses.
+                              No replies yet — waiting for users to respond.
                             </div>
                           )}
-                          <button onClick={() => loadResponses(c.id)} className="w-full text-[9px] flex items-center justify-center gap-1 py-1.5 rounded-lg" style={{ background: 'rgba(167,139,250,0.06)', border: '1px solid rgba(167,139,250,0.15)', color: '#64748b' }}><Repeat size={9}/> Refresh</button>
                         </div>
                       );
                     })()}

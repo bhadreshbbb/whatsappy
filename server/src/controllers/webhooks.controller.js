@@ -219,86 +219,142 @@ export const webhooksController = {
         }
       }
 
+      // Contacts name map (Meta sends contact profile alongside messages)
+      const contactsMap = {};
+      for (const c of (value.contacts || [])) {
+        if (c.wa_id) contactsMap[normalizePhone(c.wa_id)] = c.profile?.name || null;
+      }
+
       // ── Handle incoming messages ─────────────────────────────────────────────
       for (const msg of messages) {
-        const phone   = normalizePhone(msg.from);
-        const msgType = msg.type; // 'text', 'button', 'interactive'
-        let responseText = '';
-        let responseType = 'custom';
+        const phone      = normalizePhone(msg.from);
+        const incomingId = msg.id;   // wamid of THIS incoming message
+        const contextId  = msg.context?.id || null; // wamid of the message user is REPLYING TO
+        const timestamp  = msg.timestamp ? new Date(Number(msg.timestamp) * 1000).toISOString() : new Date().toISOString();
+        const senderName = contactsMap[phone] || null;
 
-        if (msgType === 'text') {
-          responseText = msg.text?.body || '';
-        } else if (msgType === 'button') {
-          // Quick reply button press
-          responseText = msg.button?.text || msg.button?.payload || '';
-        } else if (msgType === 'interactive') {
-          responseText = msg.interactive?.button_reply?.title
-            || msg.interactive?.list_reply?.title
-            || '';
+        let responseText = '';
+        let isQuickReply = false;
+
+        switch (msg.type) {
+          case 'text':
+            responseText = msg.text?.body || '';
+            break;
+          case 'button':
+            // Quick reply button tap
+            responseText = msg.button?.text || msg.button?.payload || '';
+            isQuickReply = true;
+            break;
+          case 'interactive':
+            responseText = msg.interactive?.button_reply?.title
+              || msg.interactive?.list_reply?.title
+              || '';
+            isQuickReply = true;
+            break;
+          default:
+            responseText = `[${msg.type} message]`;
         }
 
-        if (!responseText || !phone) continue;
+        if (!phone) continue;
 
-        console.log(`[WhatsApp Webhook] Reply from ${phone}: "${responseText}"`);
+        // Dedup — skip if we already stored this exact incoming message
+        if (incomingId && (db.order_responses || []).find(r => r.incoming_wamid === incomingId)) {
+          console.log(`[WhatsApp Webhook] Duplicate incoming ${incomingId} — skipped`);
+          continue;
+        }
+
+        console.log(`[WhatsApp Webhook] Reply from ${phone}${senderName ? ' ('+senderName+')' : ''}: "${responseText}" [type=${msg.type}]${contextId ? ' ctx='+contextId : ''}`);
 
         const textLower = responseText.toLowerCase().trim();
 
-        // ── Classify response ──────────────────────────────────────────────────
-        const confirmPhrases = ['yes', 'confirmed', 'confirm', 'ha', 'haan', 'ok', 'okay', 'yes confirmed'];
-        const cancelPhrases  = ['cancel', 'no', 'nahi', 'nhi', 'cancel order', 'no cancel'];
-
-        if (confirmPhrases.some(p => textLower.includes(p))) responseType = 'confirmed';
-        else if (cancelPhrases.some(p => textLower.includes(p))) responseType = 'cancelled';
+        // ── Classify ──────────────────────────────────────────────────────────
+        const confirmPhrases = ['yes', 'confirmed', 'confirm', 'ha', 'haan', 'ok', 'okay'];
+        const cancelPhrases  = ['cancel', 'no', 'nahi', 'nhi'];
+        let responseType;
+        if (confirmPhrases.some(p => textLower === p || textLower.includes(p))) responseType = 'confirmed';
+        else if (cancelPhrases.some(p => textLower === p || textLower.includes(p)))  responseType = 'cancelled';
         else responseType = 'custom';
 
-        // ── Find the latest pending order for this phone ───────────────────────
-        const pendingOrders = (db.orders || [])
-          .filter(o => o.channel_id === channelId && o.phone === phone && o.status === 'pending')
-          .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+        // ── Find originating execution via context.id (most reliable) ──────────
+        let execution = null;
+        if (contextId) {
+          execution = (db.abandoned_cart_executions || []).find(e => e.wamid === contextId);
+        }
+        // Fallback: latest order_confirmation execution for this phone
+        if (!execution) {
+          execution = (db.abandoned_cart_executions || [])
+            .filter(e => e.phone === phone && e.campaign_type === 'order_confirmation')
+            .sort((a, b) => new Date(b.sent_at) - new Date(a.sent_at))[0] || null;
+        }
 
-        const order = pendingOrders[0];
+        // ── Find order linked to this execution or latest pending order ─────────
+        let order = null;
+        if (execution?.order_id) {
+          order = (db.orders || []).find(o => o.id === execution.order_id);
+        }
+        if (!order) {
+          order = (db.orders || [])
+            .filter(o => o.channel_id === channelId && o.phone === phone)
+            .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0] || null;
+        }
 
-        // Find campaign execution this response is for
-        const execution = (db.abandoned_cart_executions || [])
-          .filter(e => e.phone === phone && e.campaign_type === 'order_confirmation')
-          .sort((a, b) => new Date(b.sent_at) - new Date(a.sent_at))[0];
+        // ── Find visitor for name ──────────────────────────────────────────────
+        const visitor = db.website_visitors.find(v =>
+          v.channel_id === channelId && v.phone === phone
+        );
+        const displayName = senderName || visitor?.name || order?.name || 'Unknown';
 
         // ── Store response ─────────────────────────────────────────────────────
         if (!db.order_responses) db.order_responses = [];
-        db.order_responses.push({
-          id:            (db.order_responses.length || 0) + 1,
-          channel_id:    channelId,
-          phone:         phone,
-          order_id:      order?.id || null,
-          order_number:  order?.order_number || null,
-          campaign_id:   execution?.campaign_id || null,
-          response_type: responseType,
-          response_text: responseText,
-          responded_at:  new Date().toISOString(),
-        });
+        const responseRecord = {
+          id:             (db.order_responses.length || 0) + 1,
+          channel_id:     channelId,
+          phone:          phone,
+          name:           displayName,
+          incoming_wamid: incomingId,
+          context_wamid:  contextId,
+          order_id:       order?.id || null,
+          order_number:   order?.order_number || null,
+          campaign_id:    execution?.campaign_id || null,
+          campaign_name:  execution?.campaign_name || null,
+          response_type:  responseType,
+          response_text:  responseText,
+          is_quick_reply: isQuickReply,
+          msg_type:       msg.type,
+          raw_payload:    JSON.stringify(msg),
+          responded_at:   timestamp,
+        };
+        db.order_responses.push(responseRecord);
 
         // ── Update order status ────────────────────────────────────────────────
         if (order) {
-          if (responseType === 'confirmed') {
-            order.status = 'confirmed';
-            order.confirmed_at = new Date().toISOString();
-            console.log(`[WhatsApp Webhook] Order ${order.order_number} CONFIRMED by ${phone}`);
-          } else if (responseType === 'cancelled') {
-            order.status = 'cancelled';
-            order.cancelled_at = new Date().toISOString();
-            console.log(`[WhatsApp Webhook] Order ${order.order_number} CANCELLED by ${phone}`);
+          if (responseType === 'confirmed' && order.status === 'pending') {
+            order.status       = 'confirmed';
+            order.confirmed_at = timestamp;
+            console.log(`[WhatsApp Webhook] ✓ Order ${order.order_number} CONFIRMED by ${phone}`);
+          } else if (responseType === 'cancelled' && order.status !== 'cancelled') {
+            order.status        = 'cancelled';
+            order.cancelled_at  = timestamp;
+            console.log(`[WhatsApp Webhook] ✗ Order ${order.order_number} CANCELLED by ${phone}`);
           }
         }
 
-        // ── Opt-out handling ───────────────────────────────────────────────────
+        // ── Mark execution as responded ────────────────────────────────────────
+        if (execution) {
+          execution.user_replied    = true;
+          execution.reply_text      = responseText;
+          execution.reply_type      = responseType;
+          execution.reply_is_qr     = isQuickReply;
+          execution.replied_at      = timestamp;
+        }
+
+        // ── Opt-out ────────────────────────────────────────────────────────────
         if (['stop', 'unsubscribe'].some(p => textLower.includes(p))) {
-          const visitor = db.website_visitors.find(v =>
-            v.channel_id === channelId && v.phone === phone
-          );
-          if (visitor) {
-            visitor.is_opted_out = true;
-            console.log(`[WhatsApp Webhook] ${phone} opted out`);
-          }
+          if (visitor) { visitor.is_opted_out = true; }
+        }
+        // ── Opt-in ─────────────────────────────────────────────────────────────
+        if (textLower === 'start') {
+          if (visitor) { visitor.is_opted_out = false; }
         }
       }
 
@@ -308,28 +364,61 @@ export const webhooksController = {
     }
   },
 
-  // ── 3. Get order responses for a campaign ────────────────────────────────────
+  // ── 3. Get order responses for a campaign — flat list + per-user grouped ─────
   async getOrderResponses(req, res) {
     try {
       const db        = getDb();
       const channelId = req.headers['x-channel-id'] || 'demo';
       const { campaignId } = req.params;
 
-      const responses = (db.order_responses || [])
+      const allResponses = (db.order_responses || [])
         .filter(r => r.channel_id === channelId &&
           (campaignId === 'all' || String(r.campaign_id) === String(campaignId))
         )
-        .sort((a, b) => new Date(b.responded_at) - new Date(a.responded_at))
-        .slice(0, 100);
+        .sort((a, b) => new Date(b.responded_at) - new Date(a.responded_at));
 
+      // ── Summary ───────────────────────────────────────────────────────────────
       const summary = {
-        total:     responses.length,
-        confirmed: responses.filter(r => r.response_type === 'confirmed').length,
-        cancelled: responses.filter(r => r.response_type === 'cancelled').length,
-        custom:    responses.filter(r => r.response_type === 'custom').length,
+        total:     allResponses.length,
+        confirmed: allResponses.filter(r => r.response_type === 'confirmed').length,
+        cancelled: allResponses.filter(r => r.response_type === 'cancelled').length,
+        custom:    allResponses.filter(r => r.response_type === 'custom').length,
+        quick_replies: allResponses.filter(r => r.is_quick_reply).length,
+        custom_texts:  allResponses.filter(r => !r.is_quick_reply && r.msg_type === 'text').length,
       };
 
-      res.json({ responses, summary });
+      // ── Per-user grouped ──────────────────────────────────────────────────────
+      const byPhone = {};
+      for (const r of allResponses) {
+        if (!byPhone[r.phone]) {
+          byPhone[r.phone] = {
+            phone:        r.phone,
+            name:         r.name || 'Unknown',
+            order_number: r.order_number,
+            order_id:     r.order_id,
+            latest_type:  r.response_type,    // most recent response type
+            latest_text:  r.response_text,
+            latest_at:    r.responded_at,
+            reply_count:  0,
+            replies:      [],
+          };
+        }
+        byPhone[r.phone].reply_count++;
+        byPhone[r.phone].replies.push({
+          id:            r.id,
+          response_type: r.response_type,
+          response_text: r.response_text,
+          is_quick_reply: r.is_quick_reply,
+          msg_type:      r.msg_type,
+          responded_at:  r.responded_at,
+          raw_payload:   r.raw_payload,        // full Meta payload for that message
+        });
+      }
+
+      const perUser = Object.values(byPhone)
+        .sort((a, b) => new Date(b.latest_at) - new Date(a.latest_at));
+
+      res.json({ responses: allResponses.slice(0, 100), per_user: perUser, summary });
     } catch (err) { res.status(500).json({ error: err.message }); }
   },
 
