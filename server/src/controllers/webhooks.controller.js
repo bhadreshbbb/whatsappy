@@ -410,177 +410,260 @@ export const webhooksController = {
 
   async webhookIncoming(req, res) {
     try {
-      // Always respond 200 quickly — Meta expects fast response
+      // Meta expects 200 within 20s — respond immediately, process async
       res.sendStatus(200);
 
       const db   = getDb();
       const body = req.body;
 
-      // Parse Meta webhook format
-      const entry   = body?.entry?.[0];
-      const changes = entry?.changes?.[0];
-      const value   = changes?.value;
-      if (!value) return;
+      // Meta webhook root structure:
+      // { object: "whatsapp_business_account", entry: [{ id, changes: [{ value, field }] }] }
+      if (body?.object !== 'whatsapp_business_account') return;
 
-      const messages  = value.messages  || [];
-      const statuses  = value.statuses  || [];
-      const channelId = 'demo'; // single channel for now
+      for (const entry of (body.entry || [])) {
+        for (const change of (entry.changes || [])) {
+          if (change.field !== 'messages') continue;
+          const value = change.value;
+          if (!value) continue;
 
-      // ── Handle delivery/read statuses ───────────────────────────────────────
-      for (const st of statuses) {
-        const wamid  = st.id;
-        const status = st.status; // 'sent', 'delivered', 'read', 'failed'
-        const phone  = normalizePhone(st.recipient_id);
-        if (wamid && status) {
-          // Update execution record
-          const exec = (db.abandoned_cart_executions || []).find(e => e.wamid === wamid);
-          if (exec) {
-            exec.delivery_status = status;
-            if (status === 'read') exec.read_at = new Date().toISOString();
+          // value.metadata.phone_number_id → match to our channel
+          const phoneNumberId = value.metadata?.phone_number_id || '';
+          // Find channel by phone_number_id stored in settings
+          let channelId = 'demo';
+          for (const row of (db.channel_settings || [])) {
+            try {
+              const s = JSON.parse(row.settings || '{}');
+              if (s.whatsapp_phone_id && s.whatsapp_phone_id === phoneNumberId) {
+                channelId = row.channel_id;
+                break;
+              }
+            } catch (_) {}
           }
-        }
-      }
 
-      // Contacts name map (Meta sends contact profile alongside messages)
-      const contactsMap = {};
-      for (const c of (value.contacts || [])) {
-        if (c.wa_id) contactsMap[normalizePhone(c.wa_id)] = c.profile?.name || null;
-      }
-
-      // ── Handle incoming messages ─────────────────────────────────────────────
-      for (const msg of messages) {
-        const phone      = normalizePhone(msg.from);
-        const incomingId = msg.id;   // wamid of THIS incoming message
-        const contextId  = msg.context?.id || null; // wamid of the message user is REPLYING TO
-        const timestamp  = msg.timestamp ? new Date(Number(msg.timestamp) * 1000).toISOString() : new Date().toISOString();
-        const senderName = contactsMap[phone] || null;
-
-        let responseText = '';
-        let isQuickReply = false;
-
-        switch (msg.type) {
-          case 'text':
-            responseText = msg.text?.body || '';
-            break;
-          case 'button':
-            // Quick reply button tap
-            responseText = msg.button?.text || msg.button?.payload || '';
-            isQuickReply = true;
-            break;
-          case 'interactive':
-            responseText = msg.interactive?.button_reply?.title
-              || msg.interactive?.list_reply?.title
-              || '';
-            isQuickReply = true;
-            break;
-          default:
-            responseText = `[${msg.type} message]`;
-        }
-
-        if (!phone) continue;
-
-        // Dedup — skip if we already stored this exact incoming message
-        if (incomingId && (db.order_responses || []).find(r => r.incoming_wamid === incomingId)) {
-          console.log(`[WhatsApp Webhook] Duplicate incoming ${incomingId} — skipped`);
-          continue;
-        }
-
-        console.log(`[WhatsApp Webhook] Reply from ${phone}${senderName ? ' ('+senderName+')' : ''}: "${responseText}" [type=${msg.type}]${contextId ? ' ctx='+contextId : ''}`);
-
-        const textLower = responseText.toLowerCase().trim();
-
-        // ── Classify ──────────────────────────────────────────────────────────
-        const confirmPhrases = ['yes', 'confirmed', 'confirm', 'ha', 'haan', 'ok', 'okay'];
-        const cancelPhrases  = ['cancel', 'no', 'nahi', 'nhi'];
-        let responseType;
-        if (confirmPhrases.some(p => textLower === p || textLower.includes(p))) responseType = 'confirmed';
-        else if (cancelPhrases.some(p => textLower === p || textLower.includes(p)))  responseType = 'cancelled';
-        else responseType = 'custom';
-
-        // ── Find originating execution via context.id (most reliable) ──────────
-        let execution = null;
-        if (contextId) {
-          execution = (db.abandoned_cart_executions || []).find(e => e.wamid === contextId);
-        }
-        // Fallback: latest order_confirmation execution for this phone
-        if (!execution) {
-          execution = (db.abandoned_cart_executions || [])
-            .filter(e => e.phone === phone && e.campaign_type === 'order_confirmation')
-            .sort((a, b) => new Date(b.sent_at) - new Date(a.sent_at))[0] || null;
-        }
-
-        // ── Find order linked to this execution or latest pending order ─────────
-        let order = null;
-        if (execution?.order_id) {
-          order = (db.orders || []).find(o => o.id === execution.order_id);
-        }
-        if (!order) {
-          order = (db.orders || [])
-            .filter(o => o.channel_id === channelId && o.phone === phone)
-            .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0] || null;
-        }
-
-        // ── Find visitor for name ──────────────────────────────────────────────
-        const visitor = db.website_visitors.find(v =>
-          v.channel_id === channelId && v.phone === phone
-        );
-        const displayName = senderName || visitor?.name || order?.name || 'Unknown';
-
-        // ── Store response ─────────────────────────────────────────────────────
-        if (!db.order_responses) db.order_responses = [];
-        const responseRecord = {
-          id:             (db.order_responses.length || 0) + 1,
-          channel_id:     channelId,
-          phone:          phone,
-          name:           displayName,
-          incoming_wamid: incomingId,
-          context_wamid:  contextId,
-          order_id:       order?.id || null,
-          order_number:   order?.order_number || null,
-          campaign_id:    execution?.campaign_id || null,
-          campaign_name:  execution?.campaign_name || null,
-          response_type:  responseType,
-          response_text:  responseText,
-          is_quick_reply: isQuickReply,
-          msg_type:       msg.type,
-          raw_payload:    JSON.stringify(msg),
-          responded_at:   timestamp,
-        };
-        db.order_responses.push(responseRecord);
-
-        // ── Update order status ────────────────────────────────────────────────
-        if (order) {
-          if (responseType === 'confirmed' && order.status === 'pending') {
-            order.status       = 'confirmed';
-            order.confirmed_at = timestamp;
-            console.log(`[WhatsApp Webhook] ✓ Order ${order.order_number} CONFIRMED by ${phone}`);
-          } else if (responseType === 'cancelled' && order.status !== 'cancelled') {
-            order.status        = 'cancelled';
-            order.cancelled_at  = timestamp;
-            console.log(`[WhatsApp Webhook] ✗ Order ${order.order_number} CANCELLED by ${phone}`);
+          // ── contacts[] → name map keyed by normalized phone ──────────────────
+          // Meta: value.contacts = [{ wa_id: "919...", profile: { name: "Priya" } }]
+          const contactsMap = {};
+          for (const c of (value.contacts || [])) {
+            if (c.wa_id) contactsMap[normalizePhone(c.wa_id)] = c.profile?.name || null;
           }
-        }
 
-        // ── Mark execution as responded ────────────────────────────────────────
-        if (execution) {
-          execution.user_replied    = true;
-          execution.reply_text      = responseText;
-          execution.reply_type      = responseType;
-          execution.reply_is_qr     = isQuickReply;
-          execution.replied_at      = timestamp;
-        }
+          // ── statuses[] — delivery/read/failed updates ───────────────────────
+          // Meta: value.statuses = [{ id, status, timestamp, recipient_id, errors?, conversation?, pricing? }]
+          for (const st of (value.statuses || [])) {
+            const wamid       = st.id;                          // wamid we sent
+            const status      = st.status;                      // sent|delivered|read|failed
+            const recipientId = normalizePhone(st.recipient_id);
+            const ts          = st.timestamp
+              ? new Date(Number(st.timestamp) * 1000).toISOString()
+              : new Date().toISOString();
 
-        // ── Opt-out ────────────────────────────────────────────────────────────
-        if (['stop', 'unsubscribe'].some(p => textLower.includes(p))) {
-          if (visitor) { visitor.is_opted_out = true; }
-        }
-        // ── Opt-in ─────────────────────────────────────────────────────────────
-        if (textLower === 'start') {
-          if (visitor) { visitor.is_opted_out = false; }
+            const exec = (db.abandoned_cart_executions || []).find(e => e.wamid === wamid);
+            if (exec) {
+              exec.delivery_status = status;
+              if (status === 'delivered') exec.delivered_at = ts;
+              if (status === 'read')      exec.read_at      = ts;
+              if (status === 'failed') {
+                // Meta: errors = [{ code, title, message, error_data: { details } }]
+                const err = st.errors?.[0];
+                exec.delivery_error = err
+                  ? `${err.code}: ${err.title || err.message || 'Failed'}`
+                  : 'Delivery failed';
+                exec.failed_at = ts;
+              }
+            }
+            console.log(`[WhatsApp Status] wamid=${wamid} status=${status} phone=${recipientId}`);
+          }
+
+          // ── messages[] — incoming user messages ─────────────────────────────
+          // Meta: value.messages = [{ from, id, timestamp, type, text?, button?, interactive?, context? }]
+          for (const msg of (value.messages || [])) {
+            // msg.from = user's wa_id e.g. "919106862019" (no +, no spaces)
+            const phone       = normalizePhone(msg.from);
+            // msg.id = wamid of this incoming message
+            const incomingId  = msg.id;
+            // msg.timestamp = Unix epoch string e.g. "1714380000"
+            const timestamp   = msg.timestamp
+              ? new Date(Number(msg.timestamp) * 1000).toISOString()
+              : new Date().toISOString();
+            // msg.context.id = wamid of the message this user is REPLYING TO
+            // msg.context.from = our phone number
+            const contextId   = msg.context?.id   || null;
+            const contextFrom = msg.context?.from  || null;
+            const senderName  = contactsMap[phone] || null;
+
+            // ── Extract text based on msg.type ─────────────────────────────────
+            // Meta message types: text | button | interactive | image | audio |
+            //   document | video | sticker | location | contacts | reaction | order | unknown
+            let responseText = '';
+            let buttonPayload = null;
+            let isQuickReply  = false;
+
+            switch (msg.type) {
+              case 'text':
+                // { text: { body: "user typed this" } }
+                responseText = msg.text?.body || '';
+                break;
+
+              case 'button':
+                // Template quick reply button tap
+                // { button: { payload: "Yes, Confirmed", text: "Yes, Confirmed" } }
+                // payload = what we set in template button config
+                // text    = display label (same as payload for template quick replies)
+                responseText  = msg.button?.text    || msg.button?.payload || '';
+                buttonPayload = msg.button?.payload || null;
+                isQuickReply  = true;
+                break;
+
+              case 'interactive':
+                // Interactive message reply (non-template)
+                // button_reply: { type: "button_reply", button_reply: { id: "btn_1", title: "Yes" } }
+                // list_reply:   { type: "list_reply",   list_reply:   { id: "row_1", title: "Option" } }
+                if (msg.interactive?.type === 'button_reply') {
+                  responseText  = msg.interactive.button_reply?.title || '';
+                  buttonPayload = msg.interactive.button_reply?.id    || null;
+                } else if (msg.interactive?.type === 'list_reply') {
+                  responseText  = msg.interactive.list_reply?.title || '';
+                  buttonPayload = msg.interactive.list_reply?.id    || null;
+                }
+                isQuickReply = true;
+                break;
+
+              case 'reaction':
+                // { reaction: { message_id: "wamid...", emoji: "👍" } }
+                responseText = msg.reaction?.emoji || '[reaction]';
+                break;
+
+              case 'image':
+              case 'video':
+              case 'audio':
+              case 'document':
+              case 'sticker':
+                responseText = `[${msg.type}]`;
+                break;
+
+              case 'location':
+                responseText = '[location shared]';
+                break;
+
+              case 'order':
+                // WhatsApp catalog order
+                responseText = '[catalog order placed]';
+                break;
+
+              default:
+                responseText = `[${msg.type || 'unknown'} message]`;
+            }
+
+            if (!phone) continue;
+
+            // Dedup — Meta may deliver same webhook more than once
+            if (incomingId && (db.order_responses || []).find(r => r.incoming_wamid === incomingId)) {
+              console.log(`[WhatsApp Webhook] Duplicate wamid=${incomingId} — skipped`);
+              continue;
+            }
+
+            console.log(`[WhatsApp Webhook] From ${phone}${senderName ? ` (${senderName})` : ''} type=${msg.type} text="${responseText}"${contextId ? ` replies_to=${contextId}` : ''}`);
+
+            const textLower = responseText.toLowerCase().trim();
+
+            // ── Classify intent ────────────────────────────────────────────────
+            const CONFIRM_WORDS  = ['yes', 'confirmed', 'confirm', 'ha', 'haan', 'ok', 'okay', 'haa'];
+            const CANCEL_WORDS   = ['cancel', 'no', 'nahi', 'nhi', 'mat', 'band', 'rokoo', 'ruko'];
+            let responseType;
+            if (CONFIRM_WORDS.some(w => textLower === w || textLower.startsWith(w + ' ') || textLower.endsWith(' ' + w)))
+              responseType = 'confirmed';
+            else if (CANCEL_WORDS.some(w => textLower === w || textLower.startsWith(w + ' ') || textLower.endsWith(' ' + w)))
+              responseType = 'cancelled';
+            else
+              responseType = 'custom';
+
+            // ── Find originating execution via context.id ──────────────────────
+            // context.id = wamid of our outgoing template message
+            let execution = null;
+            if (contextId) {
+              execution = (db.abandoned_cart_executions || []).find(e => e.wamid === contextId);
+            }
+            // Fallback: latest order_confirmation execution for this phone in this channel
+            if (!execution) {
+              execution = (db.abandoned_cart_executions || [])
+                .filter(e => e.phone === phone && e.campaign_type === 'order_confirmation' && e.channel_id === channelId)
+                .sort((a, b) => new Date(b.sent_at) - new Date(a.sent_at))[0] || null;
+            }
+
+            // ── Find linked order ──────────────────────────────────────────────
+            let order = null;
+            if (execution?.order_id) {
+              order = (db.orders || []).find(o => o.id === execution.order_id);
+            }
+            if (!order) {
+              order = (db.orders || [])
+                .filter(o => o.channel_id === channelId && o.phone === phone)
+                .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0] || null;
+            }
+
+            // ── Visitor ────────────────────────────────────────────────────────
+            const visitor     = (db.website_visitors || []).find(v => v.channel_id === channelId && v.phone === phone);
+            const displayName = senderName || visitor?.name || order?.name || 'Unknown';
+
+            // ── Store response ─────────────────────────────────────────────────
+            if (!db.order_responses) db.order_responses = [];
+            const responseRecord = {
+              id:             (db.order_responses.length || 0) + 1,
+              channel_id:     channelId,
+              phone:          phone,              // msg.from (normalized)
+              name:           displayName,        // contacts[].profile.name
+              incoming_wamid: incomingId,         // msg.id (this message's wamid)
+              context_wamid:  contextId,          // msg.context.id (replied-to wamid)
+              context_from:   contextFrom,        // msg.context.from (our number)
+              order_id:       order?.id       || null,
+              order_number:   order?.order_number || null,
+              campaign_id:    execution?.campaign_id   || null,
+              campaign_name:  execution?.campaign_name || null,
+              response_type:  responseType,       // confirmed | cancelled | custom
+              response_text:  responseText,       // actual text user sent
+              button_payload: buttonPayload,      // msg.button.payload (if quick reply)
+              is_quick_reply: isQuickReply,       // true for button/interactive types
+              msg_type:       msg.type,           // exact Meta type
+              raw_payload:    JSON.stringify(msg),// full Meta message object
+              responded_at:   timestamp,          // from msg.timestamp (Unix→ISO)
+            };
+            db.order_responses.push(responseRecord);
+
+            // ── Update order status ────────────────────────────────────────────
+            if (order) {
+              if (responseType === 'confirmed' && order.status === 'pending') {
+                order.status = 'confirmed';
+                order.confirmed_at = timestamp;
+                console.log(`[WhatsApp Webhook] ✓ Order ${order.order_number} CONFIRMED by ${phone}`);
+              } else if (responseType === 'cancelled' && order.status !== 'cancelled') {
+                order.status = 'cancelled';
+                order.cancelled_at = timestamp;
+                console.log(`[WhatsApp Webhook] ✗ Order ${order.order_number} CANCELLED by ${phone}`);
+              }
+            }
+
+            // ── Mark execution as replied ──────────────────────────────────────
+            if (execution) {
+              execution.user_replied  = true;
+              execution.reply_text    = responseText;
+              execution.reply_type    = responseType;
+              execution.reply_is_qr   = isQuickReply;
+              execution.replied_at    = timestamp;
+            }
+
+            // ── Opt-out / Opt-in ───────────────────────────────────────────────
+            if (['stop', 'unsubscribe'].some(w => textLower.includes(w))) {
+              if (visitor) { visitor.is_opted_out = true; db.save(); }
+              console.log(`[WhatsApp Webhook] ${phone} opted OUT`);
+            } else if (textLower === 'start') {
+              if (visitor) { visitor.is_opted_out = false; db.save(); }
+              console.log(`[WhatsApp Webhook] ${phone} opted IN`);
+            }
+          }
+
+          db.save();
         }
       }
-
-      db.save();
     } catch (err) {
       console.error('[WhatsApp Webhook] Error:', err.message);
     }
