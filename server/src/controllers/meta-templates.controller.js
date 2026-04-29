@@ -45,11 +45,13 @@ function sanitizeMetaText(text) {
  * Replaces \n with " | " so title+price stays readable on one line.
  */
 function sanitizeVarValue(text) {
-  if (!text) return text;
-  return text
-    .replace(/\n/g, ' | ')          // newlines in variable values → " | "
-    .replace(/ {2,}/g, ' ')         // collapse multi-space
+  // Meta rejects empty string parameters — always return at least a single space
+  if (!text && text !== 0) return ' ';
+  const s = String(text)
+    .replace(/\n/g, ' | ')          // newlines → " | " (Meta disallows \n in params)
+    .replace(/ {2,}/g, ' ')
     .trim();
+  return s || ' ';                  // never return empty string to Meta
 }
 
 /**

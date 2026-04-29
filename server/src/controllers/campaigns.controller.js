@@ -536,6 +536,40 @@ export const campaignsController = {
         result.product_used = { name: productName, price: productPrice, url: productUrl, image: productImage, media_id: productMediaId, v1, v2 };
       }
 
+      // ── Build productConfig for order_confirmation campaigns ─────────────────
+      if (campaign.campaign_type === 'order_confirmation' && !metaTpl.is_carousel) {
+        // Find the most recent real order for this phone, or use dummy data
+        const realOrder = (db.orders || [])
+          .filter(o => o.channel_id === channelId && o.phone)
+          .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
+
+        const testName     = realOrder?.name     || 'Test Customer';
+        const testOrderId  = realOrder?.order_number || 'ORD-TEST-001';
+        const testProducts = realOrder?.products_summary || 'Blue Kurti × 1';
+        const testTotal    = String(realOrder?.total_amount || '799');
+        const testPayment  = realOrder?.payment_method || 'Cash on Delivery';
+        const testImage    = realOrder?.product_image || metaTpl.header_image_url || '';
+
+        productConfig = {
+          cards: [{
+            name:             testName,
+            customer_name:    testName,
+            order_id:         testOrderId,
+            order_number:     testOrderId,
+            order_products:   testProducts,
+            products_summary: testProducts,
+            order_total:      testTotal,
+            total_amount:     testTotal,
+            payment_method:   testPayment,
+            delivery_date:    '3–5 business days',
+            image:            testImage,
+            image_url:        testImage,
+            media_id:         metaTpl.header_image_id || '',
+          }],
+        };
+        result.product_used = { name: testName, order_id: testOrderId, products: testProducts, total: testTotal, payment: testPayment };
+      }
+
       const sendPayload = buildSendMessagePayload(metaTpl, productConfig, phone, metaLangCode, campaign.id);
       result.template = metaTpl.name;
       result.payload  = sendPayload;
