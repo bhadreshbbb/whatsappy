@@ -1478,6 +1478,25 @@ function buildVariables(db, cam, evt, visitor, type, channelId) {
     };
   }
 
+  if (type === 'order') {
+    // Order confirmation — evt is a purchase_history or order record
+    let productsSummary = '';
+    try {
+      const items = JSON.parse(evt.products || evt.line_items || '[]');
+      productsSummary = items.map(i => `${i.name || i.title} × ${i.quantity || 1}`).join(', ') || evt.product_name || '';
+    } catch (_) { productsSummary = evt.product_name || ''; }
+    return {
+      ...base,
+      customer_name:  evt.name    || visitor?.name    || 'Customer',
+      order_id:       evt.order_id || evt.order_number || '',
+      order_products: productsSummary,
+      order_total:    String(evt.total_amount || 0),
+      payment_method: evt.payment_method || (evt.is_cod ? 'Cash on Delivery' : 'Online Payment'),
+      delivery_date:  evt.delivery_date  || '3–5 business days',
+      product_image:  evt.product_image  || '',
+    };
+  }
+
   // FLOW 5 & 6 — post_purchase / broadcast: filled in by AI service after this call
   return { ...base, product_name: '', product_image: '', product_price: '', ai_reason: '' };
 }

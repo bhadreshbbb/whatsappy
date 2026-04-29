@@ -85,6 +85,11 @@ const FIELD_EXAMPLES = {
   customer_name:       'Priya Sharma',
   cart_total:          '₹1,499',
   cart_link:           'cart-abc123',
+  order_id:            'ORD-20260429-1042',
+  order_products:      'Blue Cotton Kurti × 1',
+  order_total:         '799',
+  payment_method:      'Cash on Delivery',
+  delivery_date:       '3–5 business days',
 };
 
 /**
@@ -302,6 +307,12 @@ function buildMetaComponents(tpl, { preserveVarNumbers = false } = {}) {
       if (bType === 'COPY_CODE') {
         const coupon = String(b.coupon_code || b.example || '').trim().toUpperCase() || 'DISCOUNT10';
         return { type: 'COPY_CODE', example: coupon };
+      }
+      if (bType === 'FLOW') {
+        const flowBtn = { type: 'FLOW', text: sanitizeButtonText(b.text) };
+        if (b.flow_id) flowBtn.flow_id = String(b.flow_id).trim();
+        if (b.navigate_screen) flowBtn.navigate_screen = String(b.navigate_screen).trim();
+        return flowBtn;
       }
       return b;
     });
@@ -991,9 +1002,14 @@ function getFieldValue(varNum, varMap, productCard) {
         return seg;
       } catch { return ''; }
     }
-    case 'customer_name':  return productCard?.name || 'Customer';
+    case 'customer_name':  return productCard?.name || productCard?.customer_name || 'Customer';
     case 'cart_total':     return productCard?.cart_total || '';
     case 'cart_link':      return productCard?.link || '';
+    case 'order_id':       return productCard?.order_id || productCard?.order_number || '';
+    case 'order_products': return productCard?.order_products || productCard?.products_summary || '';
+    case 'order_total':    return String(productCard?.order_total || productCard?.total_amount || '');
+    case 'payment_method': return productCard?.payment_method || '';
+    case 'delivery_date':  return productCard?.delivery_date || '3–5 business days';
     case 'custom':         return String((varMap || {})[`${varNum}_custom`] || '');
     default:               return '';
   }

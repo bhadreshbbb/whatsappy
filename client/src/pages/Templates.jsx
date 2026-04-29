@@ -45,8 +45,13 @@ const VAR_FIELD_OPTIONS = [
   { value: 'product_link',        label: 'Product Link'               },
   { value: 'customer_name',       label: 'Customer Name'              },
   { value: 'cart_total',          label: 'Cart Total'                 },
-  { value: 'cart_link',     label: 'Cart Link'      },
-  { value: 'custom',        label: 'Custom Fixed Text' },
+  { value: 'cart_link',           label: 'Cart Link'                  },
+  { value: 'order_id',            label: 'Order ID / Number'          },
+  { value: 'order_products',      label: 'Products Summary'           },
+  { value: 'order_total',         label: 'Order Total Amount'         },
+  { value: 'payment_method',      label: 'Payment Method (COD/Online)'},
+  { value: 'delivery_date',       label: 'Expected Delivery Date'     },
+  { value: 'custom',              label: 'Custom Fixed Text'          },
 ];
 const STATUS_CFG = {
   APPROVED:       { color: 'text-green-400',  bg: 'bg-green-500/10 border-green-500/20',   icon: CheckCircle2, label: 'Approved'       },
@@ -94,6 +99,42 @@ const BLANK_SINGLE_TPL = {
   carousel_cards: [],
 };
 
+// Order Confirmation template — UTILITY category, 5 named vars, quick replies + URL + Flow
+const BLANK_ORDER_CONF_TPL = {
+  name: 'order_confirmation_v1',
+  category: 'UTILITY',
+  language: 'en',
+  is_carousel: false,
+  auto_product_mode: false,
+  header_type: 'IMAGE',
+  header_text: '',
+  header_image_id: '',
+  header_image_url: '',
+  body: 'Hello {{1}} 👋\n\n✅ Your order *#{{2}}* is confirmed!\n\n📦 *Items:* {{3}}\n💰 *Total:* ₹{{4}}\n🚚 *Payment:* {{5}}\n\nWe\'ll notify you once your order is shipped. Thank you for shopping with us!',
+  footer: 'Reply HELP for support',
+  buttons: [
+    { type: 'QUICK_REPLY', text: '✅ Yes, Confirmed' },
+    { type: 'URL',         text: 'Track My Order', url: 'https://yourstore.com/orders/{{1}}' },
+    { type: 'QUICK_REPLY', text: '❌ Cancel Order' },
+  ],
+  variable_labels: {
+    '1': 'customer_name',
+    '2': 'order_id',
+    '3': 'order_products',
+    '4': 'order_total',
+    '5': 'payment_method',
+  },
+  example_values: {
+    '1': 'Priya',
+    '2': 'ORD-20260429-1042',
+    '3': 'Blue Cotton Kurti × 1',
+    '4': '799',
+    '5': 'Cash on Delivery',
+    'btn_1': 'ORD-20260429-1042',
+  },
+  carousel_cards: [],
+};
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Utility: extract {{N}} variable numbers from text, sorted
 function extractVars(text) {
@@ -110,6 +151,11 @@ function resolveText(bodyText, varMap, productData, sampleData) {
     customer_name: 'Priya',
     cart_total:    '₹1,499',
     cart_link:     'https://store.com/cart',
+    order_id:       'ORD-20260429-1042',
+    order_products: 'Blue Cotton Kurti × 1',
+    order_total:    '799',
+    payment_method: 'Cash on Delivery',
+    delivery_date:  '3–5 business days',
   };
   let text = bodyText || '';
   for (const [varNum, field] of Object.entries(varMap || {})) {
@@ -290,6 +336,20 @@ export default function Templates() {
       ],
     });
   }
+  async function openCreateOrderConf() {
+    setView('create'); setError(''); loadGallery();
+    const shopUrl = await getShopUrl();
+    const base = shopUrl || 'https://yourstore.com';
+    setForm({
+      ...BLANK_ORDER_CONF_TPL,
+      _templateType: 'order_confirmation',
+      buttons: [
+        { type: 'QUICK_REPLY', text: '✅ Yes, Confirmed' },
+        { type: 'URL',         text: 'Track My Order', url: `${base}/orders/{{1}}` },
+        { type: 'QUICK_REPLY', text: '❌ Cancel Order'  },
+      ],
+    });
+  }
   function copyName(name) { navigator.clipboard.writeText(name); setCopied(name); setTimeout(()=>setCopied(null),1500); }
 
   async function checkSendPayload(tpl) {
@@ -350,13 +410,20 @@ export default function Templates() {
           <h1 className="text-white text-xl font-bold">Meta Templates</h1>
           <p className="text-slate-400 text-sm mt-0.5">Create, submit for approval, assign products, send campaigns</p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <button onClick={openCreateSingle}
             className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium transition-all"
             style={{ background: 'rgba(99,102,241,0.15)', border: '1px solid rgba(99,102,241,0.3)', color: '#818cf8' }}
             onMouseEnter={e => e.currentTarget.style.background='rgba(99,102,241,0.25)'}
             onMouseLeave={e => e.currentTarget.style.background='rgba(99,102,241,0.15)'}>
-            <Image size={15} /> Custom Single Product
+            <Image size={15} /> Single Product
+          </button>
+          <button onClick={openCreateOrderConf}
+            className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium transition-all"
+            style={{ background: 'rgba(34,197,94,0.12)', border: '1px solid rgba(34,197,94,0.3)', color: '#4ade80' }}
+            onMouseEnter={e => e.currentTarget.style.background='rgba(34,197,94,0.22)'}
+            onMouseLeave={e => e.currentTarget.style.background='rgba(34,197,94,0.12)'}>
+            📦 Order Confirmation
           </button>
           <button onClick={openCreate}
             className="flex items-center gap-2 bg-green-600 hover:bg-green-500 text-white px-4 py-2 rounded-xl text-sm font-medium transition-all">
@@ -1008,22 +1075,46 @@ function CreateView({ form, setForm, error, setError, loading, onSubmit, onBack,
                 placeholder="Reply STOP to unsubscribe" className="input text-sm" />
             </div>
 
+            {/* Order Confirmation hint banner */}
+            {form._templateType === 'order_confirmation' && (
+              <div className="rounded-xl px-4 py-3 flex items-start gap-3" style={{ background:'rgba(34,197,94,0.06)', border:'1px solid rgba(34,197,94,0.2)' }}>
+                <span className="text-lg mt-0.5">📦</span>
+                <div>
+                  <p className="text-xs font-bold text-green-400">Order Confirmation Template</p>
+                  <p className="text-[11px] text-slate-400 mt-0.5 leading-relaxed">
+                    <strong className="text-slate-300">UTILITY</strong> category = faster Meta approval (usually &lt;1 hr).
+                    Variables: <span className="font-mono text-green-300">{'{{1}}'} name · {'{{2}}'} order# · {'{{3}}'} items · {'{{4}}'} total · {'{{5}}'} payment</span>.
+                    Upload a product/brand image as header (optional but increases trust).
+                  </p>
+                  <p className="text-[10px] mt-1.5 text-slate-500">
+                    💡 Quick Reply buttons let customers confirm or cancel — replies are logged in chat. Track Order URL opens the order tracking page.
+                  </p>
+                </div>
+              </div>
+            )}
+
             {/* Buttons */}
             <div className="flex flex-col gap-2">
               <div className="flex items-center justify-between">
                 <label className="text-slate-400 text-xs font-medium">Buttons <span className="text-slate-600">(max 3)</span></label>
-                <div className="flex gap-1.5">
+                <div className="flex gap-1.5 flex-wrap">
                   {(form.buttons||[]).length < 3 && (<>
                     <button onClick={async () => { const shopUrl = await getShopUrl(); const base = shopUrl || 'https://yourstore.com'; f('buttons', [...(form.buttons||[]), { type:'URL', text:'View Product', url:`${base}/products/` }]); }}
                       className="var-btn flex items-center gap-1"><Link size={10}/> URL</button>
-                    {/* COPY_CODE only for single-product; QUICK_REPLY only for carousel */}
-                    {!form.is_carousel && !(form.buttons||[]).some(b => b.type === 'COPY_CODE') && (
+                    {/* COPY_CODE only for single-product; QUICK_REPLY for carousel + order confirmation */}
+                    {!form.is_carousel && !(form.buttons||[]).some(b => b.type === 'COPY_CODE') && form._templateType !== 'order_confirmation' && (
                       <button onClick={() => f('buttons', [...(form.buttons||[]), { type:'COPY_CODE', text:'Copy Coupon', coupon_code:'' }])}
                         className="var-btn flex items-center gap-1"><Copy size={10}/> Copy Code</button>
                     )}
-                    {form.is_carousel && (
+                    {/* Quick Reply allowed for carousel OR order confirmation */}
+                    {(form.is_carousel || form._templateType === 'order_confirmation') && (form.buttons||[]).filter(b=>b.type==='QUICK_REPLY').length < 2 && (
                       <button onClick={() => f('buttons', [...(form.buttons||[]), { type:'QUICK_REPLY', text:'Not Interested' }])}
                         className="var-btn flex items-center gap-1"><MessageSquare size={10}/> Quick Reply</button>
+                    )}
+                    {/* WhatsApp Flow button — order confirmation only */}
+                    {form._templateType === 'order_confirmation' && !(form.buttons||[]).some(b=>b.type==='FLOW') && (
+                      <button onClick={() => f('buttons', [...(form.buttons||[]), { type:'FLOW', text:'Confirm Order', flow_id:'', navigate_screen:'MAIN' }])}
+                        className="var-btn flex items-center gap-1" style={{color:'#22d3ee'}}>⚡ Flow</button>
                     )}
                     <button onClick={() => f('buttons', [...(form.buttons||[]), { type:'PHONE_NUMBER', text:'Call Us', phone_number:'+91XXXXXXXXXX' }])}
                       className="var-btn flex items-center gap-1"><Phone size={10}/> Phone</button>
@@ -1031,8 +1122,8 @@ function CreateView({ form, setForm, error, setError, loading, onSubmit, onBack,
                 </div>
               </div>
               {(form.buttons||[]).map((btn, bi) => {
-                const tagBg = btn.type==='URL'?'rgba(59,130,246,0.15)':btn.type==='COPY_CODE'?'rgba(168,85,247,0.15)':btn.type==='QUICK_REPLY'?'rgba(34,197,94,0.12)':'rgba(251,146,60,0.12)';
-                const tagColor = btn.type==='URL'?'#60a5fa':btn.type==='COPY_CODE'?'#c084fc':btn.type==='QUICK_REPLY'?'#4ade80':'#fb923c';
+                const tagBg   = btn.type==='URL'?'rgba(59,130,246,0.15)':btn.type==='COPY_CODE'?'rgba(168,85,247,0.15)':btn.type==='QUICK_REPLY'?'rgba(34,197,94,0.12)':btn.type==='FLOW'?'rgba(6,182,212,0.15)':'rgba(251,146,60,0.12)';
+                const tagColor= btn.type==='URL'?'#60a5fa':btn.type==='COPY_CODE'?'#c084fc':btn.type==='QUICK_REPLY'?'#4ade80':btn.type==='FLOW'?'#22d3ee':'#fb923c';
                 return (
                   <div key={bi}>
                     <div className="flex items-center gap-2 px-3 py-2 rounded-xl" style={{ background:'rgba(255,255,255,0.03)', border:'1px solid rgba(255,255,255,0.08)' }}>
@@ -1048,6 +1139,10 @@ function CreateView({ form, setForm, error, setError, loading, onSubmit, onBack,
                       {btn.type === 'PHONE_NUMBER' && (
                         <input value={btn.phone_number||''} onChange={e => { const bs=[...form.buttons]; bs[bi]={...bs[bi],phone_number:e.target.value}; f('buttons',bs); }}
                           placeholder="+91XXXXXXXXXX" className="input text-xs w-36 font-mono" />
+                      )}
+                      {btn.type === 'FLOW' && (
+                        <input value={btn.flow_id||''} onChange={e => { const bs=[...form.buttons]; bs[bi]={...bs[bi],flow_id:e.target.value}; f('buttons',bs); }}
+                          placeholder="WhatsApp Flow ID (from Meta)" className="input text-xs flex-1 font-mono" />
                       )}
                       <button onClick={() => f('buttons', form.buttons.filter((_,i)=>i!==bi))} className="p-1 hover:text-red-400 text-slate-500 transition-all shrink-0"><X size={13}/></button>
                     </div>
