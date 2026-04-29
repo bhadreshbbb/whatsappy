@@ -1,0 +1,17 @@
+import { Router } from 'express';
+import { webhooksController } from '../controllers/webhooks.controller.js';
+
+const router = Router();
+
+// Shopify Order webhook (POST from Shopify Admin)
+router.post('/shopify/order', webhooksController.shopifyOrder);
+
+// Meta WhatsApp incoming messages webhook
+router.get('/whatsapp',  webhooksController.webhookVerify);    // verification
+router.post('/whatsapp', webhooksController.webhookIncoming);   // incoming messages + statuses
+
+// Order responses API
+router.get('/order-responses/:campaignId', webhooksController.getOrderResponses);
+router.get('/orders/pending',              webhooksController.getPendingOrders);
+
+export { router as webhooksRoutes };

@@ -708,6 +708,30 @@ export const campaignsController = {
           const visitor = db.website_visitors.find(vis => vis.phone === v.phone);
           return { phone: v.phone, name: visitor?.name || 'Unknown', status: visitor?.status, product_name: v.product_name || '', product_url: v.product_url || '' };
         });
+      } else if (campaign.campaign_type === 'order_confirmation') {
+        if (!db.orders) db.orders = [];
+        const responses = db.order_responses || [];
+        audience = db.orders.filter(o =>
+          o.channel_id === channelId && o.is_cod && o.phone
+        ).map(o => {
+          const resp = responses.filter(r => r.phone === o.phone && r.order_id === o.id)
+            .sort((a,b) => new Date(b.responded_at) - new Date(a.responded_at));
+          const latest = resp[0];
+          return {
+            phone:          o.phone,
+            name:           o.name || 'Unknown',
+            order_number:   o.order_number,
+            order_total:    o.total_amount,
+            payment_method: o.payment_method,
+            products:       o.products_summary || '',
+            order_status:   o.status,
+            confirmation_sent: o.confirmation_sent,
+            ready_to_send:  !o.confirmation_sent,
+            response_type:  latest?.response_type || null,
+            response_text:  latest?.response_text || null,
+            responded_at:   latest?.responded_at  || null,
+          };
+        });
       } else {
         audience = (db.website_visitors || []).filter(v =>
           v.channel_id === channelId && v.phone

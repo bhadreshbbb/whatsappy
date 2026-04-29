@@ -94,6 +94,17 @@ const CAMPAIGN_TYPES = [
     targetSegment: "all",
     carouselOnly: true,
   },
+  {
+    id: "order_confirmation",
+    icon: "📦",
+    label: "Order Confirmation",
+    description: "Auto-send confirmation to COD orders received via Shopify webhook. Tracks user replies (Confirmed / Cancelled).",
+    color: "green",
+    autoTarget: true,
+    defaultDelay: 0,
+    targetSegment: "cod_orders",
+    orderConfirmationOnly: true,
+  },
 ];
 
 const LANGUAGES = [
@@ -382,6 +393,15 @@ function CreateModal({ onClose, onCreated }) {
         if (type?.singleProductOnly) {
           if (!metaTemplateId) {
             setValidationErr("• Please select a single product Meta template. Abandoned Product View campaigns require a non-carousel Meta template.");
+            return;
+          }
+          setStep(3); return;
+        }
+
+        // Order Confirmation requires an order confirmation Meta template
+        if (type?.orderConfirmationOnly) {
+          if (!metaTemplateId) {
+            setValidationErr("• Please select an Order Confirmation Meta template (UTILITY category).");
             return;
           }
           setStep(3); return;
@@ -1044,7 +1064,34 @@ function CreateModal({ onClose, onCreated }) {
                 </div>}
 
                 {/* Automation Delay */}
-                {type?.singleProductOnly ? (
+                {type?.orderConfirmationOnly ? (
+                  <div className="p-4 rounded-2xl" style={{ background: 'rgba(34,197,94,0.04)', border: '1px solid rgba(34,197,94,0.2)' }}>
+                    <label className="text-xs font-semibold text-green-400 flex items-center gap-2 mb-3">
+                      <Clock size={13} /> Automation Schedule — Instant
+                    </label>
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-3 px-3 py-2 rounded-xl" style={{ background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.15)' }}>
+                        <span className="text-base">⚡</span>
+                        <div>
+                          <p className="text-xs font-bold text-green-300">Instant — as soon as COD order arrives</p>
+                          <p className="text-[10px]" style={{ color: '#64748b' }}>Shopify webhook fires → server receives order → WhatsApp sent immediately</p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-3 px-3 py-2 rounded-xl" style={{ background: 'rgba(167,139,250,0.08)', border: '1px solid rgba(167,139,250,0.15)' }}>
+                        <span className="text-base">💬</span>
+                        <div>
+                          <p className="text-xs font-bold" style={{ color: '#a78bfa' }}>User reply tracked automatically</p>
+                          <p className="text-[10px]" style={{ color: '#64748b' }}>Confirmed / Cancelled / Custom replies all captured in Responses panel</p>
+                        </div>
+                      </div>
+                      <div className="p-3 rounded-xl text-[10px] leading-relaxed" style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)', color: '#64748b' }}>
+                        <strong className="text-slate-300">Shopify Webhook URL to configure:</strong><br/>
+                        <code className="text-green-400 font-mono">POST https://yourserver.com/api/webhooks/shopify/order</code><br/>
+                        <span className="text-slate-500">Shopify Admin → Settings → Notifications → Webhooks → Order creation</span>
+                      </div>
+                    </div>
+                  </div>
+                ) : type?.singleProductOnly ? (
                   <div className="p-4 rounded-2xl" style={{ background: 'rgba(6,182,212,0.04)', border: '1px solid rgba(6,182,212,0.2)' }}>
                     <label className="text-xs font-semibold text-cyan-400 flex items-center gap-2 mb-3">
                       <Clock size={13} /> Automation Schedule — Fixed
@@ -1847,6 +1894,9 @@ export default function Campaigns() {
   const [testSending, setTestSending] = useState(false);
   const [testResult, setTestResult] = useState(null); // last result for display
   const [flowModal, setFlowModal] = useState(null); // campaign object | null
+  const [responsesOpen, setResponsesOpen]       = useState({}); // campaignId → bool
+  const [responsesMap, setResponsesMap]         = useState({}); // campaignId → { responses[], summary }
+  const [responsesLoading, setResponsesLoading] = useState({});
 
   const CH = () => ({ 'x-channel-id': localStorage.getItem('channelId') || 'demo' });
 
@@ -1893,6 +1943,21 @@ export default function Campaigns() {
     const next = !audienceOpen[campaignId];
     setAudienceOpen(p => ({ ...p, [campaignId]: next }));
     if (next) loadAudience(campaignId);
+  };
+
+  const loadResponses = async (campaignId) => {
+    setResponsesLoading(p => ({ ...p, [campaignId]: true }));
+    try {
+      const res = await fetch(`/api/webhooks/order-responses/${campaignId}`, { headers: CH() });
+      const data = await res.json();
+      setResponsesMap(p => ({ ...p, [campaignId]: data }));
+    } catch (_) {}
+    finally { setResponsesLoading(p => ({ ...p, [campaignId]: false })); }
+  };
+  const toggleResponses = (campaignId) => {
+    const next = !responsesOpen[campaignId];
+    setResponsesOpen(p => ({ ...p, [campaignId]: next }));
+    if (next) loadResponses(campaignId);
   };
 
   const handleSendTest = async () => {
@@ -2000,7 +2065,7 @@ export default function Campaigns() {
             />
           </div>
           <div className="flex gap-1.5 flex-wrap">
-            {['all', 'abandoned_product_view', 'abandoned_cart', 'abandoned_checkout', 'website_visit', 'post_purchase', 'post_cart_upsell'].map(t => (
+            {['all', 'order_confirmation', 'abandoned_product_view', 'abandoned_cart', 'abandoned_checkout', 'website_visit', 'post_purchase', 'post_cart_upsell'].map(t => (
               <button key={t} onClick={() => setTypeFilter(t)}
                 className="text-[10px] px-2.5 py-1.5 rounded-lg font-semibold transition-all"
                 style={typeFilter === t
@@ -2338,6 +2403,134 @@ export default function Campaigns() {
                     );
                   })()}
                 </div>
+
+                {/* Order Confirmation — Audience with response status */}
+                {c.campaign_type === 'order_confirmation' && (() => {
+                  const aud = audienceMap[c.id];
+                  const orders = aud?.audience || [];
+                  return (
+                    <div>
+                      <button onClick={() => toggleAudience(c.id)}
+                        className="w-full flex items-center justify-between px-3 py-2 rounded-xl text-[10px] font-semibold transition-all"
+                        style={{ background: audienceOpen[c.id] ? 'rgba(34,197,94,0.1)' : 'rgba(255,255,255,0.03)', border: `1px solid ${audienceOpen[c.id] ? 'rgba(34,197,94,0.3)' : 'rgba(255,255,255,0.05)'}`, color: audienceOpen[c.id] ? '#4ade80' : '#64748b' }}>
+                        <span className="flex items-center gap-1.5">📦 COD Orders</span>
+                        <span className="flex items-center gap-1.5">
+                          {aud && <span className="px-1.5 py-0.5 rounded-full text-[9px] font-bold" style={{ background: 'rgba(34,197,94,0.15)', color: '#4ade80' }}>{aud.count}</span>}
+                          <ChevronDown size={10} style={{ transform: audienceOpen[c.id] ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }}/>
+                        </span>
+                      </button>
+                      {audienceOpen[c.id] && (audienceLoading[c.id]
+                        ? <div className="mt-2 text-[10px] text-center py-3" style={{ color: '#475569' }}>Loading…</div>
+                        : !orders.length
+                          ? <div className="mt-2 text-[10px] text-center py-3 rounded-xl" style={{ color: '#475569', border: '1px solid rgba(255,255,255,0.05)' }}>No COD orders yet.</div>
+                          : (
+                            <div className="mt-2 rounded-xl overflow-hidden" style={{ border: '1px solid rgba(34,197,94,0.15)' }}>
+                              <div className="px-3 py-2 flex items-center justify-between" style={{ background: 'rgba(34,197,94,0.05)', borderBottom: '1px solid rgba(34,197,94,0.08)' }}>
+                                <span className="text-[10px] font-bold" style={{ color: '#4ade80' }}>{aud.count} COD order{aud.count !== 1 ? 's' : ''}</span>
+                                <button onClick={() => loadAudience(c.id)} className="text-[9px] flex items-center gap-1" style={{ color: '#64748b' }}><Repeat size={9}/> Refresh</button>
+                              </div>
+                              <div style={{ maxHeight: 260, overflowY: 'auto' }}>
+                                {orders.slice(0, 25).map((o, i) => {
+                                  const respColor = o.response_type === 'confirmed' ? '#4ade80' : o.response_type === 'cancelled' ? '#f87171' : o.response_type === 'custom' ? '#fbbf24' : '#475569';
+                                  const respBg    = o.response_type === 'confirmed' ? 'rgba(74,222,128,0.1)' : o.response_type === 'cancelled' ? 'rgba(248,113,113,0.1)' : o.response_type === 'custom' ? 'rgba(251,191,36,0.1)' : 'rgba(255,255,255,0.04)';
+                                  const respLabel = o.response_type === 'confirmed' ? '✓ Confirmed' : o.response_type === 'cancelled' ? '✗ Cancelled' : o.response_type === 'custom' ? `💬 ${o.response_text?.slice(0,12)}` : o.confirmation_sent ? '⏳ Awaiting' : '📤 Not sent';
+                                  return (
+                                    <div key={i} className="flex items-start gap-2 px-3 py-2.5" style={{ background: i % 2 === 0 ? 'rgba(255,255,255,0.01)' : 'transparent', borderTop: i > 0 ? '1px solid rgba(255,255,255,0.04)' : 'none' }}>
+                                      <div className="w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold flex-shrink-0 mt-0.5" style={{ background: 'rgba(34,197,94,0.1)', color: '#4ade80' }}>
+                                        {(o.name || o.phone || '?')[0].toUpperCase()}
+                                      </div>
+                                      <div className="flex-1 min-w-0">
+                                        <div className="flex items-center gap-2 flex-wrap">
+                                          <span className="text-[10px] font-semibold text-white truncate">{o.name || 'Unknown'}</span>
+                                          <span className="text-[9px] font-mono" style={{ color: '#475569' }}>{o.phone}</span>
+                                          <span className="text-[9px] px-1.5 py-0.5 rounded font-bold" style={{ background: respBg, color: respColor }}>{respLabel}</span>
+                                        </div>
+                                        <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+                                          <span className="text-[9px]" style={{ color: '#64748b' }}>#{o.order_number}</span>
+                                          <span className="text-[9px]" style={{ color: '#334155' }}>₹{o.order_total}</span>
+                                          {o.products && <span className="text-[9px] truncate max-w-[120px]" style={{ color: '#334155' }}>{o.products}</span>}
+                                        </div>
+                                        {o.response_text && o.response_type === 'custom' && (
+                                          <p className="text-[9px] mt-0.5 italic" style={{ color: '#64748b' }}>"{o.response_text}"</p>
+                                        )}
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                              {aud.count > 25 && <p className="text-center text-[9px] py-2" style={{ color: '#334155' }}>+{aud.count - 25} more orders</p>}
+                            </div>
+                          )
+                      )}
+                    </div>
+                  );
+                })()}
+
+                {/* User Responses Panel — order_confirmation only */}
+                {c.campaign_type === 'order_confirmation' && (
+                  <div>
+                    <button onClick={() => toggleResponses(c.id)}
+                      className="w-full flex items-center justify-between px-3 py-2 rounded-xl text-[10px] font-semibold transition-all"
+                      style={{ background: responsesOpen[c.id] ? 'rgba(167,139,250,0.1)' : 'rgba(255,255,255,0.03)', border: `1px solid ${responsesOpen[c.id] ? 'rgba(167,139,250,0.3)' : 'rgba(255,255,255,0.05)'}`, color: responsesOpen[c.id] ? '#a78bfa' : '#64748b' }}>
+                      <span className="flex items-center gap-1.5">💬 User Responses</span>
+                      <span className="flex items-center gap-1.5">
+                        {responsesMap[c.id] && <span className="px-1.5 py-0.5 rounded-full text-[9px] font-bold" style={{ background: 'rgba(167,139,250,0.15)', color: '#a78bfa' }}>{responsesMap[c.id].summary?.total || 0}</span>}
+                        <ChevronDown size={10} style={{ transform: responsesOpen[c.id] ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }}/>
+                      </span>
+                    </button>
+                    {responsesOpen[c.id] && (() => {
+                      if (responsesLoading[c.id]) return <div className="mt-2 text-[10px] text-center py-3" style={{ color: '#475569' }}>Loading responses…</div>;
+                      const rd = responsesMap[c.id];
+                      if (!rd) return null;
+                      const { responses = [], summary = {} } = rd;
+                      return (
+                        <div className="mt-2 space-y-2">
+                          {/* Summary */}
+                          <div className="grid grid-cols-3 gap-2 text-center">
+                            {[
+                              { label: 'Confirmed', value: summary.confirmed || 0, color: '#4ade80', bg: 'rgba(74,222,128,0.08)' },
+                              { label: 'Cancelled',  value: summary.cancelled  || 0, color: '#f87171', bg: 'rgba(248,113,113,0.08)' },
+                              { label: 'Custom Reply', value: summary.custom  || 0, color: '#fbbf24', bg: 'rgba(251,191,36,0.08)' },
+                            ].map(s => (
+                              <div key={s.label} className="py-2 rounded-lg" style={{ background: s.bg, border: `1px solid ${s.bg}` }}>
+                                <div className="text-sm font-bold" style={{ color: s.color }}>{s.value}</div>
+                                <div className="text-[9px] uppercase tracking-wide mt-0.5" style={{ color: '#475569' }}>{s.label}</div>
+                              </div>
+                            ))}
+                          </div>
+                          {/* Response list */}
+                          {responses.length > 0 ? (
+                            <div className="rounded-xl overflow-hidden" style={{ border: '1px solid rgba(167,139,250,0.15)', maxHeight: 240, overflowY: 'auto' }}>
+                              {responses.slice(0, 30).map((r, i) => {
+                                const rColor = r.response_type === 'confirmed' ? '#4ade80' : r.response_type === 'cancelled' ? '#f87171' : '#fbbf24';
+                                const rIcon  = r.response_type === 'confirmed' ? '✓' : r.response_type === 'cancelled' ? '✗' : '💬';
+                                return (
+                                  <div key={i} className="flex items-start gap-2 px-3 py-2.5" style={{ background: i % 2 === 0 ? 'rgba(167,139,250,0.03)' : 'transparent', borderTop: i > 0 ? '1px solid rgba(255,255,255,0.04)' : 'none' }}>
+                                    <span className="text-xs font-bold mt-0.5" style={{ color: rColor }}>{rIcon}</span>
+                                    <div className="flex-1 min-w-0">
+                                      <div className="flex items-center gap-2 flex-wrap">
+                                        <span className="text-[10px] font-semibold text-white">{r.phone}</span>
+                                        {r.order_number && <span className="text-[9px]" style={{ color: '#64748b' }}>#{r.order_number}</span>}
+                                        <span className="text-[9px] px-1.5 rounded font-bold" style={{ background: 'rgba(255,255,255,0.05)', color: rColor }}>{r.response_type}</span>
+                                      </div>
+                                      <p className="text-[10px] mt-0.5 italic" style={{ color: '#94a3b8' }}>"{r.response_text}"</p>
+                                      <p className="text-[9px] mt-0.5" style={{ color: '#334155' }}>{new Date(r.responded_at).toLocaleString()}</p>
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          ) : (
+                            <div className="text-[10px] text-center py-4 rounded-xl" style={{ color: '#334155', border: '1px solid rgba(255,255,255,0.05)' }}>
+                              No replies yet — messages sent, waiting for user responses.
+                            </div>
+                          )}
+                          <button onClick={() => loadResponses(c.id)} className="w-full text-[9px] flex items-center justify-center gap-1 py-1.5 rounded-lg" style={{ background: 'rgba(167,139,250,0.06)', border: '1px solid rgba(167,139,250,0.15)', color: '#64748b' }}><Repeat size={9}/> Refresh</button>
+                        </div>
+                      );
+                    })()}
+                  </div>
+                )}
 
                 {/* Send Result Banner */}
                 {sendResultMap[c.id] && (() => {

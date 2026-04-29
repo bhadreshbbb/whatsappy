@@ -42,6 +42,8 @@ async function loadFromMongo() {
       if (!db.gallery_folders) db.gallery_folders = [];
       if (!db.gallery_images) db.gallery_images = [];
       if (!db.meta_templates) db.meta_templates = [];
+      if (!db.orders) db.orders = [];
+      if (!db.order_responses) db.order_responses = [];
       if (!db._counters) db._counters = {};
       console.log('[DB] Loaded from MongoDB Atlas');
       return true;
@@ -84,6 +86,8 @@ let db = {
   gallery_folders: [],    // Media gallery folders
   gallery_images: [],     // Uploaded images with Meta media IDs
   meta_templates: [],     // WhatsApp templates submitted to Meta for approval
+  orders: [],             // Shopify orders (COD + online) received via webhook
+  order_responses: [],    // User replies to order confirmation messages
   _counters: {}
 };
 
@@ -100,6 +104,8 @@ function loadDb() {
       if (!db.gallery_folders) db.gallery_folders = [];
       if (!db.gallery_images) db.gallery_images = [];
       if (!db.meta_templates) db.meta_templates = [];
+      if (!db.orders) db.orders = [];
+      if (!db.order_responses) db.order_responses = [];
       if (!db._counters) db._counters = {};
     } catch (e) {
       console.error('Error loading DB:', e);

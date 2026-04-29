@@ -799,6 +799,111 @@ async function runAutomation() {
         await sendMultiple(db, cam, targets, 'broadcast');
       }
 
+      // ── Order Confirmation: COD orders that haven't been confirmed yet ──────────
+      else if (cam.campaign_type === 'order_confirmation') {
+        if (!db.orders) db.orders = [];
+        const targets = db.orders.filter(o => {
+          if (o.channel_id !== channelId) return false;
+          if (!o.phone || !o.is_cod)      return false;
+          if (o.confirmation_sent)        return false;   // already messaged
+          if (o.status === 'cancelled')   return false;   // user already cancelled
+          return true;
+        }).slice(0, 10);
+
+        if (targets.length > 0) {
+          console.log(`[OrderConfirmation] Campaign "${cam.name}" — ${targets.length} COD order(s) to confirm`);
+        }
+
+        for (const order of targets) {
+          try {
+            const visitor = db.website_visitors.find(v =>
+              v.channel_id === channelId && v.phone === order.phone
+            );
+
+            // Skip opted-out users
+            if (visitor?.is_opted_out) continue;
+
+            // Dedup: don't send twice
+            const alreadySent = (db.abandoned_cart_executions || []).find(e =>
+              e.campaign_id === cam.id && e.phone === order.phone &&
+              e.order_id === order.id
+            );
+            if (alreadySent) continue;
+
+            // Build variables from order
+            let lineItems = [];
+            try { lineItems = JSON.parse(order.products || '[]'); } catch (_) {}
+            const productsSummary = order.products_summary ||
+              lineItems.map(i => `${i.title} × ${i.quantity || 1}`).join(', ');
+
+            const orderVars = {
+              customer_name:  order.name || visitor?.name || 'Customer',
+              order_id:       order.order_number || String(order.id),
+              order_products: productsSummary,
+              order_total:    String(order.total_amount || 0),
+              payment_method: order.payment_method || 'Cash on Delivery',
+              delivery_date:  '3–5 business days',
+              product_image:  order.product_image || '',
+              name:           order.name || visitor?.name || 'Customer',
+            };
+
+            // Resolve the Meta template
+            const metaTpl = cam.meta_template_id
+              ? (db.meta_templates || []).find(t =>
+                  String(t.id) === String(cam.meta_template_id) &&
+                  (t.meta_status === 'APPROVED' || t.meta_status === 'ACTIVE')
+                )
+              : null;
+
+            if (!metaTpl) {
+              console.warn(`[OrderConfirmation] No approved Meta template for campaign "${cam.name}"`);
+              break;
+            }
+
+            // Build and send the WhatsApp template message
+            const { buildSendMessagePayload, LANG_MAP } = await import('../controllers/meta-templates.controller.js');
+            const userLang = cam.target_language || 'en';
+            const metaLangCode = LANG_MAP[userLang] || userLang;
+            const payload = buildSendMessagePayload(metaTpl, order.phone, metaLangCode, orderVars);
+
+            const { whatsappService } = await import('../services/whatsapp.service.js');
+            const result = await whatsappService.sendTemplateMessage(
+              order.phone, metaTpl, metaLangCode, orderVars
+            );
+
+            // Record execution
+            const execRecord = {
+              id:            (db.abandoned_cart_executions.length || 0) + 1,
+              campaign_id:   cam.id,
+              campaign_name: cam.name,
+              campaign_type: 'order_confirmation',
+              channel_id:    channelId,
+              phone:         order.phone,
+              name:          order.name || visitor?.name || '',
+              order_id:      order.id,
+              order_number:  order.order_number,
+              status:        result?.messageId ? 'sent' : 'failed',
+              wamid:         result?.messageId || null,
+              error:         result?.error || null,
+              stage:         1,
+              sent_at:       new Date().toISOString(),
+            };
+            db.abandoned_cart_executions.push(execRecord);
+
+            if (result?.messageId) {
+              // Mark order as confirmation sent
+              order.confirmation_sent    = true;
+              order.confirmation_sent_at = new Date().toISOString();
+              console.log(`[OrderConfirmation] Sent to ${order.phone} — order ${order.order_number} wamid=${result.messageId}`);
+            } else {
+              console.error(`[OrderConfirmation] Failed for ${order.phone} — ${result?.error || 'unknown error'}`);
+            }
+          } catch (err) {
+            console.error(`[OrderConfirmation] Error for order ${order.order_number}:`, err.message);
+          }
+        }
+      }
+
       // ── Product Recommendation: carousel Meta template + audience filter rules ─
       else if (cam.campaign_type === 'product_recommendation') {
         let filterDef = { logic: 'AND', rules: [] };
@@ -908,10 +1013,11 @@ const STATUS_ALLOWED = {
 };
 
 function isBlockedByStatus(visitorStatus, campaignType) {
-  if (campaignType === 'custom_broadcast') return false;      // Allowed unconditionally (relies on query filters)
-  if (campaignType === 'custom') return false;                // Custom campaigns use their own filter rules
-  if (campaignType === 'product_recommendation') return false; // Broadcast to any audience regardless of status
-  if (campaignType === 'abandoned_product_view') return visitorStatus !== 'product_view'; // Only product_view status
+  if (campaignType === 'custom_broadcast') return false;
+  if (campaignType === 'custom') return false;
+  if (campaignType === 'product_recommendation') return false;
+  if (campaignType === 'order_confirmation') return false;    // targets orders table, not visitor status
+  if (campaignType === 'abandoned_product_view') return visitorStatus !== 'product_view';
   if (!visitorStatus) return false;
   const allowed = STATUS_ALLOWED[visitorStatus];
   if (!allowed) return false; // unknown status — don't block
