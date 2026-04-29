@@ -538,17 +538,23 @@ export const campaignsController = {
 
       // ── Build productConfig for order_confirmation campaigns ─────────────────
       if (campaign.campaign_type === 'order_confirmation' && !metaTpl.is_carousel) {
-        // Find the most recent real order for this phone, or use dummy data
-        const realOrder = (db.orders || [])
-          .filter(o => o.channel_id === channelId && o.phone)
-          .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
+        const RAND_NAMES    = ['Priya Sharma', 'Rahul Verma', 'Anjali Singh', 'Karan Mehta', 'Neha Patel', 'Vikram Joshi'];
+        const RAND_PRODUCTS = [
+          'Blue Anarkali Kurti × 1', 'Red Silk Saree × 1', 'Cotton Kurta Set × 2',
+          'Embroidered Dupatta × 1 + Kurti × 1', 'Floral Print Dress × 1',
+          'Rayon Palazzo Set × 2', 'Georgette Salwar Suit × 1',
+        ];
+        const RAND_TOTALS   = ['649', '799', '1099', '1249', '1599', '2099', '899'];
+        const RAND_PAYMENTS = ['Cash on Delivery', 'Cash on Delivery', 'Cash on Delivery', 'UPI', 'Prepaid'];
+        const pick = arr => arr[Math.floor(Math.random() * arr.length)];
+        const randId = 'ORD-' + Math.floor(100000 + Math.random() * 900000);
 
-        const testName     = realOrder?.name     || 'Test Customer';
-        const testOrderId  = realOrder?.order_number || 'ORD-TEST-001';
-        const testProducts = realOrder?.products_summary || 'Blue Kurti × 1';
-        const testTotal    = String(realOrder?.total_amount || '799');
-        const testPayment  = realOrder?.payment_method || 'Cash on Delivery';
-        const testImage    = realOrder?.product_image || metaTpl.header_image_url || '';
+        const testName     = pick(RAND_NAMES);
+        const testOrderId  = randId;
+        const testProducts = pick(RAND_PRODUCTS);
+        const testTotal    = pick(RAND_TOTALS);
+        const testPayment  = pick(RAND_PAYMENTS);
+        const testImage    = metaTpl.header_image_url || '';
 
         productConfig = {
           cards: [{
