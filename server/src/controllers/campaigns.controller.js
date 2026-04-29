@@ -571,6 +571,9 @@ export const campaignsController = {
             image:            testImage,
             image_url:        testImage,
             media_id:         metaTpl.header_image_id || '',
+            // link/url used as fallback for URL button suffix resolution
+            link:             testOrderId,
+            url:              testOrderId,
           }],
         };
         result.product_used = { name: testName, order_id: testOrderId, products: testProducts, total: testTotal, payment: testPayment };

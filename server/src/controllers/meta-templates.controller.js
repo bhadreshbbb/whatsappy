@@ -1105,7 +1105,12 @@ export function buildSendMessagePayload(tpl, productConfig, recipientPhone = '{{
         const fullLink = firstCard.link || firstCard.url || firstCard.product_url || '';
         let paramVal;
         if (staticPrefix) {
-          const seg = getFieldValue(urlVars[0], stdVarMap, firstCard);
+          let seg = getFieldValue(urlVars[0], stdVarMap, firstCard);
+          // If seg contains spaces or non-URL-safe chars (e.g. resolved to a customer name),
+          // prefer order_id as the path segment, or URL-encode as last resort.
+          if (seg && /[^A-Za-z0-9\-_.~]/.test(seg)) {
+            seg = firstCard.order_id || firstCard.order_number || encodeURIComponent(seg);
+          }
           paramVal = seg || (fullLink ? (() => { try { return new URL(fullLink).pathname.split('/').filter(Boolean).pop() || ''; } catch { return ''; } })() : '');
           if (paramVal && campaignId) paramVal += `?utm_source=whatsapp&utm_medium=single_product&utm_campaign=${campaignId}`;
         } else {
