@@ -10,56 +10,127 @@ if (!fs.existsSync(dataDir)) {
   fs.mkdirSync(dataDir, { recursive: true });
 }
 
-// ── MongoDB Atlas support (persistent cloud database) ──────────────────────
-// When MONGODB_URI is set the JSON file is only used as local fallback.
-let mongoCollection = null;
+// ── MongoDB Atlas — per-collection storage ────────────────────────────────
+// Each logical table lives in its own MongoDB collection.
+// On first run after upgrade: auto-migrates old single-document (appdata) data.
+let mongoDb         = null;
+let mongoCollection = null; // legacy ref — kept so old code that holds a ref doesn't crash
+
+const MONGO_TABLES = [
+  'website_visitors', 'cart_events', 'purchase_history', 'page_views',
+  'product_views', 'searches', 'custom_events', 'message_templates',
+  'abandoned_cart_campaigns', 'abandoned_cart_executions', 'user_sessions',
+  'channel_settings', 'product_catalog', 'chat_conversations', 'chat_messages',
+  'gallery_folders', 'gallery_images', 'meta_templates', 'orders', 'order_responses',
+];
 
 async function initMongo() {
   if (!process.env.MONGODB_URI) return;
   try {
     const { MongoClient } = await import('mongodb');
-    const client = new MongoClient(process.env.MONGODB_URI);
+    const client = new MongoClient(process.env.MONGODB_URI, { serverSelectionTimeoutMS: 8000 });
     await client.connect();
-    const mdb = client.db('whatsway');
-    mongoCollection = mdb.collection('appdata');
-    console.log('[DB] Connected to MongoDB Atlas');
+    mongoDb         = client.db('whatsway');
+    mongoCollection = mongoDb.collection('appdata'); // legacy ref
+    console.log('[DB] Connected to MongoDB Atlas (per-collection mode)');
   } catch (e) {
-    console.error('[DB] MongoDB connection failed, using JSON file:', e.message);
-    mongoCollection = null;
+    console.error('[DB] MongoDB connection failed, falling back to JSON file:', e.message);
+    mongoDb = null;
+  }
+}
+
+// ── Auto-migrate old single-document → per-collections ───────────────────
+async function migrateFromSingleDoc() {
+  try {
+    const old = await mongoDb.collection('appdata').findOne({ _id: 'main' });
+    if (!old) return false; // nothing to migrate
+
+    console.log('[DB] Migrating data from single-document to per-collection storage...');
+    const { _id, _counters: ctrs, ...tables } = old;
+
+    // Write each table into its own collection
+    await Promise.all(
+      MONGO_TABLES.map(async (table) => {
+        const docs = tables[table];
+        if (!Array.isArray(docs) || docs.length === 0) return;
+        const col = mongoDb.collection(table);
+        await col.deleteMany({});
+        await col.insertMany(docs.map(d => ({ ...d })));
+        console.log(`[DB]   migrated ${docs.length} docs → ${table}`);
+      })
+    );
+
+    // Migrate counters
+    if (ctrs && Object.keys(ctrs).length) {
+      await mongoDb.collection('_counters').replaceOne(
+        { _id: 'counters' },
+        { _id: 'counters', ...ctrs },
+        { upsert: true }
+      );
+    }
+
+    // Rename old doc so we don't migrate twice (keep as backup)
+    await mongoDb.collection('appdata').updateOne({ _id: 'main' }, { $set: { _id_backup: 'main_migrated' } }).catch(() => {});
+    await mongoDb.collection('appdata').deleteOne({ _id: 'main' }).catch(() => {});
+
+    console.log('[DB] Migration complete — all data in per-collection format');
+    return true;
+  } catch (e) {
+    console.error('[DB] Migration error (data is safe, will retry):', e.message);
+    return false;
   }
 }
 
 async function loadFromMongo() {
-  if (!mongoCollection) return false;
+  if (!mongoDb) return false;
   try {
-    const doc = await mongoCollection.findOne({ _id: 'main' });
-    if (doc) {
-      const { _id, ...data } = doc;
-      db = { ...db, ...data };
-      if (!db.product_catalog) db.product_catalog = [];
-      if (!db.chat_conversations) db.chat_conversations = [];
-      if (!db.chat_messages) db.chat_messages = [];
-      if (!db.gallery_folders) db.gallery_folders = [];
-      if (!db.gallery_images) db.gallery_images = [];
-      if (!db.meta_templates) db.meta_templates = [];
-      if (!db.orders) db.orders = [];
-      if (!db.order_responses) db.order_responses = [];
-      if (!db._counters) db._counters = {};
-      console.log('[DB] Loaded from MongoDB Atlas');
-      return true;
+    // Check if any per-collection data exists
+    const sampleCount = await mongoDb.collection('meta_templates').countDocuments();
+    const campaignCount = await mongoDb.collection('abandoned_cart_campaigns').countDocuments();
+
+    if (sampleCount === 0 && campaignCount === 0) {
+      // Possibly first run with new format — try to migrate old single doc
+      await migrateFromSingleDoc();
     }
+
+    // Load each table from its own collection
+    await Promise.all(MONGO_TABLES.map(async (table) => {
+      const docs = await mongoDb.collection(table).find({}, { projection: { _id: 0 } }).toArray();
+      if (Array.isArray(db[table])) db[table] = docs.length ? docs : db[table];
+    }));
+
+    // Load counters
+    const ctrDoc = await mongoDb.collection('_counters').findOne(
+      { _id: 'counters' },
+      { projection: { _id: 0 } }
+    );
+    if (ctrDoc) db._counters = ctrDoc;
+
+    // Ensure all required arrays exist
+    for (const t of MONGO_TABLES) { if (!Array.isArray(db[t])) db[t] = []; }
+    if (!db._counters) db._counters = {};
+
+    console.log('[DB] Loaded from MongoDB Atlas');
+    return true;
   } catch (e) {
     console.error('[DB] MongoDB load error:', e.message);
+    return false;
   }
-  return false;
 }
 
 async function saveToMongo() {
-  if (!mongoCollection) return;
+  if (!mongoDb) return;
   try {
-    await mongoCollection.replaceOne(
-      { _id: 'main' },
-      { _id: 'main', ...db },
+    await Promise.all(MONGO_TABLES.map(async (table) => {
+      const docs = db[table];
+      if (!Array.isArray(docs)) return;
+      const col = mongoDb.collection(table);
+      await col.deleteMany({});
+      if (docs.length > 0) await col.insertMany(docs.map(d => ({ ...d })));
+    }));
+    await mongoDb.collection('_counters').replaceOne(
+      { _id: 'counters' },
+      { _id: 'counters', ...db._counters },
       { upsert: true }
     );
   } catch (e) {
