@@ -40,63 +40,79 @@ async function initMongo() {
 }
 
 // ── Auto-migrate old single-document → per-collections ───────────────────
+// ── Migration lock: set mongodb_migrated=true in _counters after first run ──
 async function migrateFromSingleDoc() {
   try {
     const old = await mongoDb.collection('appdata').findOne({ _id: 'main' });
-    if (!old) return false; // nothing to migrate
+    if (!old) {
+      // No old doc — mark as migrated so we never check again
+      await mongoDb.collection('_counters').updateOne(
+        { _id: 'counters' },
+        { $set: { mongodb_migrated: true } },
+        { upsert: true }
+      );
+      return false;
+    }
 
     console.log('[DB] Migrating data from single-document to per-collection storage...');
     const { _id, _counters: ctrs, ...tables } = old;
 
-    // Write each table into its own collection
-    await Promise.all(
-      MONGO_TABLES.map(async (table) => {
-        const docs = tables[table];
-        if (!Array.isArray(docs) || docs.length === 0) return;
-        const col = mongoDb.collection(table);
-        await col.deleteMany({});
-        await col.insertMany(docs.map(d => ({ ...d })));
-        console.log(`[DB]   migrated ${docs.length} docs → ${table}`);
-      })
-    );
-
-    // Migrate counters
-    if (ctrs && Object.keys(ctrs).length) {
-      await mongoDb.collection('_counters').replaceOne(
-        { _id: 'counters' },
-        { _id: 'counters', ...ctrs },
-        { upsert: true }
-      );
+    // Sequential writes to avoid concurrent duplicate inserts
+    for (const table of MONGO_TABLES) {
+      const docs = tables[table];
+      if (!Array.isArray(docs) || docs.length === 0) continue;
+      const col = mongoDb.collection(table);
+      await col.deleteMany({});
+      await col.insertMany(docs.map(d => ({ ...d })));
+      console.log(`[DB]   migrated ${docs.length} docs → ${table}`);
     }
 
-    // Rename old doc so we don't migrate twice (keep as backup)
-    await mongoDb.collection('appdata').updateOne({ _id: 'main' }, { $set: { _id_backup: 'main_migrated' } }).catch(() => {});
-    await mongoDb.collection('appdata').deleteOne({ _id: 'main' }).catch(() => {});
+    // Save counters + migration flag atomically
+    const newCtrs = { ...(ctrs || {}), mongodb_migrated: true };
+    await mongoDb.collection('_counters').replaceOne(
+      { _id: 'counters' },
+      { _id: 'counters', ...newCtrs },
+      { upsert: true }
+    );
 
-    console.log('[DB] Migration complete — all data in per-collection format');
+    // Remove old single-doc so migration never re-runs
+    await mongoDb.collection('appdata').deleteOne({ _id: 'main' });
+    console.log('[DB] Migration complete');
     return true;
   } catch (e) {
-    console.error('[DB] Migration error (data is safe, will retry):', e.message);
+    console.error('[DB] Migration error:', e.message);
     return false;
   }
+}
+
+// Dedup an array by id field (fixes any already-duplicated data on load)
+function dedupById(arr) {
+  if (!Array.isArray(arr) || arr.length === 0) return arr;
+  const seen = new Set();
+  return arr.filter(doc => {
+    // Use id if present, otherwise fall back to stringified doc (for docs without id)
+    const key = doc.id != null ? String(doc.id) : JSON.stringify(doc);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 async function loadFromMongo() {
   if (!mongoDb) return false;
   try {
-    // Check if any per-collection data exists
-    const sampleCount = await mongoDb.collection('meta_templates').countDocuments();
-    const campaignCount = await mongoDb.collection('abandoned_cart_campaigns').countDocuments();
-
-    if (sampleCount === 0 && campaignCount === 0) {
-      // Possibly first run with new format — try to migrate old single doc
+    // Use migration flag in _counters (not doc counts) to decide whether to migrate
+    const ctrCheck = await mongoDb.collection('_counters').findOne({ _id: 'counters' });
+    if (!ctrCheck?.mongodb_migrated) {
       await migrateFromSingleDoc();
     }
 
-    // Load each table from its own collection
+    // Load each table from its own collection, deduplicate on load
     await Promise.all(MONGO_TABLES.map(async (table) => {
       const docs = await mongoDb.collection(table).find({}, { projection: { _id: 0 } }).toArray();
-      if (Array.isArray(db[table])) db[table] = docs.length ? docs : db[table];
+      if (Array.isArray(db[table])) {
+        db[table] = dedupById(docs.length ? docs : db[table]);
+      }
     }));
 
     // Load counters
@@ -118,23 +134,37 @@ async function loadFromMongo() {
   }
 }
 
+// ── Save with mutex — prevents concurrent deleteMany+insertMany race condition ─
+let _saveInProgress = false;
+let _savePending    = false;
+
 async function saveToMongo() {
   if (!mongoDb) return;
+  if (_saveInProgress) { _savePending = true; return; }
+  _saveInProgress = true;
   try {
-    await Promise.all(MONGO_TABLES.map(async (table) => {
-      const docs = db[table];
-      if (!Array.isArray(docs)) return;
-      const col = mongoDb.collection(table);
+    // Snapshot current state so concurrent mutations don't affect this write
+    const snapshot  = {};
+    for (const t of MONGO_TABLES) snapshot[t] = Array.isArray(db[t]) ? [...db[t]] : [];
+    const ctrSnap = { ...db._counters };
+
+    // Sequential writes — safer than parallel deleteMany/insertMany
+    for (const table of MONGO_TABLES) {
+      const docs = snapshot[table];
+      const col  = mongoDb.collection(table);
       await col.deleteMany({});
       if (docs.length > 0) await col.insertMany(docs.map(d => ({ ...d })));
-    }));
+    }
     await mongoDb.collection('_counters').replaceOne(
       { _id: 'counters' },
-      { _id: 'counters', ...db._counters },
+      { _id: 'counters', ...ctrSnap },
       { upsert: true }
     );
   } catch (e) {
     console.error('[DB] MongoDB save error:', e.message);
+  } finally {
+    _saveInProgress = false;
+    if (_savePending) { _savePending = false; saveToMongo(); }
   }
 }
 
