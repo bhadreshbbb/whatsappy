@@ -1969,26 +1969,13 @@ export default function Campaigns() {
     setTestOrderLoading(p => ({ ...p, [campaignId]: true }));
     setTestOrderResult(p => ({ ...p, [campaignId]: null }));
     try {
-      const PRODUCTS = ['Blue Anarkali Kurti × 1', 'Red Silk Saree × 1', 'Cotton Kurta Set × 2', 'Rayon Palazzo Set × 1'];
-      const NAMES    = ['Priya Sharma', 'Rahul Verma', 'Anjali Singh', 'Karan Mehta', 'Neha Patel'];
-      const pick = arr => arr[Math.floor(Math.random() * arr.length)];
-      const ordNum = 'TEST-' + Math.floor(100000 + Math.random() * 900000);
-      const payload = {
-        phone,
-        name:           pick(NAMES),
-        order_number:   ordNum,
-        products:       pick(PRODUCTS),
-        total_amount:   (Math.floor(Math.random() * 15) + 5) * 100,
-        payment_method: 'Cash on Delivery',
-        is_cod:         true,
-      };
-      const res = await fetch('/api/webhooks/order', {
+      const res = await fetch('/api/webhooks/order/test', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...CH() },
-        body: JSON.stringify(payload),
+        body: JSON.stringify({ phone }),
       });
       const data = await res.json();
-      setTestOrderResult(p => ({ ...p, [campaignId]: { ok: res.ok, ...data, ordNum, phone } }));
+      setTestOrderResult(p => ({ ...p, [campaignId]: { ok: data.success, ...data } }));
     } catch (e) {
       setTestOrderResult(p => ({ ...p, [campaignId]: { ok: false, error: e.message } }));
     } finally {
@@ -2538,13 +2525,17 @@ export default function Campaigns() {
                           style={{ background: testOrderResult[c.id].ok ? 'rgba(74,222,128,0.08)' : 'rgba(248,113,113,0.08)', border: `1px solid ${testOrderResult[c.id].ok ? 'rgba(74,222,128,0.25)' : 'rgba(248,113,113,0.25)'}` }}>
                           {testOrderResult[c.id].ok ? (
                             <>
-                              <div className="font-bold" style={{ color: '#4ade80' }}>✓ Order fired — WhatsApp message being sent</div>
-                              <div style={{ color: '#94a3b8' }}>Order: <span style={{ color: '#e2e8f0' }}>{testOrderResult[c.id].ordNum}</span></div>
-                              <div style={{ color: '#94a3b8' }}>Phone: <span style={{ color: '#e2e8f0' }}>{testOrderResult[c.id].phone}</span></div>
-                              {testOrderResult[c.id].duplicate && <div style={{ color: '#fbbf24' }}>⚠ Duplicate order — already exists</div>}
+                              <div className="font-bold" style={{ color: '#4ade80' }}>✓ WhatsApp message sent successfully</div>
+                              <div style={{ color: '#94a3b8' }}>Order: <span style={{ color: '#e2e8f0' }}>{testOrderResult[c.id].order_number}</span></div>
+                              <div style={{ color: '#94a3b8' }}>Campaign: <span style={{ color: '#e2e8f0' }}>{testOrderResult[c.id].campaign}</span></div>
+                              <div style={{ color: '#94a3b8' }}>Template: <span style={{ color: '#e2e8f0' }}>{testOrderResult[c.id].template}</span></div>
+                              {testOrderResult[c.id].wamid && <div style={{ color: '#94a3b8' }}>WAMID: <span className="font-mono text-[9px]" style={{ color: '#60a5fa' }}>{testOrderResult[c.id].wamid}</span></div>}
                             </>
                           ) : (
-                            <div className="font-bold" style={{ color: '#f87171' }}>✗ {testOrderResult[c.id].error || 'Failed'}</div>
+                            <>
+                              <div className="font-bold" style={{ color: '#f87171' }}>✗ {testOrderResult[c.id].step ? `Failed at: ${testOrderResult[c.id].step}` : 'Error'}</div>
+                              <div style={{ color: '#fca5a5' }}>{testOrderResult[c.id].error}</div>
+                            </>
                           )}
                         </div>
                       )}

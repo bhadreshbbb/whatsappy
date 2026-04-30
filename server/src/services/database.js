@@ -202,7 +202,7 @@ function loadDb() {
 
 function saveDb() {
   // Save to MongoDB Atlas if connected (non-blocking)
-  if (mongoCollection) {
+  if (mongoDb) {
     saveToMongo().catch(() => {});
     return;
   }
@@ -234,6 +234,8 @@ export function getDb() {
     gallery_folders: db.gallery_folders,
     gallery_images: db.gallery_images,
     meta_templates: db.meta_templates,
+    orders: db.orders,
+    order_responses: db.order_responses,
     prepare: (sql) => ({
       get: (...params) => executeQuery(sql, params, 'get'),
       all: (...params) => executeQuery(sql, params, 'all'),

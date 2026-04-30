@@ -743,4 +743,120 @@ export const webhooksController = {
       res.json({ orders, total: orders.length });
     } catch (err) { res.status(500).json({ error: err.message }); }
   },
+
+  // ── 5. Test COD order — diagnostic endpoint, awaits send, returns full result ─
+  async testCodOrder(req, res) {
+    try {
+      const db        = getDb();
+      const channelId = req.headers['x-channel-id'] || 'demo';
+      const { phone: rawPhone, name, order_number, products, total_amount, payment_method = 'Cash on Delivery' } = req.body;
+
+      const phone = normalizePhone(rawPhone);
+      if (!phone) return res.status(400).json({ error: 'Phone number required' });
+
+      const PRODUCTS_LIST = ['Blue Anarkali Kurti × 1', 'Red Silk Saree × 1', 'Cotton Kurta Set × 2', 'Rayon Palazzo Set × 1'];
+      const NAMES_LIST    = ['Priya Sharma', 'Rahul Verma', 'Anjali Singh', 'Karan Mehta'];
+      const pick = arr => arr[Math.floor(Math.random() * arr.length)];
+
+      const ordNum = order_number || ('TEST-' + Math.floor(100000 + Math.random() * 900000));
+
+      // Diagnostic pre-checks
+      const cam = (db.abandoned_cart_campaigns || []).find(c =>
+        c.channel_id === channelId &&
+        c.campaign_type === 'order_confirmation' &&
+        c.is_active &&
+        c.meta_template_id
+      );
+      if (!cam) {
+        return res.json({ success: false, step: 'campaign', error: 'No active order_confirmation campaign found for this channel. Create one first and make sure it is active.' });
+      }
+
+      const metaTpl = (db.meta_templates || []).find(t =>
+        String(t.id) === String(cam.meta_template_id) &&
+        (t.meta_status === 'APPROVED' || t.meta_status === 'ACTIVE')
+      );
+      if (!metaTpl) {
+        const tpl = (db.meta_templates || []).find(t => String(t.id) === String(cam.meta_template_id));
+        return res.json({ success: false, step: 'template', error: `Template "${tpl?.name || cam.meta_template_id}" is not APPROVED yet. Current status: ${tpl?.meta_status || 'not found'}` });
+      }
+
+      if (!db.orders) db.orders = [];
+      const existing = db.orders.find(o => o.channel_id === channelId && o.order_number === ordNum);
+      if (existing) {
+        return res.json({ success: false, step: 'dedup', error: `Order ${ordNum} already exists. A new random ID will be used next time.` });
+      }
+
+      const order = {
+        id:               (db.orders.length || 0) + 1,
+        channel_id:       channelId,
+        order_number:     ordNum,
+        phone,
+        name:             name || pick(NAMES_LIST),
+        gateway:          payment_method,
+        is_cod:           true,
+        financial_status: 'pending',
+        total_amount:     parseFloat(total_amount || pick(['499','699','799','999','1199'])),
+        currency:         'INR',
+        products:         JSON.stringify([]),
+        products_summary: (typeof products === 'string' ? products : null) || pick(PRODUCTS_LIST),
+        product_image:    null,
+        payment_method:   'Cash on Delivery',
+        status:           'pending',
+        confirmation_sent: false,
+        created_at:       new Date().toISOString(),
+        source:           'test',
+      };
+      db.orders.push(order);
+      db.save();
+
+      // Await the send — return full result to client
+      const { buildSendMessagePayload, LANG_MAP } = await import('./meta-templates.controller.js');
+      const langCode     = LANG_MAP[cam.target_language || 'en'] || 'en_US';
+      const productConfig = buildOrderProductConfig(order, order.name);
+      const msgPayload    = buildSendMessagePayload(metaTpl, productConfig, order.phone, langCode);
+
+      let wamid = null, sendError = null;
+      try {
+        const result = await whatsappService.sendTemplateMessage(order.phone, msgPayload);
+        wamid = result?.messageId || result?.wamid || null;
+        if (wamid) {
+          order.confirmation_sent    = true;
+          order.confirmation_sent_at = new Date().toISOString();
+        }
+      } catch (e) {
+        sendError = e.message;
+      }
+
+      // Save execution record
+      const execRecord = {
+        id:            (db.abandoned_cart_executions.length || 0) + 1,
+        campaign_id:   cam.id,
+        campaign_name: cam.name,
+        campaign_type: 'order_confirmation',
+        channel_id:    channelId,
+        phone,
+        name:          order.name,
+        order_id:      order.id,
+        order_number:  ordNum,
+        template_name: metaTpl.name,
+        status:        wamid ? 'sent' : 'failed',
+        wamid,
+        error:         sendError,
+        payload_sent:  JSON.stringify(msgPayload),
+        stage:         1,
+        sent_at:       new Date().toISOString(),
+      };
+      db.abandoned_cart_executions.push(execRecord);
+      db.save();
+
+      if (sendError) {
+        return res.json({ success: false, step: 'meta_api', error: sendError, order_number: ordNum, phone, campaign: cam.name, template: metaTpl.name });
+      }
+
+      res.json({ success: true, wamid, order_number: ordNum, phone, campaign: cam.name, template: metaTpl.name, message: 'WhatsApp message sent successfully' });
+    } catch (err) {
+      console.error('[TestCodOrder] Error:', err.message);
+      res.status(500).json({ error: err.message });
+    }
+  },
 };
