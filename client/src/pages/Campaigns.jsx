@@ -1897,6 +1897,9 @@ export default function Campaigns() {
   const [responsesOpen, setResponsesOpen]       = useState({}); // campaignId → bool
   const [responsesMap, setResponsesMap]         = useState({}); // campaignId → { responses[], summary }
   const [responsesLoading, setResponsesLoading] = useState({});
+  const [testOrderPhone, setTestOrderPhone]     = useState('');
+  const [testOrderLoading, setTestOrderLoading] = useState({});
+  const [testOrderResult, setTestOrderResult]   = useState({});
 
   const CH = () => ({ 'x-channel-id': localStorage.getItem('channelId') || 'demo' });
 
@@ -1958,6 +1961,39 @@ export default function Campaigns() {
     const next = !responsesOpen[campaignId];
     setResponsesOpen(p => ({ ...p, [campaignId]: next }));
     if (next) loadResponses(campaignId);
+  };
+
+  const sendTestCodOrder = async (campaignId) => {
+    const phone = testOrderPhone.trim();
+    if (!phone) return;
+    setTestOrderLoading(p => ({ ...p, [campaignId]: true }));
+    setTestOrderResult(p => ({ ...p, [campaignId]: null }));
+    try {
+      const PRODUCTS = ['Blue Anarkali Kurti × 1', 'Red Silk Saree × 1', 'Cotton Kurta Set × 2', 'Rayon Palazzo Set × 1'];
+      const NAMES    = ['Priya Sharma', 'Rahul Verma', 'Anjali Singh', 'Karan Mehta', 'Neha Patel'];
+      const pick = arr => arr[Math.floor(Math.random() * arr.length)];
+      const ordNum = 'TEST-' + Math.floor(100000 + Math.random() * 900000);
+      const payload = {
+        phone,
+        name:           pick(NAMES),
+        order_number:   ordNum,
+        products:       pick(PRODUCTS),
+        total_amount:   (Math.floor(Math.random() * 15) + 5) * 100,
+        payment_method: 'Cash on Delivery',
+        is_cod:         true,
+      };
+      const res = await fetch('/api/webhooks/order', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...CH() },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      setTestOrderResult(p => ({ ...p, [campaignId]: { ok: res.ok, ...data, ordNum, phone } }));
+    } catch (e) {
+      setTestOrderResult(p => ({ ...p, [campaignId]: { ok: false, error: e.message } }));
+    } finally {
+      setTestOrderLoading(p => ({ ...p, [campaignId]: false }));
+    }
   };
 
   const handleSendTest = async () => {
@@ -2465,6 +2501,59 @@ export default function Campaigns() {
                     </div>
                   );
                 })()}
+
+                {/* ── Test COD Order panel — order_confirmation only ── */}
+                {c.campaign_type === 'order_confirmation' && (
+                  <div className="rounded-2xl overflow-hidden" style={{ border: '1px solid rgba(251,191,36,0.25)', background: 'rgba(251,191,36,0.04)' }}>
+                    <div className="px-3 py-2.5 flex items-center gap-2" style={{ borderBottom: '1px solid rgba(251,191,36,0.15)' }}>
+                      <span className="text-sm">🧪</span>
+                      <span className="text-[11px] font-bold" style={{ color: '#fbbf24' }}>Test COD Order</span>
+                      <span className="text-[9px] ml-auto" style={{ color: '#475569' }}>Dummy order → triggers real WhatsApp send</span>
+                    </div>
+                    <div className="px-3 py-3 space-y-2.5">
+                      <div className="flex gap-2">
+                        <input
+                          value={testOrderPhone}
+                          onChange={e => setTestOrderPhone(e.target.value)}
+                          placeholder="Phone number (e.g. 919876543210)"
+                          className="flex-1 text-[11px] px-3 py-2 rounded-xl outline-none"
+                          style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(251,191,36,0.2)', color: '#e2e8f0' }}
+                        />
+                        <button
+                          onClick={() => sendTestCodOrder(c.id)}
+                          disabled={testOrderLoading[c.id] || !testOrderPhone.trim()}
+                          className="px-4 py-2 rounded-xl text-[11px] font-bold transition-all flex items-center gap-1.5"
+                          style={{
+                            background: testOrderLoading[c.id] ? 'rgba(251,191,36,0.1)' : 'rgba(251,191,36,0.2)',
+                            border: '1px solid rgba(251,191,36,0.35)',
+                            color: '#fbbf24',
+                            opacity: testOrderLoading[c.id] || !testOrderPhone.trim() ? 0.5 : 1,
+                            cursor: testOrderLoading[c.id] || !testOrderPhone.trim() ? 'not-allowed' : 'pointer',
+                          }}>
+                          {testOrderLoading[c.id] ? '⏳ Sending…' : '📦 Fire COD Order'}
+                        </button>
+                      </div>
+                      {testOrderResult[c.id] && (
+                        <div className="rounded-xl px-3 py-2.5 text-[10px] space-y-1"
+                          style={{ background: testOrderResult[c.id].ok ? 'rgba(74,222,128,0.08)' : 'rgba(248,113,113,0.08)', border: `1px solid ${testOrderResult[c.id].ok ? 'rgba(74,222,128,0.25)' : 'rgba(248,113,113,0.25)'}` }}>
+                          {testOrderResult[c.id].ok ? (
+                            <>
+                              <div className="font-bold" style={{ color: '#4ade80' }}>✓ Order fired — WhatsApp message being sent</div>
+                              <div style={{ color: '#94a3b8' }}>Order: <span style={{ color: '#e2e8f0' }}>{testOrderResult[c.id].ordNum}</span></div>
+                              <div style={{ color: '#94a3b8' }}>Phone: <span style={{ color: '#e2e8f0' }}>{testOrderResult[c.id].phone}</span></div>
+                              {testOrderResult[c.id].duplicate && <div style={{ color: '#fbbf24' }}>⚠ Duplicate order — already exists</div>}
+                            </>
+                          ) : (
+                            <div className="font-bold" style={{ color: '#f87171' }}>✗ {testOrderResult[c.id].error || 'Failed'}</div>
+                          )}
+                        </div>
+                      )}
+                      <p className="text-[9px]" style={{ color: '#334155' }}>
+                        Sends a random dummy COD order to this phone. Campaign must be active with an approved template.
+                      </p>
+                    </div>
+                  </div>
+                )}
 
                 {/* User Responses Panel — order_confirmation only */}
                 {c.campaign_type === 'order_confirmation' && (
