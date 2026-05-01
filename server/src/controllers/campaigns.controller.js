@@ -714,7 +714,12 @@ export const campaignsController = {
       if (campaign.campaign_type === 'abandoned_product_view') {
         const now = Date.now();
         const THIRTY_MIN_MS = 30 * 60 * 1000;
-        audience = (db.product_views || []).filter(v => {
+        audience = (db.product_views || []).map(v => {
+          // Resolve phone: product_views record may have been saved before identify() ran
+          const resolvedPhone = v.phone
+            || (db.website_visitors.find(vis => vis.session_id === v.session_id && vis.channel_id === v.channel_id))?.phone;
+          return { ...v, phone: resolvedPhone };
+        }).filter(v => {
           if (v.channel_id !== channelId || !v.phone) return false;
           if (!v.product_url || !v.product_url.includes(productSlug)) return false;
           if ((v.followup_count || 0) >= 2) return false;

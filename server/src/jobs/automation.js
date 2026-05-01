@@ -658,7 +658,12 @@ async function runAutomation() {
         const THIRTY_MIN_MS = 30 * 60 * 1000;
         const now = Date.now();
 
-        const views = (db.product_views || []).filter(v => {
+        const views = (db.product_views || []).map(v => {
+          // Resolve phone: record may have been saved before identify() ran for this session
+          const resolvedPhone = v.phone
+            || (db.website_visitors.find(vis => vis.session_id === v.session_id && vis.channel_id === v.channel_id))?.phone;
+          return resolvedPhone !== v.phone ? { ...v, phone: resolvedPhone } : v;
+        }).filter(v => {
           if (v.channel_id !== channelId || !v.phone) return false;
           // Must match configured product page URL slug
           if (!v.product_url || !v.product_url.includes(productSlug)) return false;
@@ -687,9 +692,7 @@ async function runAutomation() {
           // Cart has higher priority — abandoned_cart campaign will handle it instead.
           const productInCart = (db.cart_events || []).some(c => {
             if (c.phone !== v.phone || c.recovered || c.channel_id !== channelId) return false;
-            // Check top-level product_url
             if (c.product_url && c.product_url === v.product_url) return true;
-            // Check products array for same URL
             try {
               const prods = JSON.parse(c.products || '[]');
               return prods.some(p => (p.url || p.product_url || p.link || '') === v.product_url);
