@@ -321,6 +321,11 @@
       listingProducts = captureListingProducts();
     }
 
+    // Cross-browser recognition: if this user identified before in this browser,
+    // send their phone so the server can immediately link the session and sync status.
+    var storedPhone = '';
+    try { storedPhone = localStorage.getItem('ww_phone') || ''; } catch(_) {}
+
     track('visitor', {
       deviceType:       getDeviceType(),
       browser:          getBrowser(),
@@ -332,6 +337,7 @@
       screen_res:       window.screen.width + 'x' + window.screen.height,
       timezone:         Intl.DateTimeFormat().resolvedOptions().timeZone,
       page_type:        pageType,
+      phone:            storedPhone || undefined,
       // Send auto-captured listing products for catalog sync
       shopify_carousel: listingProducts.length > 0 ? JSON.stringify(listingProducts) : undefined,
     }, function(resp) {
@@ -697,6 +703,8 @@
 
     identify: function(data) {
       if (!data || !data.phone) return;
+      // Persist phone so future visits in the same browser are auto-recognized
+      try { localStorage.setItem('ww_phone', data.phone); } catch(_) {}
       // If we auto-detected a product earlier, link it to this user now
       var auto = window._wwAutoProduct || null;
       track('identify', {

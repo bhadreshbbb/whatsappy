@@ -4,6 +4,22 @@ import { upgradeStatus, downgradeStatus } from '../utils/statusMachine.js';
 import https from 'https';
 import http from 'http';
 
+// Cross-browser identity: sync the best status from all phone sessions to one session.
+// Called after a phone is linked to a new session so the new browser immediately
+// reflects the correct funnel position (e.g. abandoned_cart) instead of starting at 'active'.
+const _STATUS_RANK = { purchased: 6, followup_complete: 5, abandoned_checkout: 4, abandoned_cart: 3, product_view: 2, active: 1 };
+function _syncBestStatus(db, cid, visitorIdx, phone) {
+  const allSessions = db.website_visitors.filter(v => v.channel_id === cid && v.phone === phone);
+  const bestStatus  = allSessions.reduce((best, s) =>
+    (_STATUS_RANK[s.status] || 0) > (_STATUS_RANK[best] || 0) ? s.status : best, 'active');
+  const current = db.website_visitors[visitorIdx].status || 'active';
+  if ((_STATUS_RANK[bestStatus] || 0) > (_STATUS_RANK[current] || 0)) {
+    db.website_visitors[visitorIdx].status     = bestStatus;
+    db.website_visitors[visitorIdx].updated_at = new Date().toISOString();
+    console.log(`[CrossBrowser] ${phone} status synced → ${bestStatus} (best across ${allSessions.length} sessions)`);
+  }
+}
+
 // Strip query string + hash + trailing slash from any URL before storing
 // e.g. https://shop.com/products/kurti?variant=123&ref=home → https://shop.com/products/kurti
 function cleanProductUrl(url) {
@@ -120,7 +136,7 @@ export const trackingController = {
     try {
       const db = getDb();
       const { channelId, sessionId, url, language, pageViews, pageTitle, screen_res, timezone: tz, shopify_carousel,
-              utm_source, utm_medium, utm_campaign } = req.body;
+              utm_source, utm_medium, utm_campaign, phone: visitorPhone } = req.body;
       // Also parse UTM from the page URL itself (covers direct clicks from WhatsApp)
       let _utmSource = utm_source || null, _utmMedium = utm_medium || null, _utmCampaign = utm_campaign || null;
       try {
@@ -193,6 +209,23 @@ export const trackingController = {
 
       if (visitorIdx >= 0) db.website_visitors[visitorIdx] = { ...db.website_visitors[visitorIdx], ...visitor };
       else db.website_visitors.push(visitor);
+
+      // Re-resolve index after push (in case it was a new record)
+      if (visitorIdx < 0) visitorIdx = db.website_visitors.findIndex(v => v.channel_id === (channelId||'demo') && v.session_id === sessionId);
+
+      // ── Cross-browser recognition: phone sent from localStorage ──────────────
+      // If client sends a previously stored phone, link it immediately and sync
+      // the best known status so a new browser starts at the correct funnel position.
+      if (visitorPhone && visitorIdx >= 0 && !db.website_visitors[visitorIdx].phone) {
+        const cid = channelId || 'demo';
+        db.website_visitors[visitorIdx].phone = visitorPhone;
+        _syncBestStatus(db, cid, visitorIdx, visitorPhone);
+        // Backfill phone on any events already recorded for this session
+        db.cart_events.forEach(c  => { if (c.session_id  === sessionId && !c.phone)  c.phone = visitorPhone; });
+        db.product_views.forEach(v => { if (v.session_id === sessionId && !v.phone)  v.phone = visitorPhone; });
+        (db.page_views || []).forEach(p => { if (p.session_id === sessionId && !p.phone) p.phone = visitorPhone; });
+        console.log(`[CrossBrowser] Linked phone ${visitorPhone} to new session ${sessionId} via localStorage`);
+      }
 
       // If visitor already has a phone, keep is_repeat / visit_count consistent
       const knownPhone = existingPhone || (visitorIdx >= 0 ? db.website_visitors[visitorIdx]?.phone : null);
@@ -286,6 +319,9 @@ export const trackingController = {
           db.cart_events.forEach(c => { if (allSessionIds.has(c.session_id) && !c.phone) c.phone = phone; });
           db.product_views.forEach(v => { if (allSessionIds.has(v.session_id) && !v.phone) v.phone = phone; });
           db.page_views && db.page_views.forEach(p => { if (allSessionIds.has(p.session_id) && !p.phone) p.phone = phone; });
+
+          // Sync best status across all phone sessions to the current session
+          _syncBestStatus(db, cid, idx, phone);
         }
         db.save();
       }
