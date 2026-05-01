@@ -1905,6 +1905,16 @@ export default function Campaigns() {
 
   const CH = () => ({ 'x-channel-id': localStorage.getItem('channelId') || 'demo' });
 
+  // Auto-refresh open audience panels every 60 seconds
+  useEffect(() => {
+    const openIds = Object.keys(audienceOpen).filter(id => audienceOpen[id]);
+    if (!openIds.length) return;
+    const interval = setInterval(() => {
+      openIds.forEach(id => loadAudience(id));
+    }, 60000);
+    return () => clearInterval(interval);
+  }, [audienceOpen]);
+
   const loadAiInsights = async () => {
     setInsightsLoading(true);
     try {
@@ -2496,32 +2506,47 @@ export default function Campaigns() {
                     const aud = audienceMap[c.id];
                     if (!aud) return null;
                     if (!aud.audience?.length) return <div className="mt-2 text-[10px] text-center py-3 rounded-xl" style={{ color: '#475569', border: '1px solid rgba(255,255,255,0.05)' }}>No eligible users right now.</div>;
+
+                    const lockBadge = (u) => {
+                      if (u.lock_status === 'pending')                return <span className="text-[9px] px-1.5 rounded" style={{ background: 'rgba(251,191,36,0.1)', color: '#fbbf24' }}>⏱ {u.ready_to_send ? 'ready' : `${30 - (u.minutes_since_activity||0)}m left`}</span>;
+                      if (u.lock_status === 'active')                 return <span className="text-[9px] px-1.5 rounded" style={{ background: 'rgba(99,102,241,0.1)', color: '#818cf8' }}>🔒 stage {u.stage}</span>;
+                      if (u.lock_status === 'cart_added')             return <span className="text-[9px] px-1.5 rounded" style={{ background: 'rgba(251,146,60,0.1)', color: '#fb923c' }}>🛒 added to cart</span>;
+                      if (u.lock_status === 'purchased')              return <span className="text-[9px] px-1.5 rounded" style={{ background: 'rgba(74,222,128,0.1)', color: '#4ade80' }}>✅ purchased</span>;
+                      if (u.lock_status === 'shifted_recommendation') return <span className="text-[9px] px-1.5 rounded" style={{ background: 'rgba(167,139,250,0.1)', color: '#a78bfa' }}>✨ recommendation</span>;
+                      return null;
+                    };
+
                     return (
                       <div className="mt-2 rounded-xl overflow-hidden" style={{ border: '1px solid rgba(251,191,36,0.15)' }}>
                         <div className="px-3 py-2 flex items-center justify-between" style={{ background: 'rgba(251,191,36,0.05)', borderBottom: '1px solid rgba(251,191,36,0.08)' }}>
-                          <span className="text-[10px] font-bold" style={{ color: '#fbbf24' }}>{aud.count} user{aud.count !== 1 ? 's' : ''} eligible</span>
-                          <button onClick={() => loadAudience(c.id)} className="text-[9px] flex items-center gap-1" style={{ color: '#64748b' }}><Repeat size={9}/> Refresh</button>
+                          <span className="text-[10px] font-bold" style={{ color: '#fbbf24' }}>{aud.count} user{aud.count !== 1 ? 's' : ''} · auto-refresh 60s</span>
+                          <button onClick={() => loadAudience(c.id)} className="text-[9px] flex items-center gap-1" style={{ color: '#64748b' }}><Repeat size={9}/> Refresh now</button>
                         </div>
-                        <div style={{ maxHeight: 240, overflowY: 'auto' }}>
-                          {aud.audience.slice(0, 20).map((u, i) => (
+                        <div style={{ maxHeight: 300, overflowY: 'auto' }}>
+                          {aud.audience.slice(0, 50).map((u, i) => (
                             <div key={i} className="flex items-start gap-2 px-3 py-2.5" style={{ background: i % 2 === 0 ? 'rgba(255,255,255,0.01)' : 'transparent', borderTop: i > 0 ? '1px solid rgba(255,255,255,0.04)' : 'none' }}>
-                              <div className="w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold flex-shrink-0 mt-0.5" style={{ background: 'rgba(251,191,36,0.1)', color: '#fbbf24' }}>
+                              <div className="w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold flex-shrink-0 mt-0.5"
+                                style={{ background: u.lock_status === 'purchased' ? 'rgba(74,222,128,0.15)' : u.lock_status === 'cart_added' ? 'rgba(251,146,60,0.15)' : 'rgba(251,191,36,0.1)', color: u.lock_status === 'purchased' ? '#4ade80' : u.lock_status === 'cart_added' ? '#fb923c' : '#fbbf24' }}>
                                 {(u.name || u.phone || '?')[0].toUpperCase()}
                               </div>
                               <div className="flex-1 min-w-0">
-                                <div className="flex items-center gap-2 flex-wrap">
+                                <div className="flex items-center gap-1.5 flex-wrap">
                                   <span className="text-[10px] font-semibold text-white truncate">{u.name || 'Unknown'}</span>
                                   <span className="text-[9px] font-mono" style={{ color: '#475569' }}>{u.phone}</span>
-                                  {u.ready_to_send === false && <span className="text-[9px] px-1.5 rounded" style={{ background: 'rgba(251,191,36,0.1)', color: '#fbbf24' }}>⏱ waiting</span>}
-                                  {u.ready_to_send === true && <span className="text-[9px] px-1.5 rounded" style={{ background: 'rgba(74,222,128,0.1)', color: '#4ade80' }}>ready</span>}
+                                  {lockBadge(u)}
                                 </div>
-                                {u.product_name && <p className="text-[9px] truncate mt-0.5" style={{ color: '#64748b' }}>{u.product_name}{u.product_price ? ` · ₹${u.product_price}` : ''}</p>}
-                                {u.minutes_since_activity !== undefined && <p className="text-[9px]" style={{ color: '#334155' }}>{u.minutes_since_activity}m ago · stage {u.followup_count || 0} done</p>}
+                                {u.product_name && <p className="text-[9px] truncate mt-0.5" style={{ color: '#94a3b8' }}>👁 {u.product_name}{u.product_price ? ` · ₹${u.product_price}` : ''}</p>}
+                                <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+                                  {u.minutes_since_activity != null && <span className="text-[9px]" style={{ color: '#475569' }}>{u.minutes_since_activity}m ago</span>}
+                                  {u.stage > 0 && <span className="text-[9px]" style={{ color: '#475569' }}>msg {u.stage}/2 sent</span>}
+                                  {u.revenue > 0 && <span className="text-[9px]" style={{ color: '#4ade80' }}>₹{u.revenue} revenue</span>}
+                                  {u.cart_amount > 0 && <span className="text-[9px]" style={{ color: '#fb923c' }}>₹{u.cart_amount} in cart</span>}
+                                </div>
                               </div>
                             </div>
                           ))}
                         </div>
-                        {aud.count > 20 && <p className="text-center text-[9px] py-2" style={{ color: '#334155' }}>+{aud.count - 20} more</p>}
+                        {aud.count > 50 && <p className="text-center text-[9px] py-2" style={{ color: '#334155' }}>+{aud.count - 50} more</p>}
                       </div>
                     );
                   })()}
