@@ -7,7 +7,7 @@ import {
   Filter, Sliders, UserCheck, Search, Target, ChevronRight, AlertCircle,
   Flame, Smartphone, Monitor, Repeat, Send, GitBranch, Image,
 } from "lucide-react";
-import { campaignsApi, templatesApi, analyticsApi } from "../api";
+import { campaignsApi, templatesApi, analyticsApi, visitorsApi } from "../api";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -330,10 +330,17 @@ function CreateModal({ onClose, onCreated }) {
         setLang(data.topLang);
       }
     }).catch(() => {});
-    // Load contacts for audience filter preview
+    // Load contacts for audience filter preview — same source as Contacts tab
     setCtLoading(true);
-    analyticsApi.contacts(60, 1000).then(d => setContacts(d?.contacts || []))
-      .catch(() => {}).finally(() => setCtLoading(false));
+    visitorsApi.list({ hasPhone: 'true', limit: '1000' }).then(res => {
+      setContacts((res.data || []).map(v => ({
+        ...v,
+        device:      v.device_type,
+        power_score: v.engagement_score || 0,
+        cart_events: 0,
+        is_repeat:   false,
+      })));
+    }).catch(() => {}).finally(() => setCtLoading(false));
   }, []);
 
   // Fetch send payload preview when Meta template or language changes
@@ -1237,8 +1244,14 @@ function CustomCampaignModal({ onClose, onCreated }) {
     fetch('/api/meta-templates', { headers: chHeaders })
       .then(r => r.json()).then(d => setMetaTpls(d.templates || [])).catch(() => {});
     setCtLoading(true);
-    analyticsApi.contacts(60, 1000).then(d => {
-      setContacts(d?.contacts || []);
+    visitorsApi.list({ hasPhone: 'true', limit: '1000' }).then(res => {
+      setContacts((res.data || []).map(v => ({
+        ...v,
+        device:      v.device_type,
+        power_score: v.engagement_score || 0,
+        cart_events: 0,
+        is_repeat:   false,
+      })));
     }).catch(() => {}).finally(() => setCtLoading(false));
   }, []);
 
