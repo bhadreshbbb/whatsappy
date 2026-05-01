@@ -186,6 +186,11 @@ export default function Templates() {
   const [productConfig, setProductConfig] = useState({});
   const [previewTpl, setPreviewTpl]       = useState(null);   // template to preview in modal
   const [sendPayloadModal, setSendPayloadModal] = useState(null); // { payload, api_url, curl_command, ... }
+  const [aiModal, setAiModal]             = useState(false);
+  const [aiForm, setAiForm]               = useState({ campaign_type: 'abandoned_product_view', language: 'English', tone: 'friendly', product_type: 'ethnic fashion clothing', product_name: '', brand_name: '' });
+  const [aiLoading, setAiLoading]         = useState(false);
+  const [aiResult, setAiResult]           = useState(null);
+  const [aiError, setAiError]             = useState('');
 
   useEffect(() => { loadTemplates(); }, []);
 
@@ -402,6 +407,36 @@ export default function Templates() {
       onBack={() => { setView('list'); setError(''); }} />
   );
 
+  const generateWithAI = async () => {
+    setAiLoading(true); setAiError(''); setAiResult(null);
+    try {
+      const res  = await fetch('/api/ai/generate-template', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-channel-id': localStorage.getItem('channelId') || 'demo' },
+        body: JSON.stringify(aiForm),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || 'Generation failed');
+      setAiResult(data);
+    } catch (e) { setAiError(e.message); }
+    finally { setAiLoading(false); }
+  };
+
+  const applyAiResult = () => {
+    if (!aiResult) return;
+    const newForm = { ...form, body: aiResult.body };
+    if (aiResult.header) newForm.header = aiResult.header;
+    if (aiResult.footer) newForm.footer = aiResult.footer;
+    // Add quick reply buttons if suggested
+    if (aiResult.quick_replies?.length && !form.is_carousel) {
+      const existing = (form.buttons || []).filter(b => b.type !== 'QUICK_REPLY');
+      newForm.buttons = [...existing, ...aiResult.quick_replies.slice(0, 3).map(t => ({ type: 'QUICK_REPLY', text: t }))];
+    }
+    setForm(newForm);
+    setAiModal(false);
+    setAiResult(null);
+  };
+
   // ── LIST VIEW ─────────────────────────────────────────────────────────────
   return (
     <div className="flex flex-col gap-6">
@@ -411,6 +446,13 @@ export default function Templates() {
           <p className="text-slate-400 text-sm mt-0.5">Create, submit for approval, assign products, send campaigns</p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
+          <button onClick={() => { setAiModal(true); setAiResult(null); setAiError(''); }}
+            className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium transition-all"
+            style={{ background: 'rgba(167,139,250,0.15)', border: '1px solid rgba(167,139,250,0.3)', color: '#a78bfa' }}
+            onMouseEnter={e => e.currentTarget.style.background='rgba(167,139,250,0.25)'}
+            onMouseLeave={e => e.currentTarget.style.background='rgba(167,139,250,0.15)'}>
+            <Sparkles size={15} /> Generate with AI
+          </button>
           <button onClick={openCreateSingle}
             className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium transition-all"
             style={{ background: 'rgba(99,102,241,0.15)', border: '1px solid rgba(99,102,241,0.3)', color: '#818cf8' }}
@@ -558,6 +600,169 @@ export default function Templates() {
       {previewTpl && <WaPreviewModal tpl={previewTpl} onClose={() => setPreviewTpl(null)} />}
       {/* Send Payload Modal */}
       {sendPayloadModal && <SendPayloadModal data={sendPayloadModal} onClose={() => setSendPayloadModal(null)} />}
+
+      {/* AI Template Generator Modal */}
+      {aiModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(4px)' }}>
+          <div className="relative w-full max-w-2xl rounded-2xl border border-purple-500/20 overflow-hidden"
+            style={{ background: 'linear-gradient(135deg,#13111c 0%,#0f0c1a 100%)' }}>
+            {/* Header */}
+            <div className="flex items-center justify-between px-6 py-4 border-b border-white/5">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-xl flex items-center justify-center" style={{ background: 'rgba(167,139,250,0.15)' }}>
+                  <Sparkles size={18} className="text-purple-400" />
+                </div>
+                <div>
+                  <h2 className="text-white font-semibold text-base">AI Template Generator</h2>
+                  <p className="text-slate-500 text-xs">Claude writes your WhatsApp template copy</p>
+                </div>
+              </div>
+              <button onClick={() => setAiModal(false)} className="text-slate-500 hover:text-white transition-colors p-1">
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="p-6 flex flex-col gap-5 max-h-[80vh] overflow-y-auto">
+              {/* Form */}
+              {!aiResult && (
+                <div className="flex flex-col gap-4">
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="flex flex-col gap-1.5">
+                      <label className="text-xs text-slate-400 font-medium">Campaign Type</label>
+                      <select value={aiForm.campaign_type}
+                        onChange={e => setAiForm(f => ({ ...f, campaign_type: e.target.value }))}
+                        className="bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-purple-500/50">
+                        <option value="abandoned_cart">Abandoned Cart</option>
+                        <option value="abandoned_product_view">Product View Reminder</option>
+                        <option value="order_confirmation">Order Confirmation</option>
+                        <option value="win_back">Win-Back / Re-engagement</option>
+                        <option value="flash_sale">Flash Sale / Offer</option>
+                        <option value="new_arrival">New Arrival</option>
+                      </select>
+                    </div>
+                    <div className="flex flex-col gap-1.5">
+                      <label className="text-xs text-slate-400 font-medium">Language</label>
+                      <select value={aiForm.language}
+                        onChange={e => setAiForm(f => ({ ...f, language: e.target.value }))}
+                        className="bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-purple-500/50">
+                        <option value="English">English</option>
+                        <option value="Hindi">Hindi</option>
+                        <option value="Hinglish">Hinglish (Hindi + English)</option>
+                        <option value="Gujarati">Gujarati</option>
+                        <option value="Tamil">Tamil</option>
+                        <option value="Telugu">Telugu</option>
+                        <option value="Marathi">Marathi</option>
+                      </select>
+                    </div>
+                    <div className="flex flex-col gap-1.5">
+                      <label className="text-xs text-slate-400 font-medium">Tone</label>
+                      <select value={aiForm.tone}
+                        onChange={e => setAiForm(f => ({ ...f, tone: e.target.value }))}
+                        className="bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-purple-500/50">
+                        <option value="friendly">Friendly & Warm</option>
+                        <option value="urgent">Urgent / FOMO</option>
+                        <option value="professional">Professional</option>
+                        <option value="playful">Playful & Fun</option>
+                        <option value="luxury">Premium / Luxury</option>
+                      </select>
+                    </div>
+                    <div className="flex flex-col gap-1.5">
+                      <label className="text-xs text-slate-400 font-medium">Product Type</label>
+                      <input value={aiForm.product_type}
+                        onChange={e => setAiForm(f => ({ ...f, product_type: e.target.value }))}
+                        placeholder="e.g. ethnic fashion clothing"
+                        className="bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-sm text-white placeholder-slate-600 focus:outline-none focus:border-purple-500/50" />
+                    </div>
+                    <div className="flex flex-col gap-1.5">
+                      <label className="text-xs text-slate-400 font-medium">Brand Name <span className="text-slate-600">(optional)</span></label>
+                      <input value={aiForm.brand_name}
+                        onChange={e => setAiForm(f => ({ ...f, brand_name: e.target.value }))}
+                        placeholder="e.g. Laasyna"
+                        className="bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-sm text-white placeholder-slate-600 focus:outline-none focus:border-purple-500/50" />
+                    </div>
+                    <div className="flex flex-col gap-1.5">
+                      <label className="text-xs text-slate-400 font-medium">Product Name <span className="text-slate-600">(optional)</span></label>
+                      <input value={aiForm.product_name}
+                        onChange={e => setAiForm(f => ({ ...f, product_name: e.target.value }))}
+                        placeholder="e.g. Blue Anarkali Kurti"
+                        className="bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-sm text-white placeholder-slate-600 focus:outline-none focus:border-purple-500/50" />
+                    </div>
+                  </div>
+
+                  {aiError && (
+                    <div className="flex items-start gap-2 px-3 py-2.5 rounded-xl bg-red-500/10 border border-red-500/20 text-red-400 text-sm">
+                      <AlertCircle size={15} className="mt-0.5 shrink-0" /> {aiError}
+                    </div>
+                  )}
+
+                  <button onClick={generateWithAI} disabled={aiLoading}
+                    className="flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-semibold transition-all disabled:opacity-50"
+                    style={{ background: 'linear-gradient(135deg,#7c3aed,#a855f7)', color: '#fff' }}>
+                    {aiLoading ? <><Loader2 size={15} className="animate-spin" /> Generating...</> : <><Sparkles size={15} /> Generate Template</>}
+                  </button>
+                </div>
+              )}
+
+              {/* Result */}
+              {aiResult && (
+                <div className="flex flex-col gap-4">
+                  <div className="flex items-center gap-2 text-green-400 text-sm font-medium">
+                    <CheckCircle2 size={15} /> Template generated!
+                  </div>
+
+                  {aiResult.body && (
+                    <div className="flex flex-col gap-2">
+                      <label className="text-xs text-slate-400 font-medium uppercase tracking-wide">Body</label>
+                      <div className="bg-white/5 border border-white/10 rounded-xl p-3 text-sm text-slate-200 whitespace-pre-wrap font-mono leading-relaxed">
+                        {aiResult.body}
+                      </div>
+                    </div>
+                  )}
+                  {aiResult.header && (
+                    <div className="flex flex-col gap-2">
+                      <label className="text-xs text-slate-400 font-medium uppercase tracking-wide">Header</label>
+                      <div className="bg-white/5 border border-white/10 rounded-xl p-3 text-sm text-slate-200">{aiResult.header}</div>
+                    </div>
+                  )}
+                  {aiResult.footer && (
+                    <div className="flex flex-col gap-2">
+                      <label className="text-xs text-slate-400 font-medium uppercase tracking-wide">Footer</label>
+                      <div className="bg-white/5 border border-white/10 rounded-xl p-3 text-sm text-slate-400">{aiResult.footer}</div>
+                    </div>
+                  )}
+                  {aiResult.quick_replies?.length > 0 && (
+                    <div className="flex flex-col gap-2">
+                      <label className="text-xs text-slate-400 font-medium uppercase tracking-wide">Suggested Quick Replies</label>
+                      <div className="flex flex-wrap gap-2">
+                        {aiResult.quick_replies.map((r, i) => (
+                          <span key={i} className="text-xs px-3 py-1.5 rounded-lg bg-blue-500/10 border border-blue-500/20 text-blue-300">{r}</span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {aiResult.tip && (
+                    <div className="flex items-start gap-2 px-3 py-2.5 rounded-xl bg-purple-500/10 border border-purple-500/20 text-purple-300 text-xs">
+                      <Sparkles size={12} className="mt-0.5 shrink-0" /> {aiResult.tip}
+                    </div>
+                  )}
+
+                  <div className="flex gap-3 pt-1">
+                    <button onClick={() => { setAiResult(null); setAiError(''); }}
+                      className="flex-1 py-2.5 rounded-xl text-sm font-medium border border-white/10 text-slate-400 hover:text-white hover:border-white/20 transition-all">
+                      Regenerate
+                    </button>
+                    <button onClick={applyAiResult}
+                      className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-semibold transition-all"
+                      style={{ background: 'linear-gradient(135deg,#7c3aed,#a855f7)', color: '#fff' }}>
+                      <Check size={14} /> Apply to Template Form
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -20,6 +20,7 @@ import { chatRoutes } from './routes/chat.routes.js';
 import { galleryRoutes } from './routes/gallery.routes.js';
 import { metaTemplatesRoutes } from './routes/meta-templates.routes.js';
 import { webhooksRoutes }      from './routes/webhooks.routes.js';
+import { aiRoutes }            from './routes/ai.routes.js';
 import { initDb } from './services/database.js';
 import { startAutomation } from './jobs/automation.js';
 import { errorHandler } from './middleware/errorHandler.js';
@@ -98,6 +99,7 @@ app.use('/api/chat',       chatRoutes);
 app.use('/api/gallery',         galleryRoutes);
 app.use('/api/meta-templates',  metaTemplatesRoutes);
 app.use('/api/webhooks',        webhooksRoutes);
+app.use('/api/ai',              aiRoutes);
 
 // Serve built React frontend — must be BEFORE errorHandler
 const clientDist = path.join(__dirname, '../../client/dist');

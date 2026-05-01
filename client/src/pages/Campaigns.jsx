@@ -1900,8 +1900,23 @@ export default function Campaigns() {
   const [testOrderPhone, setTestOrderPhone]     = useState('');
   const [testOrderLoading, setTestOrderLoading] = useState({});
   const [testOrderResult, setTestOrderResult]   = useState({});
+  const [aiInsights, setAiInsights]             = useState(null);
+  const [insightsLoading, setInsightsLoading]   = useState(false);
 
   const CH = () => ({ 'x-channel-id': localStorage.getItem('channelId') || 'demo' });
+
+  const loadAiInsights = async () => {
+    setInsightsLoading(true);
+    try {
+      const res  = await fetch('/api/ai/insights', { headers: CH() });
+      const data = await res.json();
+      setAiInsights(data);
+    } catch (_) {}
+    finally { setInsightsLoading(false); }
+  };
+
+  // Load AI insights on mount
+  useState(() => { setTimeout(loadAiInsights, 500); }, []);
 
   const loadAnalytics = async (campaignId) => {
     if (analyticsLoading[campaignId]) return;
@@ -2092,6 +2107,71 @@ export default function Campaigns() {
               <p className="text-[10px] uppercase tracking-widest mt-0.5" style={{ color: '#334155' }}>{s.label}</p>
             </div>
           ))}
+        </div>
+      )}
+
+      {/* ── AI Insights Panel ── */}
+      {!loading && (
+        <div className="rounded-2xl overflow-hidden" style={{ border: '1px solid rgba(167,139,250,0.2)', background: 'linear-gradient(135deg, rgba(167,139,250,0.06) 0%, rgba(34,211,238,0.04) 100%)' }}>
+          <div className="px-4 py-3 flex items-center justify-between" style={{ borderBottom: '1px solid rgba(167,139,250,0.1)' }}>
+            <div className="flex items-center gap-2">
+              <span className="text-base">✨</span>
+              <span className="text-[12px] font-bold" style={{ color: '#a78bfa' }}>AI Insights</span>
+              <span className="text-[10px] px-2 py-0.5 rounded-full font-semibold" style={{ background: 'rgba(167,139,250,0.15)', color: '#c4b5fd' }}>Smart Analytics</span>
+            </div>
+            <button onClick={loadAiInsights} className="text-[10px] flex items-center gap-1" style={{ color: '#475569' }}>
+              <Repeat size={10}/> Refresh
+            </button>
+          </div>
+
+          {insightsLoading ? (
+            <div className="px-4 py-4 text-[11px] text-center" style={{ color: '#475569' }}>Analyzing your campaign data…</div>
+          ) : aiInsights ? (
+            <div className="px-4 py-4 space-y-4">
+              {/* KPI Grid */}
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                {[
+                  { icon: '💰', label: 'Revenue at Risk',   value: `₹${(aiInsights.revenue_at_risk || 0).toLocaleString('en-IN')}`, color: '#f87171', bg: 'rgba(248,113,113,0.08)' },
+                  { icon: '🎯', label: 'High-Intent Buyers', value: aiInsights.high_intent_count || 0,                              color: '#4ade80', bg: 'rgba(74,222,128,0.08)' },
+                  { icon: '📤', label: 'Messages Sent',      value: (aiInsights.total_sent_all_time || 0).toLocaleString(),          color: '#22d3ee', bg: 'rgba(34,211,238,0.08)' },
+                  { icon: '💬', label: 'Response Rate',      value: `${aiInsights.response_rate || 0}%`,                            color: '#fbbf24', bg: 'rgba(251,191,36,0.08)' },
+                ].map(k => (
+                  <div key={k.label} className="rounded-xl px-3 py-2.5 text-center" style={{ background: k.bg }}>
+                    <div className="text-base">{k.icon}</div>
+                    <div className="text-sm font-bold mt-0.5" style={{ color: k.color }}>{k.value}</div>
+                    <div className="text-[9px] mt-0.5 uppercase tracking-wide" style={{ color: '#475569' }}>{k.label}</div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Extra stats row */}
+              <div className="flex items-center gap-4 text-[10px] flex-wrap px-1" style={{ color: '#64748b' }}>
+                {aiInsights.best_send_hour != null && (
+                  <span>⏰ Best send time: <span style={{ color: '#a78bfa' }}>{aiInsights.best_send_hour}:00–{aiInsights.best_send_hour + 1}:00</span></span>
+                )}
+                {aiInsights.revenue_recovered_week > 0 && (
+                  <span>🏆 Recovered this week: <span style={{ color: '#4ade80' }}>₹{aiInsights.revenue_recovered_week.toLocaleString('en-IN')}</span></span>
+                )}
+                {aiInsights.confirmed_orders > 0 && (
+                  <span>📦 COD confirmed: <span style={{ color: '#fbbf24' }}>{aiInsights.confirmed_orders}</span></span>
+                )}
+              </div>
+
+              {/* AI Recommendations */}
+              {aiInsights.recommendations?.length > 0 && (
+                <div className="space-y-1.5">
+                  <p className="text-[10px] font-semibold uppercase tracking-widest" style={{ color: '#475569' }}>AI Recommendations</p>
+                  {aiInsights.recommendations.map((r, i) => (
+                    <div key={i} className="text-[11px] px-3 py-2 rounded-xl" style={{ background: 'rgba(167,139,250,0.06)', border: '1px solid rgba(167,139,250,0.1)', color: '#cbd5e1' }}>
+                      {r}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="px-4 py-3 text-[11px]" style={{ color: '#475569' }}>Click Refresh to load insights.</div>
+          )}
         </div>
       )}
 
