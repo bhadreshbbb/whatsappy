@@ -2539,44 +2539,134 @@ export default function Campaigns() {
                       return { bg: 'rgba(251,191,36,0.1)', color: '#fbbf24' };
                     };
 
+                    // Status badge same as Contacts command center
+                    const statusBadge = (u) => {
+                      const ss =
+                        u.status === 'purchased'          ? { bg: 'rgba(34,197,94,0.12)',   border: 'rgba(34,197,94,0.3)',   color: '#4ade80'  } :
+                        u.status === 'abandoned_cart'     ? { bg: 'rgba(249,115,22,0.12)',  border: 'rgba(249,115,22,0.3)',  color: '#fb923c'  } :
+                        u.status === 'abandoned_checkout' ? { bg: 'rgba(239,68,68,0.12)',   border: 'rgba(239,68,68,0.3)',   color: '#f87171'  } :
+                        u.status === 'product_view'       ? { bg: 'rgba(59,130,246,0.12)',  border: 'rgba(59,130,246,0.3)',  color: '#60a5fa'  } :
+                        u.status === 'followup_complete'  ? { bg: 'rgba(168,85,247,0.12)',  border: 'rgba(168,85,247,0.3)',  color: '#c084fc'  } :
+                                                            { bg: 'rgba(100,116,139,0.12)', border: 'rgba(100,116,139,0.3)', color: '#94a3b8'  };
+                      return <span className="text-[8px] px-1.5 py-0.5 rounded font-semibold whitespace-nowrap"
+                        style={{ background: ss.bg, border: `1px solid ${ss.border}`, color: ss.color }}>
+                        {(u.status || 'active').replace(/_/g, ' ')}
+                      </span>;
+                    };
+
+                    // Power score mini badge
+                    const scoreBadge = (score) => {
+                      if (!score) return null;
+                      const cfg =
+                        score >= 80 ? { color: '#f87171', bg: 'rgba(239,68,68,0.1)'   } :
+                        score >= 60 ? { color: '#fb923c', bg: 'rgba(249,115,22,0.1)'  } :
+                        score >= 40 ? { color: '#fbbf24', bg: 'rgba(245,158,11,0.1)'  } :
+                                      { color: '#60a5fa', bg: 'rgba(59,130,246,0.1)'  };
+                      return <span className="text-[8px] px-1 py-0.5 rounded font-bold font-mono"
+                        style={{ background: cfg.bg, color: cfg.color }}>{score}</span>;
+                    };
+
                     return (
                       <div className="mt-2 rounded-xl overflow-hidden" style={{ border: '1px solid rgba(251,191,36,0.15)' }}>
+                        {/* Header */}
                         <div className="px-3 py-2 flex items-center justify-between" style={{ background: 'rgba(251,191,36,0.05)', borderBottom: '1px solid rgba(251,191,36,0.08)' }}>
-                          <span className="text-[10px] font-bold" style={{ color: '#fbbf24' }}>{aud.count} user{aud.count !== 1 ? 's' : ''} · auto-refresh 60s</span>
-                          <button onClick={() => loadAudience(c.id)} className="text-[9px] flex items-center gap-1" style={{ color: '#64748b' }}><Repeat size={9}/> Refresh now</button>
+                          <span className="text-[10px] font-bold" style={{ color: '#fbbf24' }}>
+                            {aud.count} user{aud.count !== 1 ? 's' : ''} · 🔄 auto-refresh 60s
+                          </span>
+                          <button onClick={() => loadAudience(c.id)} className="text-[9px] flex items-center gap-1" style={{ color: '#64748b' }}>
+                            <Repeat size={9}/> Refresh
+                          </button>
                         </div>
-                        <div style={{ maxHeight: 300, overflowY: 'auto' }}>
-                          {aud.audience.slice(0, 50).map((u, i) => {
-                            const av = avatarColors(u);
-                            return (
-                            <div key={i} className="flex items-start gap-2 px-3 py-2.5" style={{ background: i % 2 === 0 ? 'rgba(255,255,255,0.01)' : 'transparent', borderTop: i > 0 ? '1px solid rgba(255,255,255,0.04)' : 'none' }}>
-                              <div className="w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold flex-shrink-0 mt-0.5"
-                                style={{ background: av.bg, color: av.color }}>
-                                {(u.name || u.phone || '?')[0].toUpperCase()}
-                              </div>
-                              <div className="flex-1 min-w-0">
-                                <div className="flex items-center gap-1.5 flex-wrap">
-                                  <span className="text-[10px] font-semibold text-white truncate">{u.name || 'Unknown'}</span>
-                                  <span className="text-[9px] font-mono" style={{ color: '#475569' }}>{u.phone}</span>
-                                  {lockBadge(u)}
-                                </div>
-                                {u.product_name && (
-                                  <p className="text-[9px] truncate mt-0.5" style={{ color: '#94a3b8' }}>
-                                    {c.campaign_type === 'abandoned_cart' ? '🛒' : '👁'} {u.product_name}{u.product_price ? ` · ₹${u.product_price}` : ''}
-                                    {u.cart_items > 0 && ` (${u.cart_items} item${u.cart_items !== 1 ? 's' : ''})`}
-                                  </p>
-                                )}
-                                <div className="flex items-center gap-2 mt-0.5 flex-wrap">
-                                  {u.minutes_since_activity != null && u.lock_status !== 'pending' && <span className="text-[9px]" style={{ color: '#475569' }}>{u.minutes_since_activity}m ago</span>}
-                                  {u.city && <span className="text-[9px]" style={{ color: '#334155' }}>📍{u.city}</span>}
-                                  {u.stage > 0 && <span className="text-[9px]" style={{ color: '#475569' }}>msg {u.stage}/2 sent</span>}
-                                  {u.revenue > 0 && <span className="text-[9px]" style={{ color: '#4ade80' }}>₹{u.revenue} revenue</span>}
-                                  {u.cart_amount > 0 && <span className="text-[9px]" style={{ color: '#fb923c' }}>₹{u.cart_amount} cart total</span>}
-                                </div>
-                              </div>
-                            </div>
-                            );
-                          })}
+
+                        {/* Mini command-center table */}
+                        <div style={{ maxHeight: 380, overflowY: 'auto' }}>
+                          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
+                            <thead>
+                              <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                                <th className="text-left px-3 py-1.5 text-[9px] font-semibold uppercase tracking-wide" style={{ color: '#475569' }}>User</th>
+                                <th className="text-left px-2 py-1.5 text-[9px] font-semibold uppercase tracking-wide" style={{ color: '#475569' }}>Status</th>
+                                <th className="text-left px-2 py-1.5 text-[9px] font-semibold uppercase tracking-wide" style={{ color: '#475569' }}>Campaign</th>
+                                <th className="text-left px-2 py-1.5 text-[9px] font-semibold uppercase tracking-wide" style={{ color: '#475569' }}>Pwr</th>
+                                <th className="text-left px-2 py-1.5 text-[9px] font-semibold uppercase tracking-wide" style={{ color: '#475569' }}>Product / Cart</th>
+                                <th className="text-left px-2 py-1.5 text-[9px] font-semibold uppercase tracking-wide" style={{ color: '#475569' }}>City · Device</th>
+                                <th className="text-left px-2 py-1.5 text-[9px] font-semibold uppercase tracking-wide" style={{ color: '#475569' }}>Activity</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {aud.audience.slice(0, 50).map((u, i) => {
+                                const av = avatarColors(u);
+                                return (
+                                  <tr key={i} style={{ borderTop: '1px solid rgba(255,255,255,0.03)', background: i % 2 === 0 ? 'rgba(255,255,255,0.01)' : 'transparent' }}>
+
+                                    {/* User */}
+                                    <td className="px-3 py-2">
+                                      <div className="flex items-center gap-1.5">
+                                        <div className="w-5 h-5 rounded-full flex items-center justify-center text-[9px] font-bold flex-shrink-0"
+                                          style={{ background: av.bg, color: av.color }}>
+                                          {(u.name || u.phone || '?')[0].toUpperCase()}
+                                        </div>
+                                        <div className="min-w-0">
+                                          <p className="text-[10px] font-semibold text-white truncate max-w-[90px]">{u.name || 'Unknown'}</p>
+                                          <p className="text-[9px] font-mono truncate" style={{ color: '#4ade80' }}>
+                                            {u.phone}
+                                            {u.is_repeat && <span className="ml-1" style={{ color: '#c084fc' }}>🔁</span>}
+                                          </p>
+                                        </div>
+                                      </div>
+                                    </td>
+
+                                    {/* Command center status — same as Contacts tab */}
+                                    <td className="px-2 py-2">{statusBadge(u)}</td>
+
+                                    {/* Campaign lock status */}
+                                    <td className="px-2 py-2">{lockBadge(u)}</td>
+
+                                    {/* Power score */}
+                                    <td className="px-2 py-2">
+                                      <div className="flex flex-col gap-0.5">
+                                        {scoreBadge(u.power_score)}
+                                        {u.page_views > 0 && <span className="text-[8px] font-mono" style={{ color: '#64748b' }}>{u.page_views}pg</span>}
+                                      </div>
+                                    </td>
+
+                                    {/* Product / Cart info */}
+                                    <td className="px-2 py-2 max-w-[110px]">
+                                      {u.product_name && (
+                                        <p className="text-[9px] truncate" style={{ color: '#94a3b8' }}>
+                                          {c.campaign_type === 'abandoned_cart' ? '🛒' : '👁'} {u.product_name}
+                                          {u.product_price ? ` ₹${u.product_price}` : ''}
+                                          {u.cart_items > 0 ? ` ×${u.cart_items}` : ''}
+                                        </p>
+                                      )}
+                                      {u.cart_amount > 0 && <p className="text-[9px]" style={{ color: '#fb923c' }}>₹{u.cart_amount} cart</p>}
+                                      {u.revenue > 0    && <p className="text-[9px]" style={{ color: '#4ade80' }}>₹{u.revenue} revenue</p>}
+                                      {u.stage > 0      && <p className="text-[8px]" style={{ color: '#475569' }}>msg {u.stage}/2</p>}
+                                    </td>
+
+                                    {/* City · Device */}
+                                    <td className="px-2 py-2">
+                                      {u.city && <p className="text-[9px]" style={{ color: '#64748b' }}>📍{u.city}</p>}
+                                      {u.device && <p className="text-[9px]" style={{ color: '#475569' }}>
+                                        {u.device === 'mobile' ? '📱' : u.device === 'desktop' ? '🖥' : '📲'} {u.device}
+                                      </p>}
+                                    </td>
+
+                                    {/* Last activity */}
+                                    <td className="px-2 py-2 whitespace-nowrap">
+                                      {u.minutes_since_activity != null
+                                        ? <span className="text-[9px]" style={{ color: u.ready_to_send ? '#4ade80' : '#475569' }}>
+                                            {u.minutes_since_activity < 60
+                                              ? `${u.minutes_since_activity}m ago`
+                                              : `${Math.floor(u.minutes_since_activity/60)}h ago`}
+                                            {u.ready_to_send && ' ✓'}
+                                          </span>
+                                        : <span className="text-[9px]" style={{ color: '#334155' }}>—</span>}
+                                    </td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
                         </div>
                         {aud.count > 50 && <p className="text-center text-[9px] py-2" style={{ color: '#334155' }}>+{aud.count - 50} more</p>}
                       </div>

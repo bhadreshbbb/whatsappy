@@ -708,205 +708,289 @@ export const campaignsController = {
       const settingsRow = (db.channel_settings || []).find(s => s.channel_id === channelId);
       const chSettings = settingsRow ? (() => { try { return JSON.parse(settingsRow.settings || '{}'); } catch(_) { return {}; } })() : {};
       const productSlug = (chSettings.product_url_slug || '/products').replace(/\/+$/, '');
+      const now = Date.now();
+
+      // ── Build per-phone contact map — identical logic to Analytics command center ──
+      // This ensures the audience panel shows the SAME users and statuses as the
+      // command center (best status across all sessions, deduped by phone).
+      const allWithPhone = (db.website_visitors || []).filter(v => v.channel_id === channelId && v.phone);
+      const phoneMap = new Map();
+      allWithPhone.forEach(v => {
+        if (!phoneMap.has(v.phone)) phoneMap.set(v.phone, []);
+        phoneMap.get(v.phone).push(v);
+      });
+
+      const allPageViews = (db.page_views       || []).filter(p => p.channel_id === channelId);
+      const allCarts     = (db.cart_events      || []).filter(c => c.channel_id === channelId);
+      const allPurchases = (db.purchase_history || []).filter(p => p.channel_id === channelId);
+      const allProdViews = (db.product_views    || []).filter(v => v.channel_id === channelId);
+
+      const STATUS_RANK = { purchased: 6, followup_complete: 5, abandoned_checkout: 4, abandoned_cart: 3, product_view: 2, active: 1 };
+
+      const contactMap = new Map();
+      for (const [phone, sessions] of phoneMap.entries()) {
+        sessions.sort((a, b) => new Date(b.visited_at) - new Date(a.visited_at));
+        const canonical = sessions[0];
+
+        const name     = sessions.map(s => s.name).find(Boolean) || '';
+        const city     = sessions.map(s => s.city).find(Boolean) || '';
+        const device   = sessions.map(s => s.device_type).find(Boolean) || '';
+        const language = sessions.map(s => s.language).find(Boolean) || '';
+
+        const status = sessions.reduce((best, s) =>
+          (STATUS_RANK[s.status] || 0) > (STATUS_RANK[best] || 0) ? s.status : best, 'active');
+
+        const allSessionIds = new Set(sessions.map(s => s.session_id).filter(Boolean));
+        const pvs        = allPageViews.filter(p => allSessionIds.has(p.session_id) || p.phone === phone);
+        const userCarts  = allCarts.filter(c => allSessionIds.has(c.session_id) || c.phone === phone);
+        const userPurch  = allPurchases.filter(p => p.phone === phone);
+
+        const avgEngage  = pvs.length ? Math.round(pvs.reduce((s,p)=>s+(p.engagement_score||0),0)/pvs.length) : (canonical.engagement_score||0);
+        const totalTime  = sessions.reduce((s,v)=>s+(v.total_time_sec||0),0) + pvs.reduce((s,p)=>s+(p.duration_sec||0),0);
+        const pageCount  = sessions.reduce((s,v)=>s+(v.total_page_views||0),0) || pvs.length;
+        const cartCount  = userCarts.length;
+
+        const powerScore = Math.round(
+          Math.min(avgEngage,100)*0.40 + Math.min(cartCount*25,100)*0.25 +
+          Math.min(totalTime/3,100)*0.20 + Math.min(pageCount*10,100)*0.15
+        );
+
+        contactMap.set(phone, {
+          id: canonical.id, session_id: canonical.session_id,
+          phone, name, city, device, language, status,
+          is_repeat:        sessions.length > 1,
+          visit_count:      sessions.length,
+          power_score:      powerScore,
+          engagement_score: avgEngage,
+          page_views:       pageCount,
+          cart_events:      cartCount,
+          total_time_sec:   totalTime,
+          last_seen:        canonical.visited_at,
+          _userCarts:  userCarts,
+          _userPurch:  userPurch,
+        });
+      }
+
+      // ── Latest product_view record per phone (resolve anonymous via session) ──
+      const latestViewByPhone = {};
+      for (const v of allProdViews) {
+        const phone = v.phone
+          || (db.website_visitors.find(vis => vis.session_id === v.session_id && vis.channel_id === channelId))?.phone;
+        if (!phone) continue;
+        const vp = { ...v, phone };
+        if (!latestViewByPhone[phone] || vp.created_at > latestViewByPhone[phone].created_at) latestViewByPhone[phone] = vp;
+      }
 
       let audience = [];
 
+      // ═══════════════════════════════════════════════════════════════════════
       if (campaign.campaign_type === 'abandoned_product_view') {
-        const now = Date.now();
-        const THIRTY_MIN_MS = 30 * 60 * 1000;
 
-        // ── Section 1: Locked users (already sent ≥1 message) — with activity tracking
         const locks = (db.campaign_locks || []).filter(l =>
           l.channel_id === channelId && String(l.campaign_id) === String(id)
         );
         const lockedPhones = new Set(locks.map(l => l.phone));
 
+        // Locked users — enriched with command center data
         const lockedAudience = locks.map(l => {
-          const visitor = db.website_visitors.find(v => v.phone === l.phone && v.channel_id === channelId);
-          const cartEvent = (db.cart_events || []).find(c => c.phone === l.phone && !c.recovered && c.channel_id === channelId);
-          const purchase  = (db.purchase_history || []).filter(p => p.phone === l.phone).sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
+          const ct      = contactMap.get(l.phone) || {};
+          const cart    = ct._userCarts?.find(c => !c.recovered);
+          const purch   = ct._userPurch?.sort((a,b) => new Date(b.created_at)-new Date(a.created_at))[0];
+          const viewRec = latestViewByPhone[l.phone];
+          const minSince = ct.last_seen ? Math.floor((now - new Date(ct.last_seen).getTime()) / 60000) : null;
           return {
-            phone:                  l.phone,
-            name:                   visitor?.name || 'Unknown',
-            product_name:           l.product_name || '',
-            product_url:            l.product_url  || '',
-            product_price:          l.product_price || '',
-            product_image:          l.product_image || '',
-            status:                 visitor?.status || l.last_known_status || 'product_view',
-            lock_status:            l.lock_status,    // active | cart_added | purchased | shifted_recommendation
-            stage:                  l.stage || 1,
-            locked_at:              l.locked_at,
-            stage_1_sent_at:        l.stage_1_sent_at || null,
-            stage_2_sent_at:        l.stage_2_sent_at || null,
-            last_status_check:      l.last_status_check || null,
-            revenue:                l.revenue || 0,
-            cart_amount:            cartEvent?.total_amount || 0,
-            purchase_amount:        purchase?.total_amount || 0,
-            followup_count:         l.stage || 0,
-            minutes_since_activity: visitor?.visited_at ? Math.floor((now - new Date(visitor.visited_at).getTime()) / 60000) : null,
-            ready_to_send:          false, // already locked
-            is_locked:              true,
+            phone: l.phone, name: ct.name || 'Unknown',
+            city: ct.city || '', device: ct.device || '',
+            status: ct.status || l.last_known_status || 'product_view',
+            power_score: ct.power_score || 0, engagement_score: ct.engagement_score || 0,
+            page_views: ct.page_views || 0, cart_events: ct.cart_events || 0,
+            is_repeat: ct.is_repeat || false,
+            product_name:  l.product_name  || viewRec?.product_name  || '',
+            product_url:   l.product_url   || viewRec?.product_url   || '',
+            product_price: l.product_price || viewRec?.product_price || '',
+            product_image: l.product_image || viewRec?.product_image || '',
+            lock_status: l.lock_status, stage: l.stage || 1,
+            locked_at: l.locked_at, stage_1_sent_at: l.stage_1_sent_at || null,
+            stage_2_sent_at: l.stage_2_sent_at || null,
+            revenue: purch ? parseFloat(purch.total_amount || 0) : (l.revenue || 0),
+            cart_amount: cart?.total_amount || 0,
+            followup_count: l.stage || 0,
+            minutes_since_activity: minSince,
+            ready_to_send: false, is_locked: true,
           };
         });
 
-        // ── Section 2: Pending users — START from website_visitors with product_view status
-        //    (same source as analytics, so any user visible in analytics is visible here)
-        //    Then enrich with their latest product_view record for product details.
-
-        // Build product_view lookup by phone (resolve phone via session_id if needed)
-        const latestViewByPhone = {};
-        for (const v of (db.product_views || [])) {
-          if (v.channel_id !== channelId) continue;
-          const phone = v.phone
-            || (db.website_visitors.find(vis => vis.session_id === v.session_id && vis.channel_id === channelId))?.phone;
-          if (!phone) continue;
-          const vp = { ...v, phone };
-          if (!latestViewByPhone[phone] || vp.created_at > latestViewByPhone[phone].created_at) {
-            latestViewByPhone[phone] = vp;
-          }
-        }
-
-        // All visitors with product_view status who are not yet locked
-        const pendingAudience = (db.website_visitors || []).filter(vis =>
-          vis.channel_id === channelId && vis.phone && vis.status === 'product_view' && !lockedPhones.has(vis.phone)
-        ).map(vis => {
-          const viewRec = latestViewByPhone[vis.phone];
-          // Skip if product URL is set but doesn't match slug
+        // Pending — contacts whose command center status = product_view, not yet locked
+        const pendingAudience = [...contactMap.values()].filter(c =>
+          c.status === 'product_view' && !lockedPhones.has(c.phone)
+        ).map(c => {
+          const viewRec = latestViewByPhone[c.phone];
           if (viewRec?.product_url && !viewRec.product_url.includes(productSlug)) return null;
           if ((viewRec?.followup_count || 0) >= 2) return null;
-          const lastActivity = vis.visited_at || viewRec?.created_at;
-          const minSince = lastActivity ? Math.floor((now - new Date(lastActivity).getTime()) / 60000) : null;
+          const lastAct = c.last_seen || viewRec?.created_at;
+          const minSince = lastAct ? Math.floor((now - new Date(lastAct).getTime()) / 60000) : null;
           return {
-            phone:                  vis.phone,
-            name:                   vis.name || 'Unknown',
-            product_name:           viewRec?.product_name || '',
-            product_url:            viewRec?.product_url  || '',
-            product_price:          viewRec?.product_price || '',
-            product_image:          viewRec?.product_image || '',
-            status:                 'product_view',
-            lock_status:            'pending',
-            stage:                  0,
-            locked_at:              null,
-            followup_count:         viewRec?.followup_count || 0,
+            phone: c.phone, name: c.name || 'Unknown',
+            city: c.city || '', device: c.device || '',
+            status: c.status,
+            power_score: c.power_score, engagement_score: c.engagement_score,
+            page_views: c.page_views, cart_events: c.cart_events,
+            is_repeat: c.is_repeat,
+            product_name:  viewRec?.product_name  || '',
+            product_url:   viewRec?.product_url   || '',
+            product_price: viewRec?.product_price || '',
+            product_image: viewRec?.product_image || '',
+            lock_status: 'pending', stage: 0, locked_at: null,
+            followup_count: viewRec?.followup_count || 0,
             minutes_since_activity: minSince,
-            ready_to_send:          minSince != null && minSince >= 30,
-            is_locked:              false,
+            ready_to_send: minSince != null && minSince >= 30,
+            is_locked: false,
           };
         }).filter(Boolean);
 
         audience = [...lockedAudience, ...pendingAudience];
+
+      // ═══════════════════════════════════════════════════════════════════════
       } else if (campaign.campaign_type === 'abandoned_cart') {
-        const now = Date.now();
-        audience = (db.cart_events || []).filter(c =>
-          c.channel_id === channelId && !c.recovered && c.phone
-        ).map(c => {
-          const visitor  = db.website_visitors.find(v => v.phone === c.phone && v.channel_id === channelId);
-          const purchase = (db.purchase_history || [])
-            .filter(p => p.phone === c.phone)
-            .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
-          const isPurchased = visitor?.status === 'purchased' || !!purchase;
-          const minSince    = c.created_at ? Math.floor((now - new Date(c.created_at).getTime()) / 60000) : null;
-          const delayMinutes = (campaign.delay_hours || 1) * 60;
-          const readyToSend  = !c.whatsapp_sent && minSince != null && minSince >= delayMinutes;
+
+        audience = [...contactMap.values()].filter(c => c.status === 'abandoned_cart').map(c => {
+          const cart = c._userCarts.filter(ce => !ce.recovered).sort((a,b) => new Date(b.created_at)-new Date(a.created_at))[0];
+          const purch = c._userPurch.sort((a,b) => new Date(b.created_at)-new Date(a.created_at))[0];
           let products = [];
-          try { products = JSON.parse(c.products || '[]'); } catch (_) {}
+          try { products = JSON.parse(cart?.products || '[]'); } catch (_) {}
+          const minSince   = cart?.created_at ? Math.floor((now - new Date(cart.created_at).getTime()) / 60000) : null;
+          const delayMin   = (campaign.delay_hours || 1) * 60;
           return {
-            phone:                  c.phone,
-            name:                   visitor?.name || c.name || 'Unknown',
-            status:                 visitor?.status || 'abandoned_cart',
-            product_name:           c.product_name || products[0]?.name || '',
-            product_price:          c.product_price || '',
-            cart_amount:            parseFloat(c.total_amount || 0),
-            cart_items:             products.length || c.cart_items || 0,
+            phone: c.phone, name: c.name || 'Unknown',
+            city: c.city || '', device: c.device || '',
+            status: c.status,
+            power_score: c.power_score, engagement_score: c.engagement_score,
+            page_views: c.page_views, cart_events: c.cart_events,
+            is_repeat: c.is_repeat,
+            product_name:  cart?.product_name || products[0]?.name || '',
+            product_price: cart?.product_price || '',
+            cart_amount:   parseFloat(cart?.total_amount || 0),
+            cart_items:    products.length || cart?.cart_items || 0,
             minutes_since_activity: minSince,
-            ready_to_send:          readyToSend,
-            stage:                  c.followup_count || 0,
-            revenue:                purchase ? parseFloat(purchase.total_amount || 0) : 0,
-            is_purchased:           isPurchased,
-            city:                   visitor?.city || '',
-            lock_status:            isPurchased ? 'purchased' : c.whatsapp_sent ? 'messaged' : 'pending',
+            ready_to_send: !cart?.whatsapp_sent && minSince != null && minSince >= delayMin,
+            stage:       cart?.followup_count || 0,
+            revenue:     purch ? parseFloat(purch.total_amount || 0) : 0,
+            lock_status: cart?.whatsapp_sent ? 'messaged' : 'pending',
           };
         });
+
+      // ═══════════════════════════════════════════════════════════════════════
       } else if (campaign.campaign_type === 'product_view') {
-        const now = Date.now();
-        // Deduplicate: latest view per phone
-        const latestByPhone = {};
-        for (const v of (db.product_views || [])) {
-          if (v.channel_id !== channelId) continue;
-          const phone = v.phone
-            || (db.website_visitors.find(vis => vis.session_id === v.session_id && vis.channel_id === channelId))?.phone;
-          if (!phone) continue;
-          const vp = { ...v, phone };
-          if (!latestByPhone[phone] || vp.created_at > latestByPhone[phone].created_at) {
-            latestByPhone[phone] = vp;
-          }
-        }
-        audience = Object.values(latestByPhone).filter(v =>
-          v.product_url && v.product_url.includes(productSlug)
-        ).map(v => {
-          const visitor     = db.website_visitors.find(vis => vis.phone === v.phone && vis.channel_id === channelId);
-          const minSince    = v.created_at ? Math.floor((now - new Date(v.created_at).getTime()) / 60000) : null;
-          const delayMinutes = (campaign.delay_hours || 1) * 60;
-          const readyToSend  = !v.whatsapp_sent && minSince != null && minSince >= delayMinutes;
+
+        audience = [...contactMap.values()].filter(c => c.status === 'product_view').map(c => {
+          const viewRec  = latestViewByPhone[c.phone];
+          const minSince = viewRec?.created_at ? Math.floor((now - new Date(viewRec.created_at).getTime()) / 60000) : null;
+          const delayMin = (campaign.delay_hours || 1) * 60;
           return {
-            phone:                  v.phone,
-            name:                   visitor?.name || 'Unknown',
-            status:                 visitor?.status || 'product_view',
-            product_name:           v.product_name || '',
-            product_url:            v.product_url  || '',
-            product_price:          v.product_price || '',
-            product_image:          v.product_image || '',
+            phone: c.phone, name: c.name || 'Unknown',
+            city: c.city || '', device: c.device || '',
+            status: c.status,
+            power_score: c.power_score, engagement_score: c.engagement_score,
+            page_views: c.page_views, cart_events: c.cart_events,
+            is_repeat: c.is_repeat,
+            product_name:  viewRec?.product_name  || '',
+            product_url:   viewRec?.product_url   || '',
+            product_price: viewRec?.product_price || '',
+            product_image: viewRec?.product_image || '',
             minutes_since_activity: minSince,
-            ready_to_send:          readyToSend,
-            stage:                  v.followup_count || 0,
-            city:                   visitor?.city || '',
-            lock_status:            v.whatsapp_sent ? 'messaged' : 'pending',
+            ready_to_send: !viewRec?.whatsapp_sent && minSince != null && minSince >= delayMin,
+            stage:       viewRec?.followup_count || 0,
+            lock_status: viewRec?.whatsapp_sent ? 'messaged' : 'pending',
           };
         });
+
+      // ═══════════════════════════════════════════════════════════════════════
       } else if (campaign.campaign_type === 'order_confirmation') {
+
         if (!db.orders) db.orders = [];
         const responses = db.order_responses || [];
-        audience = db.orders.filter(o =>
-          o.channel_id === channelId && o.is_cod && o.phone
-        ).map(o => {
-          const resp = responses.filter(r => r.phone === o.phone && r.order_id === o.id)
+        audience = db.orders.filter(o => o.channel_id === channelId && o.is_cod && o.phone).map(o => {
+          const resp  = responses.filter(r => r.phone === o.phone && r.order_id === o.id)
             .sort((a,b) => new Date(b.responded_at) - new Date(a.responded_at));
           const latest = resp[0];
           return {
-            phone:          o.phone,
-            name:           o.name || 'Unknown',
-            order_number:   o.order_number,
-            order_total:    o.total_amount,
-            payment_method: o.payment_method,
-            products:       o.products_summary || '',
-            order_status:   o.status,
-            confirmation_sent: o.confirmation_sent,
-            ready_to_send:  !o.confirmation_sent,
-            response_type:  latest?.response_type || null,
-            response_text:  latest?.response_text || null,
-            responded_at:   latest?.responded_at  || null,
+            phone: o.phone, name: o.name || 'Unknown',
+            order_number: o.order_number, order_total: o.total_amount,
+            payment_method: o.payment_method, products: o.products_summary || '',
+            order_status: o.status, confirmation_sent: o.confirmation_sent,
+            ready_to_send: !o.confirmation_sent,
+            response_type: latest?.response_type || null,
+            response_text: latest?.response_text || null,
+            responded_at:  latest?.responded_at  || null,
           };
         });
+
+      // ═══════════════════════════════════════════════════════════════════════
+      } else if (campaign.campaign_type === 'custom' || campaign.campaign_type === 'product_recommendation') {
+
+        let filterDef = { logic: 'AND', rules: [] };
+        try { filterDef = JSON.parse(campaign.filters || '{}'); } catch (_) {}
+        const { logic = 'AND', rules = [] } = filterDef;
+        const applyRule = (c, rule) => {
+          const cv = c[rule.field];
+          if (rule.op === 'eq')       return String(cv ?? '').toLowerCase() === String(rule.value ?? '').toLowerCase();
+          if (rule.op === 'contains') return String(cv ?? '').toLowerCase().includes(String(rule.value ?? '').toLowerCase());
+          if (rule.op === 'gte')      return Number(cv ?? 0) >= Number(rule.value ?? 0);
+          if (rule.op === 'lte')      return Number(cv ?? 0) <= Number(rule.value ?? 0);
+          return true;
+        };
+        audience = [...contactMap.values()].filter(c => {
+          if (!rules.length) return true;
+          const results = rules.map(r => applyRule(c, r));
+          return logic === 'AND' ? results.every(Boolean) : results.some(Boolean);
+        }).map(c => ({
+          phone: c.phone, name: c.name || 'Unknown',
+          city: c.city || '', device: c.device || '', status: c.status,
+          power_score: c.power_score, engagement_score: c.engagement_score,
+          page_views: c.page_views, cart_events: c.cart_events,
+          is_repeat: c.is_repeat,
+          minutes_since_activity: c.last_seen ? Math.floor((now - new Date(c.last_seen).getTime()) / 60000) : null,
+          lock_status: c.status === 'purchased' ? 'purchased' : 'visitor',
+        }));
+
+      // ═══════════════════════════════════════════════════════════════════════
       } else {
-        const now = Date.now();
-        audience = (db.website_visitors || []).filter(v =>
-          v.channel_id === channelId && v.phone
-        ).map(v => {
-          const minSince = v.visited_at ? Math.floor((now - new Date(v.visited_at).getTime()) / 60000) : null;
-          return {
-            phone:                  v.phone,
-            name:                   v.name || 'Unknown',
-            status:                 v.status,
-            city:                   v.city || '',
-            minutes_since_activity: minSince,
-            lock_status:            v.status === 'purchased' ? 'purchased' : 'visitor',
-          };
-        });
+
+        // Generic: filter by campaign segment, use contact map for accurate status
+        const seg = campaign.target_segment || 'all';
+        audience = [...contactMap.values()].filter(c => {
+          if (campaign.campaign_type === 'post_purchase'    || seg === 'purchasers')      return c.status === 'purchased';
+          if (campaign.campaign_type === 'post_cart_upsell')                              return c.status === 'followup_complete';
+          if (campaign.campaign_type === 'abandoned_checkout')                            return c.status === 'abandoned_checkout';
+          if (campaign.campaign_type === 'discount')                                      return c.status === 'abandoned_cart';
+          if (campaign.campaign_type === 'website_visit'    || seg === 'active_visitors') return c.status === 'active';
+          if (seg === 'hot_users')                                                         return c.power_score >= 80;
+          return true;
+        }).map(c => ({
+          phone: c.phone, name: c.name || 'Unknown',
+          city: c.city || '', device: c.device || '', status: c.status,
+          power_score: c.power_score, engagement_score: c.engagement_score,
+          page_views: c.page_views, cart_events: c.cart_events,
+          is_repeat: c.is_repeat,
+          minutes_since_activity: c.last_seen ? Math.floor((now - new Date(c.last_seen).getTime()) / 60000) : null,
+          lock_status: c.status === 'purchased' ? 'purchased' : c.status === 'abandoned_cart' ? 'messaged' : 'visitor',
+        }));
       }
 
       // Deduplicate by phone
       const seen = new Set();
       audience = audience.filter(u => { if (seen.has(u.phone)) return false; seen.add(u.phone); return true; });
+
+      // Sort: locked/active first, then by power_score
+      const LOCK_ORDER = { active: 0, cart_added: 1, purchased: 2, shifted_recommendation: 3, messaged: 4, pending: 5, visitor: 6 };
+      audience.sort((a, b) => {
+        const la = LOCK_ORDER[a.lock_status] ?? 9, lb = LOCK_ORDER[b.lock_status] ?? 9;
+        if (la !== lb) return la - lb;
+        return (b.power_score || 0) - (a.power_score || 0);
+      });
+
+      // Strip internal refs before sending
+      audience = audience.map(({ _userCarts, _userPurch, ...rest }) => rest);
 
       res.json({ count: audience.length, audience: audience.slice(0, 100) });
     } catch (error) {
