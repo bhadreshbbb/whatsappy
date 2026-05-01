@@ -237,7 +237,7 @@ export const analyticsController = {
       const channelId = req.headers['x-channel-id'] || 'demo';
       const days      = parseInt(req.query.days) || 30;
       const since     = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
-      const limit     = Math.min(parseInt(req.query.limit) || 50, 200);
+      const limit     = Math.min(parseInt(req.query.limit) || 50, 5000);
 
       // All identified visitors for this channel (all time, for repeat detection)
       const allWithPhone = (db.website_visitors || []).filter(v =>
