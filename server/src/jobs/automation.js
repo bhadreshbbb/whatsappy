@@ -739,21 +739,27 @@ async function runAutomation() {
       // FLOW 2: Product View — user viewed a product, left without cart
       // ────────────────────────────────────────────────────────────────────
       else if (cam.campaign_type === 'product_view') {
-        // Target product_views table (has exact product data)
-        const views = db.product_views.filter(v => {
-          if (v.channel_id !== channelId || !v.phone) return false;
+        // Build latest product_views by phone — resolve phone via session_id for anonymous sessions
+        const pvByPhone = {};
+        for (const v of (db.product_views || [])) {
+          if (v.channel_id !== channelId) continue;
+          const phone = v.phone
+            || (db.website_visitors.find(vis => vis.session_id === v.session_id && vis.channel_id === channelId))?.phone;
+          if (!phone) continue;
+          const vp = phone !== v.phone ? { ...v, phone } : v;
+          if (!pvByPhone[phone] || vp.created_at > pvByPhone[phone].created_at) pvByPhone[phone] = vp;
+        }
+        const views = Object.values(pvByPhone).filter(v => {
           const isInitial  = !v.whatsapp_sent;
           const isFollowup = v.whatsapp_sent && (v.followup_count || 0) < 4;
           if (isFollowup) {
             const hoursSince = v.whatsapp_sent_at ? (Date.now() - new Date(v.whatsapp_sent_at).getTime()) / 3600000 : Infinity;
-            const requiredGap = (v.followup_count || 1) * 24; // progressive 24/48/72
+            const requiredGap = (v.followup_count || 1) * 24;
             if (hoursSince < requiredGap) return false;
           }
-          // Check live visitor status — skip if user has progressed past product_view
           const visitor = db.website_visitors.find(vis => vis.phone === v.phone || vis.session_id === v.session_id);
           if (visitor && isBlockedByStatus(visitor.status, 'product_view')) return false;
           if (!((isInitial || isFollowup) && v.created_at < targetTime)) return false;
-          // Apply optional per-campaign audience filters
           return passesAudienceFilters(db, channelId, v.phone, cam);
         }).slice(0, 5);
 
@@ -763,17 +769,17 @@ async function runAutomation() {
       // ────────────────────────────────────────────────────────────────────
       // FLOW 2b: Abandoned Product View — slug-matched product views, single
       //          product template, 30-min first message, 24h follow-up, max 2
+      // Source of truth: website_visitors with status=product_view (same as analytics).
+      // Enriched from product_views for product details + from campaign_locks for stage.
       // ────────────────────────────────────────────────────────────────────
       else if (cam.campaign_type === 'abandoned_product_view') {
-        // Read configured product URL slug from channel settings
         const settingsRow = (db.channel_settings || []).find(s => s.channel_id === channelId);
         const channelSettings = settingsRow ? (() => { try { return JSON.parse(settingsRow.settings || '{}'); } catch(_) { return {}; } })() : {};
         const productSlug = channelSettings.product_url_slug || '/products';
-
         const THIRTY_MIN_MS = 30 * 60 * 1000;
         const now = Date.now();
 
-        // ── Last product per phone — multiple views → use most recent product ──
+        // Build product_views lookup by phone (resolve anon sessions via session_id)
         const latestViewByPhone = {};
         for (const v of (db.product_views || [])) {
           if (v.channel_id !== channelId) continue;
@@ -786,37 +792,67 @@ async function runAutomation() {
           }
         }
 
-        const views = Object.values(latestViewByPhone).filter(v => {
-          if (!v.product_url || !v.product_url.includes(productSlug)) return false;
-          if ((v.followup_count || 0) >= 2) return false;
+        // Source of truth: visitors with product_view status (same as analytics/audience panel)
+        const eligibleVisitors = (db.website_visitors || []).filter(vis =>
+          vis.channel_id === channelId && vis.phone && vis.status === 'product_view'
+        );
+
+        // Build enriched event objects using visitor + product_views + lock data
+        const views = eligibleVisitors.map(vis => {
+          const viewRec = latestViewByPhone[vis.phone];
+          const lock    = (db.campaign_locks || []).find(l =>
+            l.phone === vis.phone && String(l.campaign_id) === String(cam.id)
+          );
+          // Determine stage from lock (reliable) or product_views (fallback)
+          const stageFromLock    = lock ? lock.stage : 0;
+          const followupCount    = stageFromLock || (viewRec?.followup_count || 0);
+          const whatsappSent     = (stageFromLock > 0) || !!(viewRec?.whatsapp_sent);
+          const whatsappSentAt   = lock?.stage_1_sent_at || viewRec?.whatsapp_sent_at || null;
+          return {
+            phone:           vis.phone,
+            name:            vis.name || '',
+            product_name:    viewRec?.product_name  || vis.last_product_name  || '',
+            product_image:   viewRec?.product_image || vis.last_product_image || '',
+            product_url:     viewRec?.product_url   || vis.last_product_url   || '',
+            product_price:   viewRec?.product_price || vis.last_product_price || '',
+            followup_count:  followupCount,
+            whatsapp_sent:   whatsappSent ? 1 : 0,
+            whatsapp_sent_at: whatsappSentAt,
+            created_at:      viewRec?.created_at || vis.visited_at || vis.created_at,
+            _viewRec:        viewRec,   // direct DB ref — mutating updates DB
+            _lock:           lock,
+            _visitor:        vis,
+          };
+        }).filter(v => {
+          // Must match product slug (if URL is known)
+          if (v.product_url && !v.product_url.includes(productSlug)) return false;
+          // Max 2 stages
+          if (v.followup_count >= 2) return false;
+
           const isInitial  = !v.whatsapp_sent;
-          const isFollowup = v.whatsapp_sent && (v.followup_count || 0) < 2;
+          const isFollowup = v.whatsapp_sent && v.followup_count < 2;
           if (!isInitial && !isFollowup) return false;
 
-          const lock = (db.campaign_locks || []).find(l => l.phone === v.phone && l.campaign_id == cam.id);
-
           if (isInitial) {
-            // Skip if already locked (first message already sent via a previous tick)
-            if (lock && lock.stage >= 1) return false;
-            // 30 minutes of inactivity required
-            const visitor = db.website_visitors.find(vis => vis.phone === v.phone);
-            const lastActivity = visitor?.visited_at || v.created_at;
+            // Lock guard: stage 1 already sent
+            if (v._lock && v._lock.stage >= 1) return false;
+            // 30-min inactivity window
+            const lastActivity = v._visitor?.visited_at || v.created_at;
             if ((now - new Date(lastActivity).getTime()) < THIRTY_MIN_MS) return false;
           }
           if (isFollowup) {
-            const hoursSince = v.whatsapp_sent_at ? (now - new Date(v.whatsapp_sent_at).getTime()) / 3600000 : Infinity;
+            // 24h gap from stage 1
+            const sentAt = v._lock?.stage_1_sent_at || v.whatsapp_sent_at;
+            const hoursSince = sentAt ? (now - new Date(sentAt).getTime()) / 3600000 : Infinity;
             if (hoursSince < 24) return false;
-            // Skip if lock shows user already converted (cart/purchase)
-            if (lock && lock.lock_status !== 'active') return false;
+            // Skip if user converted (cart added / purchased)
+            if (v._lock && v._lock.lock_status !== 'active') return false;
           }
 
-          // Skip if user status moved past product_view (carted/purchased)
-          const visitor = db.website_visitors.find(vis => vis.phone === v.phone);
-          if (visitor && isBlockedByStatus(visitor.status, 'abandoned_product_view')) return false;
-
-          // Cart has priority — abandoned_cart campaign handles it
+          // Cart has priority — abandoned_cart campaign handles those users
           const productInCart = (db.cart_events || []).some(c => {
             if (c.phone !== v.phone || c.recovered || c.channel_id !== channelId) return false;
+            if (!v.product_url) return true; // no URL to compare → assume in cart
             if (c.product_url && c.product_url === v.product_url) return true;
             try {
               const prods = JSON.parse(c.products || '[]');
@@ -1542,6 +1578,17 @@ async function sendMultiple(db, cam, events, type) {
           }
         }
 
+        // ── Update product_views record for APV so follow-up tracking is correct ──
+        if (cam.campaign_type === 'abandoned_product_view' && evt._viewRec) {
+          const pvIdx = db.product_views.findIndex(v => v.id === evt._viewRec.id);
+          if (pvIdx >= 0) {
+            db.product_views[pvIdx].whatsapp_sent    = 1;
+            db.product_views[pvIdx].followup_count   = currentStage;
+            db.product_views[pvIdx].whatsapp_sent_at = new Date().toISOString();
+            db.product_views[pvIdx].campaign_id      = cam.id;
+          }
+        }
+
         // Stage 4 → promote visitor to followup_complete (same as PATH B)
         if (currentStage === 4) {
           const vIdx = db.website_visitors.findIndex(v => v.phone === evt.phone);
@@ -1551,8 +1598,6 @@ async function sendMultiple(db, cam, events, type) {
         }
 
         // abandoned_product_view: stage 2 is the final — move to followup_complete
-        // so weekly product recommendations (post_cart_upsell) takes over.
-        // User stays there until they view a product or add to cart again (status re-entry).
         if (currentStage === 2 && cam.campaign_type === 'abandoned_product_view') {
           const vIdx = db.website_visitors.findIndex(v => v.phone === evt.phone);
           if (vIdx >= 0 && upgradeStatus(db.website_visitors[vIdx], 'followup_complete')) {
@@ -1675,6 +1720,17 @@ async function sendMultiple(db, cam, events, type) {
         evt.whatsapp_sent    = 1;
         evt.followup_count   = currentStage;
         evt.whatsapp_sent_at = new Date().toISOString();
+      }
+
+      // ── Update product_views record for APV (PATH B text template) ──
+      if (cam.campaign_type === 'abandoned_product_view' && evt._viewRec) {
+        const pvIdx = db.product_views.findIndex(v => v.id === evt._viewRec.id);
+        if (pvIdx >= 0) {
+          db.product_views[pvIdx].whatsapp_sent    = 1;
+          db.product_views[pvIdx].followup_count   = currentStage;
+          db.product_views[pvIdx].whatsapp_sent_at = new Date().toISOString();
+          db.product_views[pvIdx].campaign_id      = cam.id;
+        }
       }
 
       // ── STAGE COMPLETION → followup_complete ──

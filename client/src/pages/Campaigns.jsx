@@ -2508,12 +2508,22 @@ export default function Campaigns() {
                     if (!aud.audience?.length) return <div className="mt-2 text-[10px] text-center py-3 rounded-xl" style={{ color: '#475569', border: '1px solid rgba(255,255,255,0.05)' }}>No eligible users right now.</div>;
 
                     const lockBadge = (u) => {
-                      if (u.lock_status === 'pending')                return <span className="text-[9px] px-1.5 rounded" style={{ background: 'rgba(251,191,36,0.1)', color: '#fbbf24' }}>⏱ {u.ready_to_send ? 'ready' : `${30 - (u.minutes_since_activity||0)}m left`}</span>;
+                      if (u.lock_status === 'pending')                return <span className="text-[9px] px-1.5 rounded" style={{ background: 'rgba(251,191,36,0.1)', color: '#fbbf24' }}>⏱ {u.ready_to_send ? 'ready' : `${u.minutes_since_activity != null ? u.minutes_since_activity + 'm ago' : 'waiting'}`}</span>;
+                      if (u.lock_status === 'messaged')               return <span className="text-[9px] px-1.5 rounded" style={{ background: 'rgba(56,189,248,0.1)', color: '#38bdf8' }}>📨 sent{u.stage > 0 ? ` ×${u.stage}` : ''}</span>;
                       if (u.lock_status === 'active')                 return <span className="text-[9px] px-1.5 rounded" style={{ background: 'rgba(99,102,241,0.1)', color: '#818cf8' }}>🔒 stage {u.stage}</span>;
                       if (u.lock_status === 'cart_added')             return <span className="text-[9px] px-1.5 rounded" style={{ background: 'rgba(251,146,60,0.1)', color: '#fb923c' }}>🛒 added to cart</span>;
                       if (u.lock_status === 'purchased')              return <span className="text-[9px] px-1.5 rounded" style={{ background: 'rgba(74,222,128,0.1)', color: '#4ade80' }}>✅ purchased</span>;
                       if (u.lock_status === 'shifted_recommendation') return <span className="text-[9px] px-1.5 rounded" style={{ background: 'rgba(167,139,250,0.1)', color: '#a78bfa' }}>✨ recommendation</span>;
+                      if (u.lock_status === 'visitor')                return <span className="text-[9px] px-1.5 rounded" style={{ background: 'rgba(100,116,139,0.1)', color: '#64748b' }}>👤 {u.status || 'visitor'}</span>;
                       return null;
+                    };
+
+                    const avatarColors = (u) => {
+                      if (u.lock_status === 'purchased')  return { bg: 'rgba(74,222,128,0.15)',  color: '#4ade80' };
+                      if (u.lock_status === 'cart_added') return { bg: 'rgba(251,146,60,0.15)',  color: '#fb923c' };
+                      if (u.lock_status === 'messaged')   return { bg: 'rgba(56,189,248,0.15)',  color: '#38bdf8' };
+                      if (u.lock_status === 'active')     return { bg: 'rgba(99,102,241,0.15)', color: '#818cf8' };
+                      return { bg: 'rgba(251,191,36,0.1)', color: '#fbbf24' };
                     };
 
                     return (
@@ -2523,10 +2533,12 @@ export default function Campaigns() {
                           <button onClick={() => loadAudience(c.id)} className="text-[9px] flex items-center gap-1" style={{ color: '#64748b' }}><Repeat size={9}/> Refresh now</button>
                         </div>
                         <div style={{ maxHeight: 300, overflowY: 'auto' }}>
-                          {aud.audience.slice(0, 50).map((u, i) => (
+                          {aud.audience.slice(0, 50).map((u, i) => {
+                            const av = avatarColors(u);
+                            return (
                             <div key={i} className="flex items-start gap-2 px-3 py-2.5" style={{ background: i % 2 === 0 ? 'rgba(255,255,255,0.01)' : 'transparent', borderTop: i > 0 ? '1px solid rgba(255,255,255,0.04)' : 'none' }}>
                               <div className="w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold flex-shrink-0 mt-0.5"
-                                style={{ background: u.lock_status === 'purchased' ? 'rgba(74,222,128,0.15)' : u.lock_status === 'cart_added' ? 'rgba(251,146,60,0.15)' : 'rgba(251,191,36,0.1)', color: u.lock_status === 'purchased' ? '#4ade80' : u.lock_status === 'cart_added' ? '#fb923c' : '#fbbf24' }}>
+                                style={{ background: av.bg, color: av.color }}>
                                 {(u.name || u.phone || '?')[0].toUpperCase()}
                               </div>
                               <div className="flex-1 min-w-0">
@@ -2535,16 +2547,23 @@ export default function Campaigns() {
                                   <span className="text-[9px] font-mono" style={{ color: '#475569' }}>{u.phone}</span>
                                   {lockBadge(u)}
                                 </div>
-                                {u.product_name && <p className="text-[9px] truncate mt-0.5" style={{ color: '#94a3b8' }}>👁 {u.product_name}{u.product_price ? ` · ₹${u.product_price}` : ''}</p>}
+                                {u.product_name && (
+                                  <p className="text-[9px] truncate mt-0.5" style={{ color: '#94a3b8' }}>
+                                    {c.campaign_type === 'abandoned_cart' ? '🛒' : '👁'} {u.product_name}{u.product_price ? ` · ₹${u.product_price}` : ''}
+                                    {u.cart_items > 0 && ` (${u.cart_items} item${u.cart_items !== 1 ? 's' : ''})`}
+                                  </p>
+                                )}
                                 <div className="flex items-center gap-2 mt-0.5 flex-wrap">
-                                  {u.minutes_since_activity != null && <span className="text-[9px]" style={{ color: '#475569' }}>{u.minutes_since_activity}m ago</span>}
+                                  {u.minutes_since_activity != null && u.lock_status !== 'pending' && <span className="text-[9px]" style={{ color: '#475569' }}>{u.minutes_since_activity}m ago</span>}
+                                  {u.city && <span className="text-[9px]" style={{ color: '#334155' }}>📍{u.city}</span>}
                                   {u.stage > 0 && <span className="text-[9px]" style={{ color: '#475569' }}>msg {u.stage}/2 sent</span>}
                                   {u.revenue > 0 && <span className="text-[9px]" style={{ color: '#4ade80' }}>₹{u.revenue} revenue</span>}
-                                  {u.cart_amount > 0 && <span className="text-[9px]" style={{ color: '#fb923c' }}>₹{u.cart_amount} in cart</span>}
+                                  {u.cart_amount > 0 && <span className="text-[9px]" style={{ color: '#fb923c' }}>₹{u.cart_amount} cart total</span>}
                                 </div>
                               </div>
                             </div>
-                          ))}
+                            );
+                          })}
                         </div>
                         {aud.count > 50 && <p className="text-center text-[9px] py-2" style={{ color: '#334155' }}>+{aud.count - 50} more</p>}
                       </div>

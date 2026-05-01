@@ -749,60 +749,119 @@ export const campaignsController = {
           };
         });
 
-        // ── Section 2: Pending users (product viewed, 30-min wait, not locked yet)
+        // ── Section 2: Pending users — START from website_visitors with product_view status
+        //    (same source as analytics, so any user visible in analytics is visible here)
+        //    Then enrich with their latest product_view record for product details.
+
+        // Build product_view lookup by phone (resolve phone via session_id if needed)
         const latestViewByPhone = {};
         for (const v of (db.product_views || [])) {
           if (v.channel_id !== channelId) continue;
           const phone = v.phone
             || (db.website_visitors.find(vis => vis.session_id === v.session_id && vis.channel_id === channelId))?.phone;
-          if (!phone || lockedPhones.has(phone)) continue;
-          const vp = phone !== v.phone ? { ...v, phone } : v;
+          if (!phone) continue;
+          const vp = { ...v, phone };
           if (!latestViewByPhone[phone] || vp.created_at > latestViewByPhone[phone].created_at) {
             latestViewByPhone[phone] = vp;
           }
         }
-        const pendingAudience = Object.values(latestViewByPhone).filter(v => {
-          if (!v.product_url || !v.product_url.includes(productSlug)) return false;
-          if ((v.followup_count || 0) >= 2) return false;
-          const visitor = db.website_visitors.find(vis => vis.phone === v.phone);
-          if (visitor && visitor.status !== 'product_view') return false;
-          return true;
-        }).map(v => {
-          const visitor = db.website_visitors.find(vis => vis.phone === v.phone);
-          const lastActivity = visitor?.visited_at || v.created_at;
-          const minSince = Math.floor((now - new Date(lastActivity).getTime()) / 60000);
+
+        // All visitors with product_view status who are not yet locked
+        const pendingAudience = (db.website_visitors || []).filter(vis =>
+          vis.channel_id === channelId && vis.phone && vis.status === 'product_view' && !lockedPhones.has(vis.phone)
+        ).map(vis => {
+          const viewRec = latestViewByPhone[vis.phone];
+          // Skip if product URL is set but doesn't match slug
+          if (viewRec?.product_url && !viewRec.product_url.includes(productSlug)) return null;
+          if ((viewRec?.followup_count || 0) >= 2) return null;
+          const lastActivity = vis.visited_at || viewRec?.created_at;
+          const minSince = lastActivity ? Math.floor((now - new Date(lastActivity).getTime()) / 60000) : null;
+          return {
+            phone:                  vis.phone,
+            name:                   vis.name || 'Unknown',
+            product_name:           viewRec?.product_name || '',
+            product_url:            viewRec?.product_url  || '',
+            product_price:          viewRec?.product_price || '',
+            product_image:          viewRec?.product_image || '',
+            status:                 'product_view',
+            lock_status:            'pending',
+            stage:                  0,
+            locked_at:              null,
+            followup_count:         viewRec?.followup_count || 0,
+            minutes_since_activity: minSince,
+            ready_to_send:          minSince != null && minSince >= 30,
+            is_locked:              false,
+          };
+        }).filter(Boolean);
+
+        audience = [...lockedAudience, ...pendingAudience];
+      } else if (campaign.campaign_type === 'abandoned_cart') {
+        const now = Date.now();
+        audience = (db.cart_events || []).filter(c =>
+          c.channel_id === channelId && !c.recovered && c.phone
+        ).map(c => {
+          const visitor  = db.website_visitors.find(v => v.phone === c.phone && v.channel_id === channelId);
+          const purchase = (db.purchase_history || [])
+            .filter(p => p.phone === c.phone)
+            .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
+          const isPurchased = visitor?.status === 'purchased' || !!purchase;
+          const minSince    = c.created_at ? Math.floor((now - new Date(c.created_at).getTime()) / 60000) : null;
+          const delayMinutes = (campaign.delay_hours || 1) * 60;
+          const readyToSend  = !c.whatsapp_sent && minSince != null && minSince >= delayMinutes;
+          let products = [];
+          try { products = JSON.parse(c.products || '[]'); } catch (_) {}
+          return {
+            phone:                  c.phone,
+            name:                   visitor?.name || c.name || 'Unknown',
+            status:                 visitor?.status || 'abandoned_cart',
+            product_name:           c.product_name || products[0]?.name || '',
+            product_price:          c.product_price || '',
+            cart_amount:            parseFloat(c.total_amount || 0),
+            cart_items:             products.length || c.cart_items || 0,
+            minutes_since_activity: minSince,
+            ready_to_send:          readyToSend,
+            stage:                  c.followup_count || 0,
+            revenue:                purchase ? parseFloat(purchase.total_amount || 0) : 0,
+            is_purchased:           isPurchased,
+            city:                   visitor?.city || '',
+            lock_status:            isPurchased ? 'purchased' : c.whatsapp_sent ? 'messaged' : 'pending',
+          };
+        });
+      } else if (campaign.campaign_type === 'product_view') {
+        const now = Date.now();
+        // Deduplicate: latest view per phone
+        const latestByPhone = {};
+        for (const v of (db.product_views || [])) {
+          if (v.channel_id !== channelId) continue;
+          const phone = v.phone
+            || (db.website_visitors.find(vis => vis.session_id === v.session_id && vis.channel_id === channelId))?.phone;
+          if (!phone) continue;
+          const vp = { ...v, phone };
+          if (!latestByPhone[phone] || vp.created_at > latestByPhone[phone].created_at) {
+            latestByPhone[phone] = vp;
+          }
+        }
+        audience = Object.values(latestByPhone).filter(v =>
+          v.product_url && v.product_url.includes(productSlug)
+        ).map(v => {
+          const visitor     = db.website_visitors.find(vis => vis.phone === v.phone && vis.channel_id === channelId);
+          const minSince    = v.created_at ? Math.floor((now - new Date(v.created_at).getTime()) / 60000) : null;
+          const delayMinutes = (campaign.delay_hours || 1) * 60;
+          const readyToSend  = !v.whatsapp_sent && minSince != null && minSince >= delayMinutes;
           return {
             phone:                  v.phone,
             name:                   visitor?.name || 'Unknown',
+            status:                 visitor?.status || 'product_view',
             product_name:           v.product_name || '',
             product_url:            v.product_url  || '',
             product_price:          v.product_price || '',
             product_image:          v.product_image || '',
-            status:                 visitor?.status || 'product_view',
-            lock_status:            'pending',
-            stage:                  0,
-            locked_at:              null,
-            followup_count:         0,
             minutes_since_activity: minSince,
-            ready_to_send:          minSince >= 30,
-            is_locked:              false,
+            ready_to_send:          readyToSend,
+            stage:                  v.followup_count || 0,
+            city:                   visitor?.city || '',
+            lock_status:            v.whatsapp_sent ? 'messaged' : 'pending',
           };
-        });
-
-        audience = [...lockedAudience, ...pendingAudience];
-      } else if (campaign.campaign_type === 'abandoned_cart') {
-        audience = (db.cart_events || []).filter(c =>
-          c.channel_id === channelId && !c.recovered && c.phone
-        ).map(c => {
-          const visitor = db.website_visitors.find(v => v.phone === c.phone);
-          return { phone: c.phone, name: visitor?.name || c.name || 'Unknown', status: visitor?.status || 'abandoned_cart', product_name: c.product_name || '', total_amount: c.total_amount || 0 };
-        });
-      } else if (campaign.campaign_type === 'product_view') {
-        audience = (db.product_views || []).filter(v =>
-          v.channel_id === channelId && v.phone && v.product_url && v.product_url.includes(productSlug)
-        ).map(v => {
-          const visitor = db.website_visitors.find(vis => vis.phone === v.phone);
-          return { phone: v.phone, name: visitor?.name || 'Unknown', status: visitor?.status, product_name: v.product_name || '', product_url: v.product_url || '' };
         });
       } else if (campaign.campaign_type === 'order_confirmation') {
         if (!db.orders) db.orders = [];
@@ -829,9 +888,20 @@ export const campaignsController = {
           };
         });
       } else {
+        const now = Date.now();
         audience = (db.website_visitors || []).filter(v =>
           v.channel_id === channelId && v.phone
-        ).map(v => ({ phone: v.phone, name: v.name || 'Unknown', status: v.status, city: v.city || '' }));
+        ).map(v => {
+          const minSince = v.visited_at ? Math.floor((now - new Date(v.visited_at).getTime()) / 60000) : null;
+          return {
+            phone:                  v.phone,
+            name:                   v.name || 'Unknown',
+            status:                 v.status,
+            city:                   v.city || '',
+            minutes_since_activity: minSince,
+            lock_status:            v.status === 'purchased' ? 'purchased' : 'visitor',
+          };
+        });
       }
 
       // Deduplicate by phone
