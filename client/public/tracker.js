@@ -321,10 +321,23 @@
       listingProducts = captureListingProducts();
     }
 
-    // Cross-browser recognition: if this user identified before in this browser,
-    // send their phone so the server can immediately link the session and sync status.
+    // Cross-browser recognition: phone from localStorage OR from ?ww_src URL param.
+    // ww_src is appended by the automation engine to every WhatsApp campaign link,
+    // so clicking from WhatsApp into incognito / any browser auto-identifies the user.
     var storedPhone = '';
     try { storedPhone = localStorage.getItem('ww_phone') || ''; } catch(_) {}
+    if (!storedPhone) {
+      try {
+        var _wwSrc = new URLSearchParams(window.location.search).get('ww_src') || '';
+        if (_wwSrc) {
+          var _b64 = _wwSrc.replace(/-/g, '+').replace(/_/g, '/');
+          while (_b64.length % 4) _b64 += '=';
+          storedPhone = atob(_b64) || '';
+          // Persist so subsequent page views in this session also recognize the user
+          if (storedPhone) try { localStorage.setItem('ww_phone', storedPhone); } catch(_) {}
+        }
+      } catch(_) {}
+    }
 
     track('visitor', {
       deviceType:       getDeviceType(),

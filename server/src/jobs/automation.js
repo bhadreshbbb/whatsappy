@@ -1765,15 +1765,27 @@ async function sendMultiple(db, cam, events, type) {
 }
 
 /**
+ * Append ?ww_src=BASE64(phone) to a URL so the tracker can auto-identify
+ * the user when they click from WhatsApp — works in incognito / any browser.
+ */
+function _tagUrl(url, phone) {
+  if (!url || !phone) return url || '';
+  const tag = Buffer.from(String(phone)).toString('base64')
+    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+  return url + (url.includes('?') ? '&' : '?') + 'ww_src=' + tag;
+}
+
+/**
  * Build WhatsApp message variables depending on campaign type.
  * Each type has different dynamic data sources.
  */
 function buildVariables(db, cam, evt, visitor, type, channelId) {
+  const phone = evt.phone || visitor?.phone || '';
   const base = {
     name: evt.name || visitor?.name || 'Customer',
     total_amount: (evt.total_amount || 0).toLocaleString(),
     currency: evt.currency || null,
-    cart_url: evt.cart_url || '',
+    cart_url: _tagUrl(evt.cart_url, phone),
     shopify_carousel: typeof evt.shopify_carousel === 'string'
       ? evt.shopify_carousel
       : JSON.stringify(evt.shopify_carousel || [])
@@ -1785,7 +1797,7 @@ function buildVariables(db, cam, evt, visitor, type, channelId) {
       ...base,
       product_name:  evt.product_name  || extractFirstProductName(evt.products),
       product_image: evt.product_image || '',
-      product_url:   evt.product_url   || '',
+      product_url:   _tagUrl(evt.product_url, phone),
       product_price: evt.product_price || String(evt.total_amount || ''),
       product_list:  buildProductList(evt.products),
     };
@@ -1797,7 +1809,7 @@ function buildVariables(db, cam, evt, visitor, type, channelId) {
       ...base,
       product_name:  evt.product_name  || '',
       product_image: evt.product_image || '',
-      product_url:   evt.product_url   || '',
+      product_url:   _tagUrl(evt.product_url, phone),
       product_price: evt.product_price || '',
       product_list:  evt.product_name ? `• ${evt.product_name}` : '',
     };
@@ -1815,7 +1827,7 @@ function buildVariables(db, cam, evt, visitor, type, channelId) {
       ...base,
       product_name:  firstPick.name  || 'our latest collection',
       product_image: firstPick.image || '',
-      product_url:   firstPick.url   || '',
+      product_url:   _tagUrl(firstPick.url, phone),
       product_price: firstPick.price || '',
       product_list:  picks.map(p => `• ${p.name} — ₹${p.price}`).join('\n') || 'Check our latest products',
       recommended_products: JSON.stringify(picks),

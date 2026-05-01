@@ -323,13 +323,19 @@ export const campaignsController = {
 
         // ── PATH B: Regular text/template message ─────────────────────────────
         } else {
+          const _tagUrl = (url, ph) => {
+            if (!url || !ph) return url || '';
+            const tag = Buffer.from(String(ph)).toString('base64')
+              .replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+            return url + (url.includes('?') ? '&' : '?') + 'ww_src=' + tag;
+          };
           const variables = {
             name: target.name || 'Customer',
             product_name: target.product_name || '',
             product_price: target.product_price || String(target.total_amount || ''),
             total_amount: String(target.total_amount || ''),
-            cart_url: target.cart_url || '',
-            product_url: target.product_url || '',
+            cart_url:    _tagUrl(target.cart_url,    target.phone),
+            product_url: _tagUrl(target.product_url, target.phone),
             product_image: target.product_image || '',
           };
           if (templateRecord?.product_data) {
