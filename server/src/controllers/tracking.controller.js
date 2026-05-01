@@ -214,17 +214,46 @@ export const trackingController = {
       if (visitorIdx < 0) visitorIdx = db.website_visitors.findIndex(v => v.channel_id === (channelId||'demo') && v.session_id === sessionId);
 
       // ── Cross-browser recognition: phone sent from localStorage ──────────────
-      // If client sends a previously stored phone, link it immediately and sync
-      // the best known status so a new browser starts at the correct funnel position.
+      // If client sends a previously stored phone, enrich the new session from
+      // their existing profile so they appear as the same known user immediately.
       if (visitorPhone && visitorIdx >= 0 && !db.website_visitors[visitorIdx].phone) {
         const cid = channelId || 'demo';
         db.website_visitors[visitorIdx].phone = visitorPhone;
+
+        // Find all previous sessions for this phone, sorted most-recent first
+        const prevSessions = db.website_visitors
+          .filter(v => v.channel_id === cid && v.phone === visitorPhone && v.session_id !== sessionId)
+          .sort((a, b) => new Date(b.visited_at || b.created_at) - new Date(a.visited_at || a.created_at));
+
+        if (prevSessions.length > 0) {
+          const best = prevSessions[0]; // most recent previous session
+          const cur  = db.website_visitors[visitorIdx];
+          // Copy profile fields the new browser doesn't have yet
+          if (!cur.name  && best.name)  cur.name  = best.name;
+          if (!cur.email && best.email) cur.email = best.email;
+          // Keep geo from current request (more accurate) but fall back to known
+          if (!cur.city    && best.city)    cur.city    = best.city;
+          if (!cur.state   && best.state)   cur.state   = best.state;
+          if (!cur.country && best.country) cur.country = best.country;
+          if (!cur.country_code && best.country_code) cur.country_code = best.country_code;
+          // Carry purchase/repeat metadata
+          const pCount = (db.purchase_history || []).filter(p => p.channel_id === cid && p.phone === visitorPhone).length;
+          cur.purchase_count       = pCount || best.purchase_count || 0;
+          cur.is_repeat_purchaser  = pCount >= 2 || best.is_repeat_purchaser || false;
+          cur.is_repeat            = true;
+          cur.visit_count          = prevSessions.length + 1;
+          cur.total_purchase_count = pCount;
+          cur.funnel_cycle         = best.funnel_cycle || 1;
+        }
+
+        // Sync best status (abandoned_cart, purchased, etc.) to this new session
         _syncBestStatus(db, cid, visitorIdx, visitorPhone);
+
         // Backfill phone on any events already recorded for this session
         db.cart_events.forEach(c  => { if (c.session_id  === sessionId && !c.phone)  c.phone = visitorPhone; });
         db.product_views.forEach(v => { if (v.session_id === sessionId && !v.phone)  v.phone = visitorPhone; });
         (db.page_views || []).forEach(p => { if (p.session_id === sessionId && !p.phone) p.phone = visitorPhone; });
-        console.log(`[CrossBrowser] Linked phone ${visitorPhone} to new session ${sessionId} via localStorage`);
+        console.log(`[CrossBrowser] Recognized ${visitorPhone} — enriched new session from ${prevSessions.length} previous session(s)`);
       }
 
       // If visitor already has a phone, keep is_repeat / visit_count consistent
