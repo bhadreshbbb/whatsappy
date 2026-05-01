@@ -362,13 +362,17 @@ export const trackingController = {
       );
 
       if (existingIdx >= 0) {
-        db.cart_events[existingIdx].products      = JSON.stringify(productsArr);
-        db.cart_events[existingIdx].total_amount  = totalAmount || 0;
-        db.cart_events[existingIdx].cart_url      = cart_url     || db.cart_events[existingIdx].cart_url;
-        db.cart_events[existingIdx].product_name  = product_name  || db.cart_events[existingIdx].product_name;
-        db.cart_events[existingIdx].product_image = product_image || db.cart_events[existingIdx].product_image;
-        db.cart_events[existingIdx].product_price = product_price || db.cart_events[existingIdx].product_price;
-        db.cart_events[existingIdx].product_url   = product_url   || db.cart_events[existingIdx].product_url;
+        // Always sync products array to reflect current cart state (including removals)
+        db.cart_events[existingIdx].products     = JSON.stringify(productsArr);
+        db.cart_events[existingIdx].total_amount = totalAmount || 0;
+        db.cart_events[existingIdx].cart_url     = cart_url || db.cart_events[existingIdx].cart_url;
+        // Top-level product_* fields always reflect the first remaining item in cart
+        // so campaign audience shows what's actually still in the cart
+        const curFirst = productsArr[0] || {};
+        db.cart_events[existingIdx].product_name  = curFirst.name  || product_name  || db.cart_events[existingIdx].product_name;
+        db.cart_events[existingIdx].product_image = curFirst.image || product_image || db.cart_events[existingIdx].product_image;
+        db.cart_events[existingIdx].product_price = curFirst.price || product_price || db.cart_events[existingIdx].product_price;
+        db.cart_events[existingIdx].product_url   = curFirst.url   || product_url   || db.cart_events[existingIdx].product_url;
       } else {
         db.cart_events.push({
           id: (db.cart_events.length || 0) + 1,
