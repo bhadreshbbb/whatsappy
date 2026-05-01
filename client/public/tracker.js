@@ -423,6 +423,38 @@
     });
   }
 
+  // ── Helper: fetch live Shopify cart and sync state to server ─────────────────
+  // Called after /cart/change.js or /cart/update.js succeeds.
+  // Sends the current cart (possibly empty) so the server can update status.
+  function _syncCartState() {
+    fetch('/cart.js', { headers: { 'Accept': 'application/json' } })
+      .then(function(r) { return r.json(); })
+      .then(function(cart) {
+        var items = cart.items || [];
+        var products = items.map(function(item) {
+          return {
+            name:  item.title || '',
+            price: item.price ? String(Math.round(item.price / 100)) : '',
+            image: (item.featured_image && item.featured_image.url) ? item.featured_image.url : '',
+            url:   item.url ? (window.location.origin + item.url) : '',
+            id:    String(item.variant_id || item.id || ''),
+          };
+        });
+        var totalAmount = cart.total_price ? cart.total_price / 100 : 0;
+        var first = products[0] || {};
+        track('cart', {
+          cartId:        'cart_sync_' + Date.now(),
+          products:      products,
+          totalAmount:   totalAmount,
+          product_name:  first.name  || '',
+          product_image: first.image || '',
+          product_url:   first.url   || '',
+          product_price: first.price || '',
+          cart_url:      window.location.origin + '/cart',
+        });
+      }).catch(function() {});
+  }
+
   // ── Helper: read Shopify product data from response JSON ─────────────────────
   function _parseShopifyCartResponse(data) {
     if (!data) return null;
@@ -443,8 +475,9 @@
       var url    = (typeof input === 'string') ? input : (input && input.url ? input.url : String(input));
       var method = ((init && init.method) || 'GET').toUpperCase();
 
-      var isShopifyAdd = /\/cart\/add(\.js)?(\?|$)/i.test(url) && method === 'POST';
-      var isWCAdd      = /wc-ajax=add_to_cart/i.test(url);
+      var isShopifyAdd    = /\/cart\/add(\.js)?(\?|$)/i.test(url) && method === 'POST';
+      var isShopifyChange = /\/cart\/(change|update)(\.js)?(\?|$)/i.test(url) && method === 'POST';
+      var isWCAdd         = /wc-ajax=add_to_cart/i.test(url);
 
       if (isShopifyAdd || isWCAdd) {
         return _orig.apply(this, arguments).then(function(resp) {
@@ -457,6 +490,13 @@
             });
           }
           // If resp.ok is false (e.g. 422 out-of-stock) we do NOT track.
+          return resp;
+        });
+      }
+      // Cart item removed or quantity changed → sync real cart state from /cart.js
+      if (isShopifyChange) {
+        return _orig.apply(this, arguments).then(function(resp) {
+          if (resp && resp.ok) setTimeout(_syncCartState, 300);
           return resp;
         });
       }
@@ -478,8 +518,9 @@
 
     XMLHttpRequest.prototype.send = function(body) {
       var xhr = this;
-      var isShopifyAdd = /\/cart\/add(\.js)?(\?|$)/i.test(xhr._wwUrl) && xhr._wwMethod === 'POST';
-      var isWCAdd      = /wc-ajax=add_to_cart/i.test(xhr._wwUrl);
+      var isShopifyAdd    = /\/cart\/add(\.js)?(\?|$)/i.test(xhr._wwUrl) && xhr._wwMethod === 'POST';
+      var isShopifyChange = /\/cart\/(change|update)(\.js)?(\?|$)/i.test(xhr._wwUrl) && xhr._wwMethod === 'POST';
+      var isWCAdd         = /wc-ajax=add_to_cart/i.test(xhr._wwUrl);
 
       if (isShopifyAdd || isWCAdd) {
         xhr.addEventListener('load', function() {
@@ -492,6 +533,10 @@
             }
           }
           // status 4xx/5xx (out-of-stock, validation error) → do NOT track
+        });
+      } else if (isShopifyChange) {
+        xhr.addEventListener('load', function() {
+          if (xhr.status >= 200 && xhr.status < 300) setTimeout(_syncCartState, 300);
         });
       }
       _origSend.apply(this, arguments);
