@@ -11,6 +11,7 @@ let cronInterval;
 let productDetectionInterval;
 let productRefreshInterval;
 let templateStatusInterval;
+let lockCheckInterval;
 let _productCycleOffset = 0; // persists in memory between ticks; resets to 0 on restart
 const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000;
 const SIX_HOURS_MS = 60 * 1000; // DEMO: 1 minute (change back to 6 * 60 * 60 * 1000 for production
@@ -194,6 +195,77 @@ async function applyCardsToAutoProductTemplates(channelId, productConfigCards) {
   console.log(`[ProductDetect] Applied page_views cards to ${templates.length} template(s)`);
 }
 
+// ── Every-minute lock status checker ─────────────────────────────────────────
+// Monitors users locked into abandoned_product_view campaign.
+// Detects status changes (cart added, purchased) and marks loop as complete.
+async function checkLockedUsers() {
+  const db = getDb();
+  const channelId = process.env.CHANNEL_ID || 'demo';
+  if (!db.campaign_locks?.length) return;
+
+  const now = Date.now();
+  let changed = false;
+
+  for (const lock of db.campaign_locks) {
+    if (lock.channel_id !== channelId || lock.lock_status !== 'active') continue;
+
+    const visitor = db.website_visitors.find(v => v.phone === lock.phone && v.channel_id === channelId);
+    if (!visitor) continue;
+
+    const currStatus = visitor.status;
+    lock.last_status_check = new Date().toISOString();
+
+    // Status changed → update lock
+    if (currStatus !== lock.last_known_status) {
+      const prevStatus = lock.last_known_status;
+      lock.last_known_status = currStatus;
+      changed = true;
+      console.log(`[LockCheck] ${lock.phone}: ${prevStatus} → ${currStatus}`);
+
+      if (currStatus === 'abandoned_cart') {
+        lock.lock_status  = 'cart_added';
+        lock.cart_added_at = new Date().toISOString();
+        lock.unlock_reason = 'user_added_to_cart';
+        console.log(`[LockCheck] ✓ ${lock.phone} added to cart — unlocked from product view campaign`);
+
+      } else if (currStatus === 'purchased') {
+        lock.lock_status   = 'purchased';
+        lock.purchased_at  = new Date().toISOString();
+        lock.unlock_reason = 'user_purchased';
+        // Capture revenue from most recent purchase
+        const purchase = (db.purchase_history || [])
+          .filter(p => p.phone === lock.phone)
+          .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
+        if (purchase) lock.revenue = parseFloat(purchase.total_amount) || 0;
+        console.log(`[LockCheck] ✓ ${lock.phone} purchased — revenue ₹${lock.revenue}`);
+      }
+    }
+
+    // Follow-up loop complete (stage 2 sent + 24h passed + no conversion) → shift to recommendation
+    if (
+      lock.lock_status === 'active' &&
+      lock.stage >= 2 &&
+      lock.stage_2_sent_at &&
+      (now - new Date(lock.stage_2_sent_at).getTime()) > 24 * 60 * 60 * 1000
+    ) {
+      lock.lock_status   = 'shifted_recommendation';
+      lock.shifted_at    = new Date().toISOString();
+      lock.unlock_reason = 'follow_up_loop_complete_no_conversion';
+      changed = true;
+      console.log(`[LockCheck] ${lock.phone} → shifted to product_recommendation (loop done, no conversion)`);
+      // Reset visitor status to 'active' so weekly product recommendation campaign picks them up
+      const vIdx = db.website_visitors.findIndex(v => v.phone === lock.phone && v.channel_id === channelId);
+      if (vIdx >= 0) {
+        db.website_visitors[vIdx].status = 'active';
+        db.website_visitors[vIdx].whatsapp_sent = 0;
+        db.website_visitors[vIdx].followup_count = 0;
+      }
+    }
+  }
+
+  if (changed) db.save();
+}
+
 export function startAutomation() {
   console.log('Starting automation engine...');
 
@@ -304,15 +376,20 @@ export function startAutomation() {
     autoRefreshPendingStatuses().catch(err => console.error('[TemplateStatus] Error:', err));
   }, 5 * 60 * 1000);
 
+  // Lock status checker — every 1 minute: detect cart/purchase/loop-complete for locked users
+  lockCheckInterval = setInterval(() => {
+    checkLockedUsers().catch(err => console.error('[LockCheck] Error:', err));
+  }, 60 * 1000);
+
   // Check pending template statuses immediately on startup
   autoRefreshPendingStatuses().catch(err => console.error('[TemplateStatus] Initial error:', err));
 
   console.log('Automation engine active:');
-  console.log('  - Message sending: Every minute');
+  console.log('  - Message sending: Every 5 minutes (new users)');
+  console.log('  - Lock status check: Every 1 minute (cart/purchase detection)');
   console.log('  - Product detection: Every 6 hours');
   console.log('  - Product refresh: Every 26 hours');
-  console.log('  - Template refresh: Every 24 hours');
-  console.log('  - Template status sync: Every 30 minutes');
+  console.log('  - Template status sync: Every 5 minutes');
 }
 
 // ── Product-config refresh for auto-mode templates ───────────────────────────
@@ -658,38 +735,48 @@ async function runAutomation() {
         const THIRTY_MIN_MS = 30 * 60 * 1000;
         const now = Date.now();
 
-        const views = (db.product_views || []).map(v => {
-          // Resolve phone: record may have been saved before identify() ran for this session
-          const resolvedPhone = v.phone
-            || (db.website_visitors.find(vis => vis.session_id === v.session_id && vis.channel_id === v.channel_id))?.phone;
-          return resolvedPhone !== v.phone ? { ...v, phone: resolvedPhone } : v;
-        }).filter(v => {
-          if (v.channel_id !== channelId || !v.phone) return false;
-          // Must match configured product page URL slug
+        // ── Last product per phone — multiple views → use most recent product ──
+        const latestViewByPhone = {};
+        for (const v of (db.product_views || [])) {
+          if (v.channel_id !== channelId) continue;
+          const phone = v.phone
+            || (db.website_visitors.find(vis => vis.session_id === v.session_id && vis.channel_id === channelId))?.phone;
+          if (!phone) continue;
+          const vp = phone !== v.phone ? { ...v, phone } : v;
+          if (!latestViewByPhone[phone] || vp.created_at > latestViewByPhone[phone].created_at) {
+            latestViewByPhone[phone] = vp;
+          }
+        }
+
+        const views = Object.values(latestViewByPhone).filter(v => {
           if (!v.product_url || !v.product_url.includes(productSlug)) return false;
-          // Max 2 follow-ups total
           if ((v.followup_count || 0) >= 2) return false;
           const isInitial  = !v.whatsapp_sent;
           const isFollowup = v.whatsapp_sent && (v.followup_count || 0) < 2;
           if (!isInitial && !isFollowup) return false;
 
+          const lock = (db.campaign_locks || []).find(l => l.phone === v.phone && l.campaign_id == cam.id);
+
           if (isInitial) {
-            // Require 30 minutes of inactivity before first message
+            // Skip if already locked (first message already sent via a previous tick)
+            if (lock && lock.stage >= 1) return false;
+            // 30 minutes of inactivity required
             const visitor = db.website_visitors.find(vis => vis.phone === v.phone);
             const lastActivity = visitor?.visited_at || v.created_at;
             if ((now - new Date(lastActivity).getTime()) < THIRTY_MIN_MS) return false;
           }
           if (isFollowup) {
             const hoursSince = v.whatsapp_sent_at ? (now - new Date(v.whatsapp_sent_at).getTime()) / 3600000 : Infinity;
-            if (hoursSince < 24) return false; // 24h gap for follow-up
+            if (hoursSince < 24) return false;
+            // Skip if lock shows user already converted (cart/purchase)
+            if (lock && lock.lock_status !== 'active') return false;
           }
 
-          // Skip if user has carted or purchased (status-level guard)
+          // Skip if user status moved past product_view (carted/purchased)
           const visitor = db.website_visitors.find(vis => vis.phone === v.phone);
           if (visitor && isBlockedByStatus(visitor.status, 'abandoned_product_view')) return false;
 
-          // Product-level guard: skip if this exact product is already in an unrecovered cart.
-          // Cart has higher priority — abandoned_cart campaign will handle it instead.
+          // Cart has priority — abandoned_cart campaign handles it
           const productInCart = (db.cart_events || []).some(c => {
             if (c.phone !== v.phone || c.recovered || c.channel_id !== channelId) return false;
             if (c.product_url && c.product_url === v.product_url) return true;
@@ -1381,6 +1468,40 @@ async function sendMultiple(db, cam, events, type) {
           evt.whatsapp_sent    = 1;
           evt.followup_count   = currentStage;
           evt.whatsapp_sent_at = new Date().toISOString();
+        }
+
+        // ── Campaign lock: create on stage 1, update stage on follow-up ──────
+        if (cam.campaign_type === 'abandoned_product_view' && sendResult?.messageId) {
+          if (!db.campaign_locks) db.campaign_locks = [];
+          const nowIso = new Date().toISOString();
+          const existingLock = db.campaign_locks.find(l => l.phone === evt.phone && String(l.campaign_id) === String(cam.id));
+          if (!existingLock) {
+            db.campaign_locks.push({
+              id: uuidv4(),
+              channel_id:        channelId,
+              phone:             evt.phone,
+              campaign_id:       cam.id,
+              campaign_type:     cam.campaign_type,
+              locked_at:         nowIso,
+              product_url:       evt.product_url   || '',
+              product_name:      evt.product_name  || '',
+              product_price:     evt.product_price || '',
+              product_image:     evt.product_image || '',
+              stage:             currentStage,
+              stage_1_sent_at:   currentStage === 1 ? nowIso : null,
+              stage_2_sent_at:   currentStage === 2 ? nowIso : null,
+              lock_status:       'active',
+              revenue:           0,
+              last_status_check: nowIso,
+              last_known_status: 'product_view',
+              unlock_reason:     null,
+            });
+            console.log(`[Lock] Created lock for ${evt.phone} — stage ${currentStage} — product: "${evt.product_name}"`);
+          } else {
+            existingLock.stage = currentStage;
+            if (currentStage === 2) existingLock.stage_2_sent_at = nowIso;
+            console.log(`[Lock] Updated lock for ${evt.phone} → stage ${currentStage}`);
+          }
         }
 
         // Stage 4 → promote visitor to followup_complete (same as PATH B)

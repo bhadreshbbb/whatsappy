@@ -714,13 +714,54 @@ export const campaignsController = {
       if (campaign.campaign_type === 'abandoned_product_view') {
         const now = Date.now();
         const THIRTY_MIN_MS = 30 * 60 * 1000;
-        audience = (db.product_views || []).map(v => {
-          // Resolve phone: product_views record may have been saved before identify() ran
-          const resolvedPhone = v.phone
-            || (db.website_visitors.find(vis => vis.session_id === v.session_id && vis.channel_id === v.channel_id))?.phone;
-          return { ...v, phone: resolvedPhone };
-        }).filter(v => {
-          if (v.channel_id !== channelId || !v.phone) return false;
+
+        // ── Section 1: Locked users (already sent ≥1 message) — with activity tracking
+        const locks = (db.campaign_locks || []).filter(l =>
+          l.channel_id === channelId && String(l.campaign_id) === String(id)
+        );
+        const lockedPhones = new Set(locks.map(l => l.phone));
+
+        const lockedAudience = locks.map(l => {
+          const visitor = db.website_visitors.find(v => v.phone === l.phone && v.channel_id === channelId);
+          const cartEvent = (db.cart_events || []).find(c => c.phone === l.phone && !c.recovered && c.channel_id === channelId);
+          const purchase  = (db.purchase_history || []).filter(p => p.phone === l.phone).sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
+          return {
+            phone:                  l.phone,
+            name:                   visitor?.name || 'Unknown',
+            product_name:           l.product_name || '',
+            product_url:            l.product_url  || '',
+            product_price:          l.product_price || '',
+            product_image:          l.product_image || '',
+            status:                 visitor?.status || l.last_known_status || 'product_view',
+            lock_status:            l.lock_status,    // active | cart_added | purchased | shifted_recommendation
+            stage:                  l.stage || 1,
+            locked_at:              l.locked_at,
+            stage_1_sent_at:        l.stage_1_sent_at || null,
+            stage_2_sent_at:        l.stage_2_sent_at || null,
+            last_status_check:      l.last_status_check || null,
+            revenue:                l.revenue || 0,
+            cart_amount:            cartEvent?.total_amount || 0,
+            purchase_amount:        purchase?.total_amount || 0,
+            followup_count:         l.stage || 0,
+            minutes_since_activity: visitor?.visited_at ? Math.floor((now - new Date(visitor.visited_at).getTime()) / 60000) : null,
+            ready_to_send:          false, // already locked
+            is_locked:              true,
+          };
+        });
+
+        // ── Section 2: Pending users (product viewed, 30-min wait, not locked yet)
+        const latestViewByPhone = {};
+        for (const v of (db.product_views || [])) {
+          if (v.channel_id !== channelId) continue;
+          const phone = v.phone
+            || (db.website_visitors.find(vis => vis.session_id === v.session_id && vis.channel_id === channelId))?.phone;
+          if (!phone || lockedPhones.has(phone)) continue;
+          const vp = phone !== v.phone ? { ...v, phone } : v;
+          if (!latestViewByPhone[phone] || vp.created_at > latestViewByPhone[phone].created_at) {
+            latestViewByPhone[phone] = vp;
+          }
+        }
+        const pendingAudience = Object.values(latestViewByPhone).filter(v => {
           if (!v.product_url || !v.product_url.includes(productSlug)) return false;
           if ((v.followup_count || 0) >= 2) return false;
           const visitor = db.website_visitors.find(vis => vis.phone === v.phone);
@@ -731,17 +772,24 @@ export const campaignsController = {
           const lastActivity = visitor?.visited_at || v.created_at;
           const minSince = Math.floor((now - new Date(lastActivity).getTime()) / 60000);
           return {
-            phone: v.phone,
-            name: visitor?.name || v.product_name || 'Unknown',
-            product_name: v.product_name || '',
-            product_url: v.product_url || '',
-            product_price: v.product_price || '',
-            status: visitor?.status || 'product_view',
-            followup_count: v.followup_count || 0,
+            phone:                  v.phone,
+            name:                   visitor?.name || 'Unknown',
+            product_name:           v.product_name || '',
+            product_url:            v.product_url  || '',
+            product_price:          v.product_price || '',
+            product_image:          v.product_image || '',
+            status:                 visitor?.status || 'product_view',
+            lock_status:            'pending',
+            stage:                  0,
+            locked_at:              null,
+            followup_count:         0,
             minutes_since_activity: minSince,
-            ready_to_send: minSince >= 30,
+            ready_to_send:          minSince >= 30,
+            is_locked:              false,
           };
         });
+
+        audience = [...lockedAudience, ...pendingAudience];
       } else if (campaign.campaign_type === 'abandoned_cart') {
         audience = (db.cart_events || []).filter(c =>
           c.channel_id === channelId && !c.recovered && c.phone
