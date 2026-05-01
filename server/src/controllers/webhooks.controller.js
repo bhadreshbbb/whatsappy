@@ -84,10 +84,11 @@ async function sendOrderConfirmationNow(db, order) {
     );
     if (visitor?.is_opted_out) return;
 
-    const { buildSendMessagePayload, LANG_MAP } = await import('./meta-templates.controller.js');
-    const langCode  = LANG_MAP[cam.target_language || 'en'] || 'en_US';
+    const { buildSendMessagePayload } = await import('./meta-templates.controller.js');
+    // Always use the template's own language — not the campaign's target_language.
+    // Meta error #132001 occurs when you send a language code the template wasn't submitted in.
     const productConfig = buildOrderProductConfig(order, visitor?.name);
-    const msgPayload = buildSendMessagePayload(metaTpl, productConfig, order.phone, langCode);
+    const msgPayload = buildSendMessagePayload(metaTpl, productConfig, order.phone, metaTpl.language);
 
     const { whatsappService } = await import('../services/whatsapp.service.js');
     const result = await whatsappService.sendTemplateMessage(order.phone, msgPayload);
@@ -810,10 +811,9 @@ export const webhooksController = {
       db.save();
 
       // Await the send — return full result to client
-      const { buildSendMessagePayload, LANG_MAP } = await import('./meta-templates.controller.js');
-      const langCode     = LANG_MAP[cam.target_language || 'en'] || 'en_US';
+      const { buildSendMessagePayload } = await import('./meta-templates.controller.js');
       const productConfig = buildOrderProductConfig(order, order.name);
-      const msgPayload    = buildSendMessagePayload(metaTpl, productConfig, order.phone, langCode);
+      const msgPayload    = buildSendMessagePayload(metaTpl, productConfig, order.phone, metaTpl.language);
 
       let wamid = null, sendError = null;
       try {

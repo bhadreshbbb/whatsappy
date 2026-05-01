@@ -882,12 +882,9 @@ async function runAutomation() {
               }],
             };
 
-            const { buildSendMessagePayload, LANG_MAP } = await import('../controllers/meta-templates.controller.js');
-            const userLang    = cam.target_language || 'en';
-            const metaLangCode = LANG_MAP[userLang] || userLang;
-
-            // Build the full /messages payload
-            const msgPayload = buildSendMessagePayload(metaTpl, productConfig, order.phone, metaLangCode);
+            const { buildSendMessagePayload } = await import('../controllers/meta-templates.controller.js');
+            // Use template's own language — avoids Meta #132001 "does not exist in translation"
+            const msgPayload = buildSendMessagePayload(metaTpl, productConfig, order.phone, metaTpl.language);
 
             const { whatsappService } = await import('../services/whatsapp.service.js');
             const result = await whatsappService.sendTemplateMessage(order.phone, msgPayload);
