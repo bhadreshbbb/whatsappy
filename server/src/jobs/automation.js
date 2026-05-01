@@ -281,12 +281,12 @@ async function checkLockedUsers() {
     (v.funnel_cycle || 1) > 1  // re-entry happened (new cycle after purchase)
   );
   for (const visitor of purchasedWithView) {
-    const hasActiveLock = (db.campaign_locks || []).some(l =>
-      l.phone === visitor.phone && l.channel_id === channelId &&
-      l.lock_status === 'active' && l.stage >= 1
+    // Clear ANY old lock regardless of lock_status (purchased/shifted/active/cart_added).
+    // After purchase re-entry, old locks always block the new cycle — clear all of them.
+    const hasAnyLock = (db.campaign_locks || []).some(l =>
+      l.phone === visitor.phone && l.channel_id === channelId
     );
-    if (hasActiveLock) {
-      // Remove old locks so automation can re-send for the new product view
+    if (hasAnyLock) {
       db.campaign_locks = (db.campaign_locks || []).filter(l =>
         !(l.phone === visitor.phone && l.channel_id === channelId)
       );
@@ -297,7 +297,7 @@ async function checkLockedUsers() {
         }
       });
       changed = true;
-      console.log(`[LockCheck] ${visitor.phone} re-entered funnel (cycle ${visitor.funnel_cycle}) — locks cleared for fresh campaign`);
+      console.log(`[LockCheck] ${visitor.phone} re-entered funnel (cycle ${visitor.funnel_cycle}) — all old locks cleared for fresh campaign`);
     }
   }
 
