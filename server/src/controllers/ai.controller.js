@@ -5,16 +5,25 @@
  */
 import { getDb } from '../services/database.js';
 
-const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || '';
+// ── Resolve API key: DB settings first, then env var ─────────────────────────
+function getApiKey(db, channelId) {
+  try {
+    const row = (db.channel_settings || []).find(s => s.channel_id === channelId);
+    const s   = row ? JSON.parse(row.settings || '{}') : {};
+    return s.anthropic_api_key || process.env.ANTHROPIC_API_KEY || '';
+  } catch {
+    return process.env.ANTHROPIC_API_KEY || '';
+  }
+}
 
 // ── Call Claude API ────────────────────────────────────────────────────────────
-async function callClaude(prompt, maxTokens = 600) {
-  if (!ANTHROPIC_API_KEY) throw new Error('ANTHROPIC_API_KEY not set in server .env');
+async function callClaude(prompt, maxTokens = 600, apiKey = '') {
+  if (!apiKey) throw new Error('Anthropic API key not configured. Add it in Settings → AI Settings tab.');
   const res = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'x-api-key': ANTHROPIC_API_KEY,
+      'x-api-key': apiKey,
       'anthropic-version': '2023-06-01',
     },
     body: JSON.stringify({
@@ -180,6 +189,10 @@ export const aiController = {
   // ── POST /api/ai/generate-template ─────────────────────────────────────────
   async generateTemplate(req, res) {
     try {
+      const db        = getDb();
+      const channelId = req.headers['x-channel-id'] || 'demo';
+      const apiKey    = getApiKey(db, channelId);
+
       const {
         campaign_type = 'abandoned_product_view',
         language      = 'English',
@@ -238,7 +251,7 @@ Return ONLY a JSON object (no explanation, no markdown code blocks):
   "explanation": "one sentence why this copy works"
 }`;
 
-      const raw = await callClaude(prompt, 700);
+      const raw = await callClaude(prompt, 700, apiKey);
 
       // Parse JSON from response
       let parsed;
@@ -249,7 +262,7 @@ Return ONLY a JSON object (no explanation, no markdown code blocks):
         parsed = { body: raw, header: null, footer: null, button_text: 'Shop Now', quick_replies: [], explanation: '' };
       }
 
-      res.json({ success: true, ...parsed, campaign_type, language, tone });
+      res.json({ success: true, ...parsed, tip: parsed.explanation || '', campaign_type, language, tone });
     } catch (err) {
       console.error('[AI] Template generate error:', err.message);
       res.status(500).json({ error: err.message });

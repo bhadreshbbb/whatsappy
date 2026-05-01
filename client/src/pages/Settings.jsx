@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { Save, Eye, EyeOff, Copy, CheckCircle, Zap, MessageSquare, Globe, Code, RefreshCw, Settings2 } from "lucide-react";
+import { Save, Eye, EyeOff, Copy, CheckCircle, Zap, MessageSquare, Globe, Code, RefreshCw, Settings2, Sparkles } from "lucide-react";
 import { settingsApi } from "../api";
 
 const CH = () => ({ 'x-channel-id': localStorage.getItem('channelId') || 'demo' });
@@ -10,6 +10,7 @@ export default function Settings() {
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState(null);
   const [showToken, setShowToken] = useState(false);
+  const [showAiKey, setShowAiKey] = useState(false);
   const [testPhone, setTestPhone] = useState("");
   const [testing, setTesting] = useState(false);
   const [copiedSnippet, setCopiedSnippet] = useState(false);
@@ -102,11 +103,12 @@ export default function Settings() {
   const s = (k, v) => setSettings(p => ({ ...p, [k]: v }));
 
   const TABS = [
-    { id: "whatsapp",   icon: MessageSquare, label: "WhatsApp API",   color: "#25D366" },
-    { id: "automation", icon: Zap,           label: "Automation",     color: "#f97316" },
-    { id: "tracker",    icon: Code,          label: "Tracker Setup",  color: "#3b82f6" },
-    { id: "general",    icon: Globe,         label: "General",        color: "#a855f7" },
+    { id: "whatsapp",   icon: MessageSquare, label: "WhatsApp API",        color: "#25D366" },
+    { id: "automation", icon: Zap,           label: "Automation",          color: "#f97316" },
+    { id: "tracker",    icon: Code,          label: "Tracker Setup",       color: "#3b82f6" },
+    { id: "general",    icon: Globe,         label: "General",             color: "#a855f7" },
     { id: "campaigns",  icon: Settings2,     label: "Campaign & Template", color: "#06b6d4" },
+    { id: "ai",         icon: Sparkles,      label: "AI Settings",         color: "#a78bfa" },
   ];
 
   if (loading) return (
@@ -435,6 +437,59 @@ WhatsWay.identify({ phone: `}<span style={{color:"#fbbf24"}}>"+919876543210"</sp
 
           <button onClick={save} disabled={saving} className="btn-primary w-full justify-center gap-2">
             <Save size={14} />{saving ? "Saving…" : "Save Campaign Settings"}
+          </button>
+        </div>
+      )}
+
+      {/* AI Settings Tab */}
+      {activeTab === "ai" && (
+        <div className="card p-6 space-y-5">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0" style={{ background: "rgba(167,139,250,0.15)" }}>
+              <Sparkles size={18} style={{ color: "#a78bfa" }} />
+            </div>
+            <div>
+              <h3 className="text-sm font-semibold text-white">AI Settings</h3>
+              <p className="text-xs" style={{ color: "#64748b" }}>Power the AI Template Generator with your Anthropic API key</p>
+            </div>
+          </div>
+
+          <div className="p-4 rounded-xl text-xs space-y-1" style={{ background: "rgba(167,139,250,0.06)", border: "1px solid rgba(167,139,250,0.2)", color: "#c4b5fd" }}>
+            <p className="font-semibold mb-1.5" style={{ color: "#a78bfa" }}>How to get your Anthropic API key</p>
+            <p>1. Go to <a href="https://console.anthropic.com" target="_blank" rel="noopener" className="underline" style={{ color: "#a78bfa" }}>console.anthropic.com</a></p>
+            <p>2. Sign in → API Keys → Create Key</p>
+            <p>3. Copy the key and paste it below</p>
+            <p className="mt-2" style={{ color: "#94a3b8" }}>Used only for "Generate with AI" in the Templates page. Insights and intent scoring work without a key.</p>
+          </div>
+
+          <div>
+            <label className="label flex items-center gap-2">
+              Anthropic API Key
+              {settings.anthropic_api_key && (
+                <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: "rgba(34,197,94,0.1)", border: "1px solid rgba(34,197,94,0.3)", color: "#4ade80" }}>
+                  ✓ Set
+                </span>
+              )}
+            </label>
+            <div className="relative">
+              <input className="input font-mono pr-10"
+                type={showAiKey ? "text" : "password"}
+                placeholder="sk-ant-…"
+                value={settings.anthropic_api_key || ""}
+                onChange={e => s("anthropic_api_key", e.target.value)} />
+              <button onClick={() => setShowAiKey(v => !v)}
+                className="absolute right-3 top-1/2 -translate-y-1/2 transition-colors"
+                style={{ color: "#475569" }}
+                onMouseEnter={e => e.currentTarget.style.color = "#e2e8f0"}
+                onMouseLeave={e => e.currentTarget.style.color = "#475569"}>
+                {showAiKey ? <EyeOff size={14} /> : <Eye size={14} />}
+              </button>
+            </div>
+            <p className="text-xs mt-1" style={{ color: "#334155" }}>Stored securely in your database. Never exposed to the browser after saving.</p>
+          </div>
+
+          <button onClick={save} disabled={saving} className="btn-primary w-full justify-center gap-2">
+            <Save size={14} />{saving ? "Saving…" : "Save AI Settings"}
           </button>
         </div>
       )}
