@@ -779,17 +779,30 @@ async function runAutomation() {
         const THIRTY_MIN_MS = 30 * 60 * 1000;
         const now = Date.now();
 
-        // Build product_views lookup by phone (resolve anon sessions via session_id)
-        const latestViewByPhone = {};
+        // Build best product_view per phone using composite engagement score
+        // Score = (time_spent 50%) + (scroll_depth 30%) + (engagement_score 20%)
+        const allPhoneViews = {};
         for (const v of (db.product_views || [])) {
           if (v.channel_id !== channelId) continue;
           const phone = v.phone
             || (db.website_visitors.find(vis => vis.session_id === v.session_id && vis.channel_id === channelId))?.phone;
           if (!phone) continue;
           const vp = phone !== v.phone ? { ...v, phone } : v;
-          if (!latestViewByPhone[phone] || vp.created_at > latestViewByPhone[phone].created_at) {
-            latestViewByPhone[phone] = vp;
-          }
+          if (!allPhoneViews[phone]) allPhoneViews[phone] = [];
+          allPhoneViews[phone].push(vp);
+        }
+        const bestViewByPhone = {};
+        for (const [phone, views] of Object.entries(allPhoneViews)) {
+          if (!views.length) continue;
+          const maxDur = Math.max(...views.map(v => v.duration_sec || 0)) || 1;
+          const scored = views.map(v => ({
+            ...v,
+            _score: (((v.duration_sec || 0) / maxDur) * 50) +
+                    (((v.max_scroll_pct || v.scroll_pct || 0) / 100) * 30) +
+                    (((v.engagement_score || 0) / 100) * 20),
+          }));
+          scored.sort((a, b) => b._score - a._score);
+          bestViewByPhone[phone] = scored[0];
         }
 
         // Source of truth: visitors with product_view status (same as analytics/audience panel)
@@ -799,7 +812,7 @@ async function runAutomation() {
 
         // Build enriched event objects using visitor + product_views + lock data
         const views = eligibleVisitors.map(vis => {
-          const viewRec = latestViewByPhone[vis.phone];
+          const viewRec = bestViewByPhone[vis.phone];
           const lock    = (db.campaign_locks || []).find(l =>
             l.phone === vis.phone && String(l.campaign_id) === String(cam.id)
           );

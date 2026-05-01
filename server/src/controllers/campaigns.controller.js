@@ -771,14 +771,34 @@ export const campaignsController = {
         });
       }
 
-      // ── Latest product_view record per phone (resolve anonymous via session) ──
-      const latestViewByPhone = {};
+      // ── Product view lookups per phone (resolve anonymous via session) ──
+      // latestViewByPhone: most recent view (for product_view campaign type)
+      // bestViewByPhone:   highest composite engagement score (for APV only)
+      const allPhoneViewsMap = {};
       for (const v of allProdViews) {
         const phone = v.phone
           || (db.website_visitors.find(vis => vis.session_id === v.session_id && vis.channel_id === channelId))?.phone;
         if (!phone) continue;
         const vp = { ...v, phone };
-        if (!latestViewByPhone[phone] || vp.created_at > latestViewByPhone[phone].created_at) latestViewByPhone[phone] = vp;
+        if (!allPhoneViewsMap[phone]) allPhoneViewsMap[phone] = [];
+        allPhoneViewsMap[phone].push(vp);
+      }
+      const latestViewByPhone = {};
+      const bestViewByPhone   = {};
+      for (const [phone, views] of Object.entries(allPhoneViewsMap)) {
+        // Latest by created_at
+        views.sort((a, b) => b.created_at > a.created_at ? 1 : -1);
+        latestViewByPhone[phone] = views[0];
+        // Best by composite score: time 50% + scroll 30% + engagement 20%
+        const maxDur = Math.max(...views.map(v => v.duration_sec || 0)) || 1;
+        const scored = views.map(v => ({
+          ...v,
+          _score: (((v.duration_sec || 0) / maxDur) * 50) +
+                  (((v.max_scroll_pct || v.scroll_pct || 0) / 100) * 30) +
+                  (((v.engagement_score || 0) / 100) * 20),
+        }));
+        scored.sort((a, b) => b._score - a._score);
+        bestViewByPhone[phone] = scored[0];
       }
 
       let audience = [];
@@ -796,7 +816,7 @@ export const campaignsController = {
           const ct      = contactMap.get(l.phone) || {};
           const cart    = ct._userCarts?.find(c => !c.recovered);
           const purch   = ct._userPurch?.sort((a,b) => new Date(b.created_at)-new Date(a.created_at))[0];
-          const viewRec = latestViewByPhone[l.phone];
+          const viewRec = bestViewByPhone[l.phone];
           const minSince = ct.last_seen ? Math.floor((now - new Date(ct.last_seen).getTime()) / 60000) : null;
           return {
             phone: l.phone, name: ct.name || 'Unknown',
@@ -824,7 +844,7 @@ export const campaignsController = {
         const pendingAudience = [...contactMap.values()].filter(c =>
           c.status === 'product_view' && !lockedPhones.has(c.phone)
         ).map(c => {
-          const viewRec = latestViewByPhone[c.phone];
+          const viewRec = bestViewByPhone[c.phone];
           if (viewRec?.product_url && !viewRec.product_url.includes(productSlug)) return null;
           if ((viewRec?.followup_count || 0) >= 2) return null;
           const lastAct = c.last_seen || viewRec?.created_at;
