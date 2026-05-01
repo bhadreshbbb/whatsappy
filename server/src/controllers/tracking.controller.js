@@ -1,6 +1,6 @@
 import { getDb } from '../services/database.js';
 import { getLanguageFromGeo } from '../utils/geoLanguage.js';
-import { upgradeStatus } from '../utils/statusMachine.js';
+import { upgradeStatus, downgradeStatus } from '../utils/statusMachine.js';
 import https from 'https';
 import http from 'http';
 
@@ -316,6 +316,35 @@ export const trackingController = {
 
       // Clean top-level product_url too
       if (product_url) product_url = cleanProductUrl(product_url);
+
+      // ── Cart Cleared: empty products + zero total → recover cart + downgrade status ──
+      const cartIsCleared = productsArr.length === 0 && (!totalAmount || parseFloat(totalAmount) === 0);
+      if (cartIsCleared) {
+        const nowClear = new Date().toISOString();
+        let cartCleared = false;
+        db.cart_events.forEach(c => {
+          if (c.channel_id === cid && (c.session_id === sessionId || (phone && c.phone === phone)) && !c.recovered) {
+            c.recovered = 1; c.recovered_at = nowClear; c.recovery_reason = 'cart_cleared';
+            cartCleared = true;
+          }
+        });
+        if (cartCleared) {
+          const stillHasCart = db.cart_events.some(c => c.channel_id === cid && c.phone === phone && !c.recovered);
+          if (!stillHasCart) {
+            const vIdx = db.website_visitors.findIndex(v =>
+              v.channel_id === cid && (v.session_id === sessionId || (phone && v.phone === phone))
+            );
+            if (vIdx >= 0) {
+              const hasRecentView = (db.product_views || []).some(v => v.channel_id === cid && (v.phone === phone || v.session_id === sessionId));
+              const targetStatus = hasRecentView ? 'product_view' : 'active';
+              downgradeStatus(db.website_visitors[vIdx], targetStatus);
+              console.log(`[Cart] Cleared for ${phone || sessionId} → status downgraded to ${targetStatus}`);
+            }
+          }
+          db.save();
+        }
+        return res.json({ success: true, cart_cleared: true });
+      }
 
       const firstProduct = productsArr[0] || {};
       if (!product_name  && firstProduct.name)  product_name  = firstProduct.name;

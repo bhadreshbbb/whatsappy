@@ -8,6 +8,24 @@ export const STATUS_PRIORITY = {
 };
 
 /**
+ * Downgrade status — only when cart is fully cleared (no purchase).
+ * abandoned_cart/checkout → product_view or active
+ * Never touches purchased or followup_complete.
+ */
+export function downgradeStatus(visitor, newStatus) {
+  if (!visitor) return false;
+  const currentLevel = STATUS_PRIORITY[visitor.status] || 0;
+  const targetLevel  = STATUS_PRIORITY[newStatus]      || 0;
+  if (currentLevel >= 3 && currentLevel <= 4 && targetLevel < currentLevel) {
+    visitor.status     = newStatus;
+    visitor.updated_at = new Date().toISOString();
+    console.log(`[StatusMachine] Downgrade: ${visitor.phone || visitor.session_id} ${visitor.status} → ${newStatus} (cart cleared)`);
+    return true;
+  }
+  return false;
+}
+
+/**
  * Status rules:
  *
  *  FORWARD-ONLY within a cycle:

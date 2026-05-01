@@ -222,22 +222,30 @@ async function checkLockedUsers() {
       changed = true;
       console.log(`[LockCheck] ${lock.phone}: ${prevStatus} → ${currStatus}`);
 
-      if (currStatus === 'abandoned_cart') {
-        lock.lock_status  = 'cart_added';
+      if (currStatus === 'abandoned_cart' || currStatus === 'abandoned_checkout') {
+        lock.lock_status   = 'cart_added';
         lock.cart_added_at = new Date().toISOString();
         lock.unlock_reason = 'user_added_to_cart';
-        console.log(`[LockCheck] ✓ ${lock.phone} added to cart — unlocked from product view campaign`);
+        const cartEvt = (db.cart_events || []).find(c => c.phone === lock.phone && !c.recovered && c.channel_id === channelId);
+        if (cartEvt) lock.cart_amount = parseFloat(cartEvt.total_amount) || 0;
+        console.log(`[LockCheck] ✓ ${lock.phone} added to cart (₹${lock.cart_amount || 0}) — unlocked from product view campaign`);
 
       } else if (currStatus === 'purchased') {
         lock.lock_status   = 'purchased';
         lock.purchased_at  = new Date().toISOString();
         lock.unlock_reason = 'user_purchased';
-        // Capture revenue from most recent purchase
         const purchase = (db.purchase_history || [])
           .filter(p => p.phone === lock.phone)
           .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
         if (purchase) lock.revenue = parseFloat(purchase.total_amount) || 0;
         console.log(`[LockCheck] ✓ ${lock.phone} purchased — revenue ₹${lock.revenue}`);
+
+      } else if (prevStatus === 'abandoned_cart' && currStatus === 'product_view') {
+        // Cart was cleared without purchase → user is back to product_view
+        lock.lock_status   = 'active';
+        lock.unlock_reason = null;
+        lock.cart_added_at = null;
+        console.log(`[LockCheck] ${lock.phone} cart cleared → re-locked as product_view`);
       }
     }
 
@@ -252,14 +260,44 @@ async function checkLockedUsers() {
       lock.shifted_at    = new Date().toISOString();
       lock.unlock_reason = 'follow_up_loop_complete_no_conversion';
       changed = true;
-      console.log(`[LockCheck] ${lock.phone} → shifted to product_recommendation (loop done, no conversion)`);
-      // Reset visitor status to 'active' so weekly product recommendation campaign picks them up
+      console.log(`[LockCheck] ${lock.phone} → product_recommendation (loop done, no conversion)`);
       const vIdx = db.website_visitors.findIndex(v => v.phone === lock.phone && v.channel_id === channelId);
       if (vIdx >= 0) {
-        db.website_visitors[vIdx].status = 'active';
-        db.website_visitors[vIdx].whatsapp_sent = 0;
+        // Reset so product_recommendation (website_visit) campaign picks them up
+        db.website_visitors[vIdx].status        = 'active';
+        db.website_visitors[vIdx].whatsapp_sent  = 0;
         db.website_visitors[vIdx].followup_count = 0;
+        db.website_visitors[vIdx].whatsapp_sent_at = null;
       }
+    }
+  }
+
+  // ── Post-purchase re-entry: if purchased user has new product_view + empty cart,
+  //    delete their old locks so the campaign treats them as a fresh user ──────
+  const purchasedWithView = (db.website_visitors || []).filter(v =>
+    v.channel_id === channelId &&
+    v.phone &&
+    v.status === 'product_view' &&
+    (v.funnel_cycle || 1) > 1  // re-entry happened (new cycle after purchase)
+  );
+  for (const visitor of purchasedWithView) {
+    const hasActiveLock = (db.campaign_locks || []).some(l =>
+      l.phone === visitor.phone && l.channel_id === channelId &&
+      l.lock_status === 'active' && l.stage >= 1
+    );
+    if (hasActiveLock) {
+      // Remove old locks so automation can re-send for the new product view
+      db.campaign_locks = (db.campaign_locks || []).filter(l =>
+        !(l.phone === visitor.phone && l.channel_id === channelId)
+      );
+      // Reset product_views whatsapp_sent for new cycle
+      (db.product_views || []).forEach(v => {
+        if (v.phone === visitor.phone && v.channel_id === channelId) {
+          v.whatsapp_sent = 0; v.followup_count = 0; v.whatsapp_sent_at = null;
+        }
+      });
+      changed = true;
+      console.log(`[LockCheck] ${visitor.phone} re-entered funnel (cycle ${visitor.funnel_cycle}) — locks cleared for fresh campaign`);
     }
   }
 
