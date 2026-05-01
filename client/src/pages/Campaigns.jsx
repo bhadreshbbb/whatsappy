@@ -1983,6 +1983,26 @@ export default function Campaigns() {
     }
   };
 
+  const sendTestProductView = async (campaignId, productName) => {
+    const phone = testOrderPhone.trim();
+    if (!phone) return;
+    setTestOrderLoading(p => ({ ...p, [campaignId]: true }));
+    setTestOrderResult(p => ({ ...p, [campaignId]: null }));
+    try {
+      const res = await fetch('/api/webhooks/product-view/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...CH() },
+        body: JSON.stringify({ phone, product_name: productName || undefined }),
+      });
+      const data = await res.json();
+      setTestOrderResult(p => ({ ...p, [campaignId]: { ok: data.success, ...data } }));
+    } catch (e) {
+      setTestOrderResult(p => ({ ...p, [campaignId]: { ok: false, error: e.message } }));
+    } finally {
+      setTestOrderLoading(p => ({ ...p, [campaignId]: false }));
+    }
+  };
+
   const handleSendTest = async () => {
     if (!testModal || !testPhone.trim()) return;
     setTestSending(true);
@@ -2541,6 +2561,74 @@ export default function Campaigns() {
                       )}
                       <p className="text-[9px]" style={{ color: '#334155' }}>
                         Sends a random dummy COD order to this phone. Campaign must be active with an approved template.
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {/* ── Test Product View panel — abandoned_product_view only ── */}
+                {c.campaign_type === 'abandoned_product_view' && (
+                  <div className="rounded-2xl overflow-hidden" style={{ border: '1px solid rgba(96,165,250,0.25)', background: 'rgba(96,165,250,0.04)' }}>
+                    <div className="px-3 py-2.5 flex items-center gap-2" style={{ borderBottom: '1px solid rgba(96,165,250,0.15)' }}>
+                      <span className="text-sm">🧪</span>
+                      <span className="text-[11px] font-bold" style={{ color: '#60a5fa' }}>Test Product View</span>
+                      <span className="text-[9px] ml-auto" style={{ color: '#475569' }}>Injects a product view → triggers real WhatsApp send</span>
+                    </div>
+                    <div className="px-3 py-3 space-y-2">
+                      <div className="flex gap-2">
+                        <input
+                          value={testOrderPhone}
+                          onChange={e => setTestOrderPhone(e.target.value)}
+                          placeholder="Phone (e.g. 919876543210)"
+                          className="flex-1 text-[11px] px-3 py-2 rounded-xl outline-none"
+                          style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(96,165,250,0.2)', color: '#e2e8f0' }}
+                        />
+                      </div>
+                      <div className="flex gap-2">
+                        <input
+                          id={`apv-product-${c.id}`}
+                          placeholder="Product name (optional)"
+                          className="flex-1 text-[11px] px-3 py-2 rounded-xl outline-none"
+                          style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(96,165,250,0.2)', color: '#e2e8f0' }}
+                        />
+                        <button
+                          onClick={() => {
+                            const productName = document.getElementById(`apv-product-${c.id}`)?.value || '';
+                            sendTestProductView(c.id, productName);
+                          }}
+                          disabled={testOrderLoading[c.id] || !testOrderPhone.trim()}
+                          className="px-4 py-2 rounded-xl text-[11px] font-bold transition-all flex items-center gap-1.5"
+                          style={{
+                            background: testOrderLoading[c.id] ? 'rgba(96,165,250,0.1)' : 'rgba(96,165,250,0.2)',
+                            border: '1px solid rgba(96,165,250,0.35)',
+                            color: '#60a5fa',
+                            opacity: testOrderLoading[c.id] || !testOrderPhone.trim() ? 0.5 : 1,
+                            cursor: testOrderLoading[c.id] || !testOrderPhone.trim() ? 'not-allowed' : 'pointer',
+                          }}>
+                          {testOrderLoading[c.id] ? '⏳ Sending…' : '👁 Fire Product View'}
+                        </button>
+                      </div>
+                      {testOrderResult[c.id] && (
+                        <div className="rounded-xl px-3 py-2.5 text-[10px] space-y-1"
+                          style={{ background: testOrderResult[c.id].ok ? 'rgba(74,222,128,0.08)' : 'rgba(248,113,113,0.08)', border: `1px solid ${testOrderResult[c.id].ok ? 'rgba(74,222,128,0.25)' : 'rgba(248,113,113,0.25)'}` }}>
+                          {testOrderResult[c.id].ok ? (
+                            <>
+                              <div className="font-bold" style={{ color: '#4ade80' }}>✓ WhatsApp message sent</div>
+                              <div style={{ color: '#94a3b8' }}>Product: <span style={{ color: '#e2e8f0' }}>{testOrderResult[c.id].product}</span></div>
+                              <div style={{ color: '#94a3b8' }}>Campaign: <span style={{ color: '#e2e8f0' }}>{testOrderResult[c.id].campaign}</span></div>
+                              <div style={{ color: '#94a3b8' }}>Template: <span style={{ color: '#e2e8f0' }}>{testOrderResult[c.id].template}</span></div>
+                              {testOrderResult[c.id].wamid && <div style={{ color: '#94a3b8' }}>WAMID: <span className="font-mono text-[9px]" style={{ color: '#60a5fa' }}>{testOrderResult[c.id].wamid}</span></div>}
+                            </>
+                          ) : (
+                            <>
+                              <div className="font-bold" style={{ color: '#f87171' }}>✗ {testOrderResult[c.id].step ? `Failed at: ${testOrderResult[c.id].step}` : 'Error'}</div>
+                              <div style={{ color: '#fca5a5' }}>{testOrderResult[c.id].error}</div>
+                            </>
+                          )}
+                        </div>
+                      )}
+                      <p className="text-[9px]" style={{ color: '#334155' }}>
+                        Injects a product view 35 min ago (bypasses 30-min wait). Campaign must be active with approved template.
                       </p>
                     </div>
                   </div>

@@ -859,4 +859,164 @@ export const webhooksController = {
       res.status(500).json({ error: err.message });
     }
   },
+
+  // ── 6. Test Abandoned Product View — injects product_view + triggers send ─────
+  async testProductView(req, res) {
+    try {
+      const db        = getDb();
+      const channelId = req.headers['x-channel-id'] || 'demo';
+      const { phone: rawPhone, product_name, product_url, product_image, product_price } = req.body;
+
+      const phone = normalizePhone(rawPhone);
+      if (!phone) return res.status(400).json({ error: 'Phone number required' });
+
+      // Diagnostic: find active campaign
+      const cam = (db.abandoned_cart_campaigns || []).find(c =>
+        c.channel_id === channelId &&
+        c.campaign_type === 'abandoned_product_view' &&
+        c.is_active &&
+        c.meta_template_id
+      );
+      if (!cam) return res.json({ success: false, step: 'campaign', error: 'No active abandoned_product_view campaign found. Create and activate one first.' });
+
+      const metaTpl = (db.meta_templates || []).find(t =>
+        String(t.id) === String(cam.meta_template_id) &&
+        (t.meta_status === 'APPROVED' || t.meta_status === 'ACTIVE')
+      );
+      if (!metaTpl) {
+        const tpl = (db.meta_templates || []).find(t => String(t.id) === String(cam.meta_template_id));
+        return res.json({ success: false, step: 'template', error: `Template "${tpl?.name || cam.meta_template_id}" is not APPROVED yet. Status: ${tpl?.meta_status || 'not found'}` });
+      }
+
+      // Get product slug from channel settings
+      const settingsRow = (db.channel_settings || []).find(s => s.channel_id === channelId);
+      const channelSettings = settingsRow ? (() => { try { return JSON.parse(settingsRow.settings || '{}'); } catch(_) { return {}; } })() : {};
+      const productSlug = channelSettings.product_url_slug || '/products';
+      const shopUrl     = channelSettings.shop_url || 'https://yourstore.com';
+
+      // Build product URL that satisfies the slug check in automation
+      const finalProductUrl = product_url || `${shopUrl}${productSlug}/test-product`;
+      const finalProductName  = product_name  || 'Test Product';
+      const finalProductImage = product_image || '';
+      const finalProductPrice = product_price || '999';
+
+      // Ensure visitor exists with product_view status
+      if (!db.website_visitors) db.website_visitors = [];
+      let visitor = db.website_visitors.find(v => v.channel_id === channelId && v.phone === phone);
+      const now = new Date().toISOString();
+      if (!visitor) {
+        visitor = {
+          id:         (db.website_visitors.length || 0) + 1,
+          channel_id: channelId,
+          session_id: `test_${phone}_${Date.now()}`,
+          phone,
+          name:       'Test User',
+          status:     'product_view',
+          visited_at: now,
+          created_at: now,
+        };
+        db.website_visitors.push(visitor);
+      } else {
+        visitor.status     = 'product_view';
+        visitor.visited_at = new Date(Date.now() - 35 * 60 * 1000).toISOString(); // 35 min ago
+        visitor.last_product_name  = finalProductName;
+        visitor.last_product_image = finalProductImage;
+        visitor.last_product_url   = finalProductUrl;
+        visitor.last_product_price = finalProductPrice;
+      }
+
+      // Inject product_view record with created_at 35 minutes ago (bypasses 30-min wait)
+      if (!db.product_views) db.product_views = [];
+      const existingView = db.product_views.find(v =>
+        v.channel_id === channelId && v.phone === phone && v.product_url === finalProductUrl
+      );
+      const viewRecord = {
+        id:             existingView?.id || (db.product_views.length || 0) + 1,
+        channel_id:     channelId,
+        session_id:     visitor.session_id,
+        phone,
+        event_type:     'product_viewed',
+        product_name:   finalProductName,
+        product_image:  finalProductImage,
+        product_url:    finalProductUrl,
+        product_price:  finalProductPrice,
+        product:        JSON.stringify({ name: finalProductName, image: finalProductImage, url: finalProductUrl, price: finalProductPrice }),
+        whatsapp_sent:  0,
+        followup_count: 0,
+        // 35 minutes ago — bypasses the 30-min inactivity check in automation
+        created_at:     new Date(Date.now() - 35 * 60 * 1000).toISOString(),
+      };
+      if (existingView) {
+        Object.assign(existingView, viewRecord);
+      } else {
+        db.product_views.push(viewRecord);
+      }
+      db.save();
+
+      // Build and send the WhatsApp message directly (same as automation would do)
+      const { buildSendMessagePayload, LANG_MAP } = await import('./meta-templates.controller.js');
+
+      // Build productConfig from the view record (mirrors automation logic)
+      const productConfig = metaTpl.is_carousel
+        ? metaTpl.product_config
+        : {
+            cards: [{
+              name:          visitor.name || 'Customer',
+              title:         finalProductName,
+              price:         String(finalProductPrice),
+              link:          finalProductUrl,
+              url:           finalProductUrl,
+              image:         finalProductImage,
+              image_url:     finalProductImage,
+              media_id:      metaTpl.header_image_id || '',
+              product_name:  finalProductName,
+              product_price: String(finalProductPrice),
+              product_url:   finalProductUrl,
+              product_image: finalProductImage,
+            }],
+          };
+
+      const msgPayload = buildSendMessagePayload(metaTpl, productConfig, phone, metaTpl.language, cam.id);
+
+      let wamid = null, sendError = null;
+      try {
+        const result = await whatsappService.sendTemplateMessage(phone, msgPayload);
+        wamid = result?.messageId || result?.wamid || null;
+      } catch (e) { sendError = e.message; }
+
+      // Mark view as sent
+      if (wamid) {
+        viewRecord.whatsapp_sent    = 1;
+        viewRecord.whatsapp_sent_at = new Date().toISOString();
+        viewRecord.followup_count   = 1;
+      }
+
+      // Save execution record
+      db.abandoned_cart_executions.push({
+        id:            (db.abandoned_cart_executions.length || 0) + 1,
+        campaign_id:   cam.id,
+        campaign_name: cam.name,
+        campaign_type: 'abandoned_product_view',
+        channel_id:    channelId,
+        phone,
+        name:          visitor.name || 'Test User',
+        template_name: metaTpl.name,
+        status:        wamid ? 'sent' : 'failed',
+        wamid,
+        error:         sendError,
+        stage:         1,
+        sent_at:       new Date().toISOString(),
+      });
+      db.save();
+
+      if (sendError) {
+        return res.json({ success: false, step: 'meta_api', error: sendError, phone, campaign: cam.name, template: metaTpl.name, product: finalProductName, product_url: finalProductUrl });
+      }
+
+      res.json({ success: true, wamid, phone, campaign: cam.name, template: metaTpl.name, product: finalProductName, product_url: finalProductUrl, message: 'WhatsApp message sent successfully' });
+    } catch (err) {
+      console.error('[TestProductView] Error:', err.message);
+      res.status(500).json({ error: err.message });
+    }
+  },
 };

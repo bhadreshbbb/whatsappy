@@ -17,5 +17,6 @@ router.post('/whatsapp', webhooksController.webhookIncoming);   // incoming mess
 router.get('/order-responses/:campaignId', webhooksController.getOrderResponses);
 router.get('/orders/pending',              webhooksController.getPendingOrders);
 router.post('/order/test',                 webhooksController.testCodOrder);
+router.post('/product-view/test',          webhooksController.testProductView);
 
 export { router as webhooksRoutes };
