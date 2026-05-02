@@ -653,51 +653,36 @@ export const campaignsController = {
       const executions = (db.abandoned_cart_executions || [])
         .filter(e => String(e.campaign_id) === String(id));
 
-      // Helper: get per-phone execution records (stage 1 + stage 2)
-      const getExecs = (phone) => {
-        const ph = executions.filter(x => x.phone === phone)
-          .sort((a, b) => new Date(a.sent_at) - new Date(b.sent_at));
-        const s1 = ph.find(x => (x.stage || 1) === 1) || null;
-        const s2 = ph.find(x => x.stage === 2) || null;
-        return {
-          stage1_status:  s1?.status  || null,
-          stage1_sent_at: s1?.sent_at || null,
-          stage1_error:   s1?.error   || null,
-          stage2_status:  s2?.status  || null,
-          stage2_sent_at: s2?.sent_at || null,
-          stage2_error:   s2?.error   || null,
-        };
+      // ── Per-phone exec lookup — uses LOCK timestamps as source of truth ─────────
+      // After re-entry, lock.stage_1_sent_at is reset to null. We find the
+      // execution that most closely matches the lock's current-cycle timestamp
+      // (within 5 min). This avoids showing old-cycle sends as "sent".
+      const findExecForLock = (lockTs, stageNum) => {
+        if (!lockTs) return null; // not sent in current cycle
+        const lockMs = new Date(lockTs).getTime();
+        return executions
+          .filter(x => (x.stage || 1) === stageNum)
+          .sort((a, b) =>
+            Math.abs(new Date(a.sent_at).getTime() - lockMs) -
+            Math.abs(new Date(b.sent_at).getTime() - lockMs)
+          )
+          .find(x => Math.abs(new Date(x.sent_at).getTime() - lockMs) < 5 * 60 * 1000) || null;
       };
 
-      // ── Inbound chat messages for locked users ────────────────────────────────
-      const inboundByPhone = {};
-      (db.chat_messages || [])
-        .filter(m => m.channel_id === channelId && m.direction === 'in' && lockedPhones.has(m.phone))
-        .forEach(m => {
-          if (!inboundByPhone[m.phone]) inboundByPhone[m.phone] = [];
-          inboundByPhone[m.phone].push(m);
-        });
-
-      // ── UTM-attributed visitors (clicked the link) ────────────────────────────
-      const utmVisitors = (db.website_visitors || []).filter(v =>
-        v.channel_id === channelId && String(v.utm_campaign) === String(id)
-      );
-      const clickedPhones = new Set(utmVisitors.map(v => v.phone).filter(Boolean));
-
-      // Also infer click if user has a product_view record AFTER stage 1 was sent
-      // (for campaigns that don't use UTM)
-      const stage1SentByPhone = {};
-      executions.filter(x => (x.stage || 1) === 1 && x.status === 'sent').forEach(x => {
-        stage1SentByPhone[x.phone] = x.sent_at;
-      });
-      (db.product_views || [])
-        .filter(v => v.channel_id === channelId && lockedPhones.has(v.phone))
-        .forEach(v => {
-          const s1At = stage1SentByPhone[v.phone];
-          if (s1At && new Date(v.created_at) > new Date(s1At)) {
-            clickedPhones.add(v.phone);
-          }
-        });
+      // ── Inbound chat messages — only AFTER current-cycle stage 1 send ─────────
+      // Replies from before the current campaign cycle (old campaigns, old runs)
+      // are excluded so analytics shows only responses to THIS campaign.
+      const getInbound = (phone, sinceIso) => {
+        const sinceMs = sinceIso ? new Date(sinceIso).getTime() : 0;
+        return (db.chat_messages || [])
+          .filter(m =>
+            m.phone === phone && m.channel_id === channelId && m.direction === 'in' &&
+            new Date(m.timestamp || m.created_at).getTime() > sinceMs
+          )
+          .sort((a, b) =>
+            new Date(b.timestamp || b.created_at) - new Date(a.timestamp || a.created_at)
+          );
+      };
 
       // ── Visitor map for enrichment ────────────────────────────────────────────
       const visitorByPhone = {};
@@ -737,53 +722,67 @@ export const campaignsController = {
         revenueByPhone[p.phone] += parseFloat(p.total_amount || 0);
       });
 
-      // ── Build all unique phones (from locks + non-locked executions) ──────────
-      const allPhones = new Set([
-        ...locks.map(l => l.phone),
-        ...executions.filter(x => x.phone).map(x => x.phone),
-      ]);
+      // ── Per-user data — only locked users (those who entered the campaign) ──────
+      const users = locks.map(lock => {
+        const phone   = lock.phone;
+        const visitor = visitorByPhone[phone] || {};
+        const viewRec = latestViewByPhone[phone] || null;
 
-      // ── Per-user data ─────────────────────────────────────────────────────────
-      const users = [...allPhones].map(phone => {
-        const lock     = locks.find(l => l.phone === phone) || null;
-        const visitor  = visitorByPhone[phone] || {};
-        const viewRec  = latestViewByPhone[phone] || null;
-        const execs    = getExecs(phone);
-        const msgs     = inboundByPhone[phone] || [];
-        msgs.sort((a, b) => new Date(b.timestamp || b.created_at) - new Date(a.timestamp || a.created_at));
-        const lastMsg  = msgs[0] || null;
-        const allResps = msgs.map(m => ({ text: m.text || '', at: m.timestamp || m.created_at }));
+        // Current-cycle timestamps from the lock (null = not sent / reset by re-entry)
+        const s1At = lock.stage_1_sent_at || null;
+        const s2At = lock.stage_2_sent_at || null;
+
+        // Match execution to current cycle by timestamp proximity
+        const s1Exec = findExecForLock(s1At, 1);
+        const s2Exec = findExecForLock(s2At, 2);
+
+        // Replies: only AFTER current-cycle stage 1 send (ignores pre-campaign replies)
+        const msgs = getInbound(phone, s1At);
+        const lastMsg = msgs[0] || null;
+
+        // Clicked: product viewed > 1 min after current-cycle stage 1 send
+        const s1Ms = s1At ? new Date(s1At).getTime() : null;
+        const clicked = s1Ms
+          ? (db.product_views || []).some(pv =>
+              pv.phone === phone && pv.channel_id === channelId &&
+              new Date(pv.created_at).getTime() > s1Ms + 60000
+            )
+          : false;
 
         return {
           phone,
-          name:         lock?.name     || visitor.name     || 'Unknown',
-          city:         visitor.city   || '',
-          device:       visitor.device_type || '',
-          product_name: lock?.product_name  || viewRec?.product_name  || '',
-          product_url:  lock?.product_url   || viewRec?.product_url   || '',
-          stage1_status:  execs.stage1_status,
-          stage1_sent_at: execs.stage1_sent_at,
-          stage1_error:   execs.stage1_error,
-          stage2_status:  execs.stage2_status,
-          stage2_sent_at: execs.stage2_sent_at,
-          stage2_error:   execs.stage2_error,
-          responded:       msgs.length > 0,
-          response_count:  msgs.length,
-          last_response:   lastMsg?.text || null,
+          name:         lock.name        || visitor.name || 'Unknown',
+          city:         visitor.city     || '',
+          device:       visitor.device   || '',
+          product_name: lock.product_name || viewRec?.product_name || '',
+          product_url:  lock.product_url  || viewRec?.product_url  || '',
+          product_price: lock.product_price || viewRec?.product_price || '',
+          // Stage 1: use lock timestamp as truth; exec for status/error
+          stage1_sent_at: s1At,
+          stage1_status:  s1At ? (s1Exec?.status || 'sent') : null,
+          stage1_error:   s1Exec?.error || null,
+          // Stage 2: same
+          stage2_sent_at: s2At,
+          stage2_status:  s2At ? (s2Exec?.status || 'sent') : null,
+          stage2_error:   s2Exec?.error || null,
+          // Responses — current cycle only
+          responded:        msgs.length > 0,
+          response_count:   msgs.length,
+          last_response:    lastMsg?.text || null,
           last_response_at: lastMsg ? (lastMsg.timestamp || lastMsg.created_at) : null,
-          all_responses:   allResps,
-          clicked:         clickedPhones.has(phone),
-          lock_status:     lock?.lock_status || 'pending',
-          purchased:       purchasedPhones.has(phone),
-          revenue:         revenueByPhone[phone] || 0,
-          locked_at:       lock?.locked_at || null,
+          all_responses:    msgs.slice(0, 10).map(m => ({ text: m.text || '', at: m.timestamp || m.created_at })),
+          clicked,
+          lock_status:  lock.lock_status || 'active',
+          purchased:    lock.lock_status === 'purchased',
+          revenue:      revenueByPhone[phone] || 0,
+          locked_at:    lock.locked_at || null,
         };
       });
 
-      // ── Summary ───────────────────────────────────────────────────────────────
-      const stage1Sent   = executions.filter(e => (e.stage || 1) === 1 && e.status === 'sent').length;
-      const stage2Sent   = executions.filter(e => e.stage === 2 && e.status === 'sent').length;
-      const totalFailed  = executions.filter(e => e.status === 'failed').length;
+      // ── Summary — based on current-cycle lock state, not raw execution count ────
+      const stage1Sent   = users.filter(u => u.stage1_status === 'sent').length;
+      const stage2Sent   = users.filter(u => u.stage2_status === 'sent').length;
+      const totalFailed  = users.filter(u => u.stage1_status === 'failed' || u.stage2_status === 'failed').length;
       const respondedCount = users.filter(u => u.responded).length;
       const clickedCount   = users.filter(u => u.clicked).length;
       const cartAdds       = locks.filter(l => ['cart_added', 'purchased'].includes(l.lock_status)).length;
