@@ -3329,7 +3329,8 @@ export default function Campaigns() {
                       </thead>
                       <tbody>
                         {users.map((u, i) => (
-                          <tr key={i} style={{ borderBottom: '1px solid rgba(255,255,255,0.03)', background: i % 2 === 0 ? 'rgba(255,255,255,0.01)' : 'transparent' }}>
+                          <React.Fragment key={i}>
+                          <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.03)', background: i % 2 === 0 ? 'rgba(255,255,255,0.01)' : 'transparent' }}>
                             {/* User */}
                             <td className="px-4 py-2.5">
                               <p className="text-[10px] font-semibold text-white">{u.name}</p>
@@ -3378,7 +3379,7 @@ export default function Campaigns() {
                                 {u.clicked ? '✓' : '—'}
                               </span>
                             </td>
-                            {/* Status */}
+                            {/* Status + cycle */}
                             <td className="px-4 py-2.5">
                               <span className="text-[9px] px-1.5 py-0.5 rounded" style={{
                                 background: u.lock_status === 'purchased' ? 'rgba(74,222,128,0.1)' : u.lock_status === 'cart_added' ? 'rgba(251,146,60,0.1)' : u.lock_status === 'active' ? 'rgba(99,102,241,0.1)' : 'rgba(100,116,139,0.1)',
@@ -3386,8 +3387,29 @@ export default function Campaigns() {
                               }}>
                                 {u.lock_status}
                               </span>
+                              {u.cycle_count > 1 && (
+                                <p className="text-[8px] mt-0.5" style={{ color: '#475569' }}>🔄 cycle {u.cycle_count}</p>
+                              )}
                             </td>
                           </tr>
+
+                          {(u.send_history || []).map((h, hi) => (
+                            <tr key={`hist-${i}-${hi}`} style={{ background: 'rgba(99,102,241,0.04)', borderBottom: '1px solid rgba(255,255,255,0.02)' }}>
+                              <td className="px-4 py-1.5 pl-8" colSpan={2}>
+                                <span className="text-[8px]" style={{ color: '#334155' }}>↳ Cycle {hi + 1} · {h.product_name || '—'}</span>
+                              </td>
+                              <td className="px-4 py-1.5">
+                                <span className="text-[8px]" style={{ color: '#334155' }}>{h.stage1_sent_at ? `✅ ${fmtTime(h.stage1_sent_at)}` : '—'}</span>
+                              </td>
+                              <td className="px-4 py-1.5">
+                                <span className="text-[8px]" style={{ color: '#334155' }}>{h.stage2_sent_at ? `✅ ${fmtTime(h.stage2_sent_at)}` : '—'}</span>
+                              </td>
+                              <td className="px-4 py-1.5" colSpan={3}>
+                                <span className="text-[8px]" style={{ color: '#1e293b' }}>↩ re-entered: {h.reentry_product || '—'}</span>
+                              </td>
+                            </tr>
+                          ))}
+                          </React.Fragment>
                         ))}
                       </tbody>
                     </table>

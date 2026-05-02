@@ -207,8 +207,8 @@ async function checkLockedUsers() {
   let changed = false;
 
   for (const lock of db.campaign_locks) {
-    // Process both active AND cart_added locks so we catch cart-cleared re-entry
-    if (lock.channel_id !== channelId || !['active', 'cart_added'].includes(lock.lock_status)) continue;
+    // Process active, cart_added, AND shifted_recommendation so re-entry is caught in all states
+    if (lock.channel_id !== channelId || !['active', 'cart_added', 'shifted_recommendation'].includes(lock.lock_status)) continue;
 
     const visitor = db.website_visitors.find(v => v.phone === lock.phone && v.channel_id === channelId);
     if (!visitor) continue;
@@ -257,58 +257,81 @@ async function checkLockedUsers() {
       }
     }
 
-    // ── Re-entry: user viewed ANY product AFTER receiving stage 1 ──────────────
-    // Covers: clicking WhatsApp link → same product, or organically viewing a
-    // different product. In both cases restart the full cycle for the NEW product.
-    // Guard: 1 min after send to ignore the immediate tracking ping on send.
-    if (lock.lock_status === 'active' && lock.stage >= 1 && lock.stage_1_sent_at) {
+    // ── Re-entry: user viewed any product after stage 1 (or after cycle completed) ─
+    // Applies to: active (stage >= 1), AND shifted_recommendation (both msgs sent)
+    // On re-entry: archive current cycle → history, clear old executions so dedup
+    // doesn't block the new stage 1, reset lock for a fresh campaign cycle.
+    const canReenter = (
+      (lock.lock_status === 'active' && lock.stage >= 1 && lock.stage_1_sent_at) ||
+      (lock.lock_status === 'shifted_recommendation' && lock.stage_1_sent_at)
+    );
+    if (canReenter) {
       const sentMs       = new Date(lock.stage_1_sent_at).getTime();
-      const reentryGuard = sentMs + 1 * 60 * 1000; // 1 min grace (prod: 5 min)
-      // Find the most recent product view after the guard window (any product)
-      const recentViews = (db.product_views || [])
+      const reentryGuard = sentMs + 1 * 60 * 1000; // 1 min grace after send
+      const recentViews  = (db.product_views || [])
         .filter(pv =>
           pv.phone === lock.phone && pv.channel_id === channelId &&
           new Date(pv.created_at).getTime() > reentryGuard
         )
         .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
       const recentView = recentViews[0] || null;
+
       if (recentView) {
-        const isSameProduct = lock.product_url && recentView.product_url === lock.product_url;
+        // ── Archive current cycle before resetting ──────────────────────────────
+        const cycleNum = (lock.cycle_count || 0) + 1;
+        if (!lock.send_history) lock.send_history = [];
+        lock.send_history.push({
+          cycle:          cycleNum,
+          product_name:   lock.product_name   || '',
+          product_url:    lock.product_url    || '',
+          product_price:  lock.product_price  || '',
+          stage1_sent_at: lock.stage_1_sent_at,
+          stage2_sent_at: lock.stage_2_sent_at || null,
+          archived_at:    new Date().toISOString(),
+          reentry_product: recentView.product_name || recentView.product_url || '',
+        });
+        lock.cycle_count = cycleNum;
+
+        // ── Clear old execution records so dedup doesn't block new stage 1 ──────
+        // These sent records would prevent the automation from re-sending stage 1.
+        db.abandoned_cart_executions = (db.abandoned_cart_executions || []).filter(x =>
+          !(String(x.campaign_id) === String(lock.campaign_id) &&
+            x.phone === lock.phone && x.status === 'sent')
+        );
+
+        // ── Reset lock for new cycle ────────────────────────────────────────────
         lock.stage           = 0;
         lock.stage_1_sent_at = null;
         lock.stage_2_sent_at = null;
-        // Update lock to the newly viewed product so Stage 1 message is about the right product
+        lock.lock_status     = 'active';
+        lock.unlock_reason   = null;
+        lock.shifted_at      = null;
+        // Update product to the newly viewed one
         if (recentView.product_url)   lock.product_url   = recentView.product_url;
         if (recentView.product_name)  lock.product_name  = recentView.product_name;
         if (recentView.product_price) lock.product_price = recentView.product_price;
         if (recentView.product_image) lock.product_image = recentView.product_image;
-        // Reset whatsapp_sent flags so automation picks this user up as fresh
+
+        // Reset product_view whatsapp_sent so automation includes this user
         (db.product_views || []).filter(v => v.phone === lock.phone && v.channel_id === channelId)
           .forEach(v => { v.whatsapp_sent = 0; v.followup_count = 0; v.whatsapp_sent_at = null; });
         changed = true;
-        console.log(`[LockCheck] ${lock.phone} re-entered APV — ${isSameProduct ? 'same' : 'NEW'} product: "${recentView.product_name || recentView.product_url}" → cycle restart`);
+        console.log(`[LockCheck] ${lock.phone} re-entered APV cycle ${cycleNum} — product: "${recentView.product_name || recentView.product_url}"`);
       }
     }
 
-    // ── Follow-up loop complete: stage 2 sent + 24h + no conversion ───────────
+    // ── Both messages sent — mark complete after 5 min TEST (prod: 24h) ─────────
     if (
       lock.lock_status === 'active' &&
       lock.stage >= 2 &&
       lock.stage_2_sent_at &&
-      (now - new Date(lock.stage_2_sent_at).getTime()) > 24 * 60 * 60 * 1000
+      (now - new Date(lock.stage_2_sent_at).getTime()) > 5 * 60 * 1000 // TEST: 5 min (prod: 24h)
     ) {
       lock.lock_status   = 'shifted_recommendation';
       lock.shifted_at    = new Date().toISOString();
       lock.unlock_reason = 'follow_up_loop_complete_no_conversion';
       changed = true;
-      console.log(`[LockCheck] ${lock.phone} → product_recommendation (loop done, no conversion)`);
-      const vIdx = db.website_visitors.findIndex(v => v.phone === lock.phone && v.channel_id === channelId);
-      if (vIdx >= 0) {
-        db.website_visitors[vIdx].status          = 'active';
-        db.website_visitors[vIdx].whatsapp_sent   = 0;
-        db.website_visitors[vIdx].followup_count  = 0;
-        db.website_visitors[vIdx].whatsapp_sent_at = null;
-      }
+      console.log(`[LockCheck] ${lock.phone} → cycle complete — watching for re-entry`);
     }
   }
 

@@ -776,6 +776,8 @@ export const campaignsController = {
           purchased:    lock.lock_status === 'purchased',
           revenue:      revenueByPhone[phone] || 0,
           locked_at:    lock.locked_at || null,
+          cycle_count:  lock.cycle_count || 1,
+          send_history: lock.send_history || [],  // previous completed cycles
         };
       });
 
