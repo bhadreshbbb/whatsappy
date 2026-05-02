@@ -811,45 +811,36 @@ async function runAutomation() {
         const THIRTY_MIN_MS = 30 * 60 * 1000;
         const now = Date.now();
 
-        // Build best product_view per phone using composite engagement score
-        // Score = (time_spent 50%) + (scroll_depth 30%) + (engagement_score 20%)
-        const allPhoneViews = {};
+        // Build MOST RECENT product_view per phone
+        // APV timer is based on latest view so the message is about the product they last looked at
+        const latestViewByPhoneAPV = {};
         for (const v of (db.product_views || [])) {
           if (v.channel_id !== channelId) continue;
           const phone = v.phone
             || (db.website_visitors.find(vis => vis.session_id === v.session_id && vis.channel_id === channelId))?.phone;
           if (!phone) continue;
           const vp = phone !== v.phone ? { ...v, phone } : v;
-          if (!allPhoneViews[phone]) allPhoneViews[phone] = [];
-          allPhoneViews[phone].push(vp);
-        }
-        const bestViewByPhone = {};
-        for (const [phone, views] of Object.entries(allPhoneViews)) {
-          if (!views.length) continue;
-          const maxDur = Math.max(...views.map(v => v.duration_sec || 0)) || 1;
-          const scored = views.map(v => ({
-            ...v,
-            _score: (((v.duration_sec || 0) / maxDur) * 50) +
-                    (((v.max_scroll_pct || v.scroll_pct || 0) / 100) * 30) +
-                    (((v.engagement_score || 0) / 100) * 20),
-          }));
-          scored.sort((a, b) => b._score - a._score);
-          bestViewByPhone[phone] = scored[0];
+          const cur = latestViewByPhoneAPV[phone];
+          if (!cur || new Date(vp.created_at) > new Date(cur.created_at)) {
+            latestViewByPhoneAPV[phone] = vp;
+          }
         }
 
-        // Source of truth: visitors with product_view status (same as analytics/audience panel)
-        // Only include views within the last 7 days — older ones are stale and should not trigger messages
+        // Source of truth: visitors with product_view status
+        // 30-min timer uses latest product_view.created_at (not visitor.visited_at which updates on any page)
         const MAX_VIEW_AGE_MS = 7 * 24 * 60 * 60 * 1000;
         const eligibleVisitors = (db.website_visitors || []).filter(vis => {
           if (vis.channel_id !== channelId || !vis.phone || vis.status !== 'product_view') return false;
-          const lastAct = vis.visited_at || vis.created_at;
+          // Use the most recent product view timestamp for age check
+          const latestPV = latestViewByPhoneAPV[vis.phone];
+          const lastAct = latestPV?.created_at || vis.visited_at || vis.created_at;
           if (!lastAct || (now - new Date(lastAct).getTime()) > MAX_VIEW_AGE_MS) return false;
           return true;
         });
 
         // Build enriched event objects using visitor + product_views + lock data
         const views = eligibleVisitors.map(vis => {
-          const viewRec = bestViewByPhone[vis.phone];
+          const viewRec = latestViewByPhoneAPV[vis.phone];
           const lock    = (db.campaign_locks || []).find(l =>
             l.phone === vis.phone && String(l.campaign_id) === String(cam.id)
           );
@@ -886,9 +877,10 @@ async function runAutomation() {
           if (isInitial) {
             // Lock guard: stage 1 already sent
             if (v._lock && v._lock.stage >= 1) return false;
-            // 30-min inactivity window
-            const lastActivity = v._visitor?.visited_at || v.created_at;
-            if ((now - new Date(lastActivity).getTime()) < THIRTY_MIN_MS) return false;
+            // 30-min inactivity: use the most recent product_view timestamp
+            // (visited_at updates on any page visit, not just product views)
+            const lastProductView = v._viewRec?.created_at || v._visitor?.visited_at || v.created_at;
+            if ((now - new Date(lastProductView).getTime()) < THIRTY_MIN_MS) return false;
           }
           if (isFollowup) {
             // 24h gap from stage 1

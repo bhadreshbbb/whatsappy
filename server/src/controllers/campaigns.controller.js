@@ -819,6 +819,24 @@ export const campaignsController = {
 
         const MAX_VIEW_AGE_MIN = 7 * 24 * 60; // 7 days in minutes
 
+        // Campaign-level metrics
+        const allExecsForCampaign = (db.abandoned_cart_executions || [])
+          .filter(x => String(x.campaign_id) === String(id));
+        const campaignMetrics = {
+          stage1_sent:   allExecsForCampaign.filter(x => (x.stage || 1) === 1 && x.status === 'sent').length,
+          stage2_sent:   allExecsForCampaign.filter(x => x.stage === 2 && x.status === 'sent').length,
+          total_failed:  allExecsForCampaign.filter(x => x.status === 'failed').length,
+          cart_adds:     locks.filter(l => ['cart_added', 'purchased'].includes(l.lock_status)).length,
+          purchases:     locks.filter(l => l.lock_status === 'purchased').length,
+          revenue:       locks.reduce((s, l) => s + (parseFloat(l.revenue) || 0), 0),
+          conversations: [...new Set(
+            (db.chat_messages || [])
+              .filter(m => m.channel_id === channelId && m.direction === 'in' &&
+                lockedPhones.has(m.phone))
+              .map(m => m.phone)
+          )].length,
+        };
+
         // Helper: get execution records per phone for this campaign
         const getExecs = (phone) => {
           const execs = (db.abandoned_cart_executions || [])
@@ -841,8 +859,11 @@ export const campaignsController = {
           const ct      = contactMap.get(l.phone) || {};
           const cart    = ct._userCarts?.find(c => !c.recovered);
           const purch   = ct._userPurch?.sort((a,b) => new Date(b.created_at)-new Date(a.created_at))[0];
-          const viewRec = bestViewByPhone[l.phone];
-          const minSince = ct.last_seen ? Math.floor((now - new Date(ct.last_seen).getTime()) / 60000) : null;
+          // Use most recent product view (same logic as automation timer)
+          const viewRec = latestViewByPhone[l.phone];
+          // minSince = time since last product view (not last page visit)
+          const lastPVTime = viewRec?.created_at || ct.last_seen;
+          const minSince = lastPVTime ? Math.floor((now - new Date(lastPVTime).getTime()) / 60000) : null;
           // Compute time until next stage send for locked users
           const stage1Ms   = l.stage_1_sent_at ? new Date(l.stage_1_sent_at).getTime() : null;
           const stage2DueMs = stage1Ms ? stage1Ms + 24 * 60 * 60 * 1000 : null;
@@ -886,10 +907,12 @@ export const campaignsController = {
         const pendingAudience = [...contactMap.values()].filter(c =>
           c.status === 'product_view' && !lockedPhones.has(c.phone)
         ).map(c => {
-          const viewRec = bestViewByPhone[c.phone];
+          // Use most recent product view (same as automation timer)
+          const viewRec = latestViewByPhone[c.phone];
           if (viewRec?.product_url && !viewRec.product_url.includes(productSlug)) return null;
           if ((viewRec?.followup_count || 0) >= 2) return null;
-          const lastAct = c.last_seen || viewRec?.created_at;
+          // minSince based on last product view time, not last page visit
+          const lastAct = viewRec?.created_at || c.last_seen;
           const minSince = lastAct ? Math.floor((now - new Date(lastAct).getTime()) / 60000) : null;
           // Ignore product views older than 7 days — they are stale
           if (minSince == null || minSince > MAX_VIEW_AGE_MIN) return null;
@@ -925,6 +948,8 @@ export const campaignsController = {
         }).filter(Boolean);
 
         audience = [...lockedAudience, ...pendingAudience];
+        // Attach campaign metrics for the UI header — returned alongside audience list
+        audience._metrics = campaignMetrics;
 
       // ═══════════════════════════════════════════════════════════════════════
       } else if (campaign.campaign_type === 'abandoned_cart') {
@@ -1065,10 +1090,13 @@ export const campaignsController = {
         return (b.power_score || 0) - (a.power_score || 0);
       });
 
+      // Preserve metrics before stripping (array property is lost after map)
+      const metrics = audience._metrics || null;
+
       // Strip internal refs before sending
       audience = audience.map(({ _userCarts, _userPurch, ...rest }) => rest);
 
-      res.json({ count: audience.length, audience: audience.slice(0, 100) });
+      res.json({ count: audience.length, audience: audience.slice(0, 100), metrics });
     } catch (error) {
       next(error);
     }

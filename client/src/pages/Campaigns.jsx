@@ -2624,6 +2624,7 @@ export default function Campaigns() {
                         style={{ background: cfg.bg, color: cfg.color }}>{score}</span>;
                     };
 
+                    const m = aud.metrics;
                     return (
                       <div className="mt-2 rounded-xl overflow-hidden" style={{ border: '1px solid rgba(251,191,36,0.15)' }}>
                         {/* Header */}
@@ -2635,6 +2636,42 @@ export default function Campaigns() {
                             <Repeat size={9}/> Refresh
                           </button>
                         </div>
+
+                        {/* Campaign Metrics Bar — APV only */}
+                        {m && (
+                          <div className="px-3 py-2 flex flex-wrap gap-3" style={{ background: 'rgba(0,0,0,0.2)', borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+                            <div className="flex flex-col">
+                              <span className="text-[8px] uppercase tracking-wide" style={{ color: '#475569' }}>Sent</span>
+                              <span className="text-[11px] font-bold" style={{ color: '#a3e635' }}>
+                                {m.stage1_sent} msg1 · {m.stage2_sent} msg2
+                              </span>
+                            </div>
+                            {m.total_failed > 0 && (
+                              <div className="flex flex-col">
+                                <span className="text-[8px] uppercase tracking-wide" style={{ color: '#475569' }}>Failed</span>
+                                <span className="text-[11px] font-bold" style={{ color: '#f87171' }}>{m.total_failed}</span>
+                              </div>
+                            )}
+                            <div className="flex flex-col">
+                              <span className="text-[8px] uppercase tracking-wide" style={{ color: '#475569' }}>Replied</span>
+                              <span className="text-[11px] font-bold" style={{ color: '#60a5fa' }}>{m.conversations}</span>
+                            </div>
+                            <div className="flex flex-col">
+                              <span className="text-[8px] uppercase tracking-wide" style={{ color: '#475569' }}>Cart Add</span>
+                              <span className="text-[11px] font-bold" style={{ color: '#fb923c' }}>{m.cart_adds}</span>
+                            </div>
+                            <div className="flex flex-col">
+                              <span className="text-[8px] uppercase tracking-wide" style={{ color: '#475569' }}>Purchased</span>
+                              <span className="text-[11px] font-bold" style={{ color: '#4ade80' }}>{m.purchases}</span>
+                            </div>
+                            {m.revenue > 0 && (
+                              <div className="flex flex-col">
+                                <span className="text-[8px] uppercase tracking-wide" style={{ color: '#475569' }}>Revenue</span>
+                                <span className="text-[11px] font-bold" style={{ color: '#4ade80' }}>₹{m.revenue.toLocaleString('en-IN')}</span>
+                              </div>
+                            )}
+                          </div>
+                        )}
 
                         {/* Mini command-center table */}
                         <div style={{ maxHeight: 380, overflowY: 'auto' }}>
