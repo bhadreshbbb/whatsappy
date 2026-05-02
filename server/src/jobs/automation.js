@@ -338,7 +338,11 @@ async function checkLockedUsers() {
       }
     }
 
-    // ── Both messages sent — mark complete after 5 min TEST (prod: 24h) ─────────
+    // ── Both messages sent — mark cycle complete after 5 min (TEST; prod: 24h) ──
+    // Visitor status stays 'followup_complete' — this IS the product recommendation
+    // pool. post_cart_upsell campaign targets followup_complete users with weekly
+    // product recommendations. No activity needed to stay here; re-entry on product
+    // view resets to product_view and restarts the APV cycle.
     if (
       lock.lock_status === 'active' &&
       lock.stage >= 2 &&
@@ -349,7 +353,9 @@ async function checkLockedUsers() {
       lock.shifted_at    = new Date().toISOString();
       lock.unlock_reason = 'follow_up_loop_complete_no_conversion';
       changed = true;
-      console.log(`[LockCheck] ${lock.phone} → cycle complete — watching for re-entry`);
+      // Ensure visitor is in followup_complete (product recommendation pool)
+      // Do NOT change visitor.status here — it was already set when stage 2 was sent
+      console.log(`[LockCheck] ${lock.phone} APV cycle complete → product recommendation pool (followup_complete) — waiting for re-entry or weekly upsell`);
     }
   }
 
@@ -1699,10 +1705,18 @@ async function sendMultiple(db, cam, events, type) {
         }
 
         // abandoned_product_view: stage 2 is the final — move to followup_complete
+        // followup_complete = product recommendation pool (targeted by post_cart_upsell campaign)
         if (currentStage === 2 && cam.campaign_type === 'abandoned_product_view') {
           const vIdx = db.website_visitors.findIndex(v => v.phone === evt.phone);
-          if (vIdx >= 0 && upgradeStatus(db.website_visitors[vIdx], 'followup_complete')) {
-            console.log(`[abandoned_product_view Stage 2] ${evt.phone} → followup_complete → weekly upsell loop`);
+          if (vIdx >= 0) {
+            const upgraded = upgradeStatus(db.website_visitors[vIdx], 'followup_complete');
+            if (upgraded) {
+              // Store campaign attribution — which APV campaign brought this user here
+              db.website_visitors[vIdx].apv_source_campaign_id   = cam.id;
+              db.website_visitors[vIdx].apv_source_campaign_name = cam.name;
+              db.website_visitors[vIdx].apv_completed_at         = new Date().toISOString();
+              console.log(`[APV Stage 2] ${evt.phone} → followup_complete (product recommendation pool) — from campaign "${cam.name}"`);
+            }
           }
         }
 

@@ -777,7 +777,12 @@ export const campaignsController = {
           revenue:      revenueByPhone[phone] || 0,
           locked_at:    lock.locked_at || null,
           cycle_count:  lock.cycle_count || 1,
-          send_history: lock.send_history || [],  // previous completed cycles
+          send_history: lock.send_history || [],
+          // Campaign attribution — stored on visitor when APV stage 2 completes
+          apv_source_campaign_id:   visitor.apv_source_campaign_id   || null,
+          apv_source_campaign_name: visitor.apv_source_campaign_name || null,
+          apv_completed_at:         visitor.apv_completed_at         || lock.stage_2_sent_at || null,
+          current_visitor_status:   visitor.status || 'product_view',
         };
       });
 
