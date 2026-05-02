@@ -261,12 +261,16 @@ async function checkLockedUsers() {
     // Applies to: active (stage >= 1), AND shifted_recommendation (both msgs sent)
     // On re-entry: archive current cycle → history, clear old executions so dedup
     // doesn't block the new stage 1, reset lock for a fresh campaign cycle.
+    // shifted_recommendation always allows re-entry regardless of stage_1_sent_at
+    // (handles old locks where stage_1_sent_at may be null due to legacy data)
     const canReenter = (
       (lock.lock_status === 'active' && lock.stage >= 1 && lock.stage_1_sent_at) ||
-      (lock.lock_status === 'shifted_recommendation' && lock.stage_1_sent_at)
+      (lock.lock_status === 'shifted_recommendation')
     );
     if (canReenter) {
-      const sentMs       = new Date(lock.stage_1_sent_at).getTime();
+      // Use stage_1_sent_at as guard base; fall back to shifted_at or locked_at
+      const guardBase = lock.stage_1_sent_at || lock.shifted_at || lock.locked_at;
+      const sentMs       = guardBase ? new Date(guardBase).getTime() : 0;
       const reentryGuard = sentMs + 1 * 60 * 1000; // 1 min grace after send
       const recentViews  = (db.product_views || [])
         .filter(pv =>
