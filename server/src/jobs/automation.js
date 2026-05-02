@@ -838,9 +838,14 @@ async function runAutomation() {
         }
 
         // Source of truth: visitors with product_view status (same as analytics/audience panel)
-        const eligibleVisitors = (db.website_visitors || []).filter(vis =>
-          vis.channel_id === channelId && vis.phone && vis.status === 'product_view'
-        );
+        // Only include views within the last 7 days — older ones are stale and should not trigger messages
+        const MAX_VIEW_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+        const eligibleVisitors = (db.website_visitors || []).filter(vis => {
+          if (vis.channel_id !== channelId || !vis.phone || vis.status !== 'product_view') return false;
+          const lastAct = vis.visited_at || vis.created_at;
+          if (!lastAct || (now - new Date(lastAct).getTime()) > MAX_VIEW_AGE_MS) return false;
+          return true;
+        });
 
         // Build enriched event objects using visitor + product_views + lock data
         const views = eligibleVisitors.map(vis => {

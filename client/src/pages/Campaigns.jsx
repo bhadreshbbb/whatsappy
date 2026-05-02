@@ -1901,6 +1901,7 @@ export default function Campaigns() {
   const [audienceOpen, setAudienceOpen] = useState({});  // campaignId → bool
   const [audienceMap, setAudienceMap]   = useState({});  // campaignId → { count, audience[] }
   const [audienceLoading, setAudienceLoading] = useState({});
+  const [expandedAPVRow, setExpandedAPVRow] = useState(null); // "campaignId-rowIndex"
   const [sendResultMap, setSendResultMap] = useState({}); // campaignId → { sent, skipped, errors[] }
   const [testModal, setTestModal] = useState(null);  // { id, name } | null
   const [testPhone, setTestPhone] = useState('');
@@ -2520,31 +2521,66 @@ export default function Campaigns() {
                     if (!aud) return null;
                     if (!aud.audience?.length) return <div className="mt-2 text-[10px] text-center py-3 rounded-xl" style={{ color: '#475569', border: '1px solid rgba(255,255,255,0.05)' }}>No eligible users right now.</div>;
 
+                    const fmtAgo = (min) => {
+                      if (min == null) return '—';
+                      if (min < 60) return `${min}m ago`;
+                      if (min < 24 * 60) return `${Math.floor(min / 60)}h ${min % 60}m ago`;
+                      return `${Math.floor(min / (24 * 60))}d ago`;
+                    };
+                    const fmtTs = (iso) => {
+                      if (!iso) return null;
+                      const d = new Date(iso);
+                      return d.toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', hour12: true });
+                    };
+                    const fmtCountdown = (min) => {
+                      if (min == null) return '—';
+                      if (min === 0) return 'sending now';
+                      if (min < 60) return `${min}m`;
+                      return `${Math.floor(min / 60)}h ${min % 60}m`;
+                    };
+
                     const lockBadge = (u) => {
                       const mAgo = u.minutes_since_activity;
                       const mUntil = u.minutes_until_next_send;
+
+                      // PENDING — not yet locked, viewing product, 1st msg not sent
                       if (u.lock_status === 'pending') {
-                        if (u.ready_to_send) return <span className="text-[9px] px-1.5 rounded" style={{ background: 'rgba(74,222,128,0.1)', color: '#4ade80' }}>⏱ ready ✓</span>;
-                        const agoTxt = mAgo != null ? (mAgo < 60 ? `${mAgo}m ago` : `${Math.floor(mAgo/60)}h ago`) : 'waiting';
-                        return <span className="text-[9px] px-1.5 rounded" style={{ background: 'rgba(251,191,36,0.1)', color: '#fbbf24' }}>⏱ {agoTxt} · wait 30m</span>;
+                        if (u.ready_to_send) {
+                          // >= 30 min since last activity → automation will send Stage 1 on next cron tick (≤1 min)
+                          return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(251,191,36,0.15)', color: '#fbbf24' }}>📤 1st msg queued</span>;
+                        }
+                        // < 30 min — still within inactivity window
+                        const waitLeft = mAgo != null ? Math.max(0, 30 - mAgo) : null;
+                        return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(100,116,139,0.1)', color: '#64748b' }}>
+                          ⏳ 1st msg in {waitLeft != null ? `${waitLeft}m` : '…'}
+                        </span>;
                       }
+
+                      // ACTIVE — locked in campaign
                       if (u.lock_status === 'active') {
                         if (u.stage === 0) {
-                          // Reset/re-entry — waiting 30 min for stage 1
-                          const agoTxt = mAgo != null ? (mAgo < 60 ? `${mAgo}m ago` : `${Math.floor(mAgo/60)}h ago`) : '…';
-                          return <span className="text-[9px] px-1.5 rounded" style={{ background: 'rgba(251,191,36,0.1)', color: '#fbbf24' }}>🔄 re-entered · {agoTxt}</span>;
+                          // Re-entered after cart cleared — fresh 30 min wait for Stage 1
+                          const waitLeft = mAgo != null ? Math.max(0, 30 - mAgo) : null;
+                          return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(251,191,36,0.1)', color: '#fbbf24' }}>
+                            🔄 re-entered · 1st msg in {waitLeft != null ? `${waitLeft}m` : '…'}
+                          </span>;
                         }
-                        if (mUntil != null) {
-                          const untilTxt = mUntil === 0 ? 'sending soon' : mUntil < 60 ? `next in ${mUntil}m` : `next in ${Math.floor(mUntil/60)}h ${mUntil%60}m`;
-                          return <span className="text-[9px] px-1.5 rounded" style={{ background: 'rgba(99,102,241,0.1)', color: u.ready_to_send ? '#4ade80' : '#818cf8' }}>🔒 s{u.stage} · {untilTxt}</span>;
+                        if (u.stage === 1) {
+                          // Stage 1 sent — waiting 24h before Stage 2
+                          if (mUntil === 0) return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(74,222,128,0.15)', color: '#4ade80' }}>📤 2nd msg queued</span>;
+                          return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(99,102,241,0.1)', color: '#818cf8' }}>
+                            ✅ 1st sent · 2nd in {fmtCountdown(mUntil)}
+                          </span>;
                         }
-                        return <span className="text-[9px] px-1.5 rounded" style={{ background: 'rgba(99,102,241,0.1)', color: '#818cf8' }}>🔒 stage {u.stage}</span>;
+                        // stage >= 2 — both sent
+                        return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(56,189,248,0.1)', color: '#38bdf8' }}>✅ both msgs sent</span>;
                       }
-                      if (u.lock_status === 'messaged')               return <span className="text-[9px] px-1.5 rounded" style={{ background: 'rgba(56,189,248,0.1)', color: '#38bdf8' }}>📨 sent{u.stage > 0 ? ` ×${u.stage}` : ''}</span>;
-                      if (u.lock_status === 'cart_added')             return <span className="text-[9px] px-1.5 rounded" style={{ background: 'rgba(251,146,60,0.1)', color: '#fb923c' }}>🛒 added to cart</span>;
-                      if (u.lock_status === 'purchased')              return <span className="text-[9px] px-1.5 rounded" style={{ background: 'rgba(74,222,128,0.1)', color: '#4ade80' }}>✅ purchased</span>;
-                      if (u.lock_status === 'shifted_recommendation') return <span className="text-[9px] px-1.5 rounded" style={{ background: 'rgba(167,139,250,0.1)', color: '#a78bfa' }}>✨ recommendation</span>;
-                      if (u.lock_status === 'visitor')                return <span className="text-[9px] px-1.5 rounded" style={{ background: 'rgba(100,116,139,0.1)', color: '#64748b' }}>👤 {u.status || 'visitor'}</span>;
+
+                      if (u.lock_status === 'cart_added')             return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(251,146,60,0.1)', color: '#fb923c' }}>🛒 added to cart</span>;
+                      if (u.lock_status === 'purchased')              return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(74,222,128,0.1)', color: '#4ade80' }}>✅ purchased</span>;
+                      if (u.lock_status === 'messaged')               return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(56,189,248,0.1)', color: '#38bdf8' }}>📨 {u.stage} msg{u.stage !== 1 ? 's' : ''} sent</span>;
+                      if (u.lock_status === 'shifted_recommendation') return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(167,139,250,0.1)', color: '#a78bfa' }}>✨ recommendation</span>;
+                      if (u.lock_status === 'visitor')                return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(100,116,139,0.1)', color: '#64748b' }}>👤 {u.status || 'visitor'}</span>;
                       return null;
                     };
 
@@ -2612,8 +2648,13 @@ export default function Campaigns() {
                             <tbody>
                               {aud.audience.slice(0, 50).map((u, i) => {
                                 const av = avatarColors(u);
+                                const rowKey = `${c.id}-${i}`;
+                                const isExpanded = expandedAPVRow === rowKey;
                                 return (
-                                  <tr key={i} style={{ borderTop: '1px solid rgba(255,255,255,0.03)', background: i % 2 === 0 ? 'rgba(255,255,255,0.01)' : 'transparent' }}>
+                                  <React.Fragment key={i}>
+                                  <tr
+                                    onClick={() => setExpandedAPVRow(isExpanded ? null : rowKey)}
+                                    style={{ borderTop: '1px solid rgba(255,255,255,0.03)', background: isExpanded ? 'rgba(99,102,241,0.07)' : i % 2 === 0 ? 'rgba(255,255,255,0.01)' : 'transparent', cursor: 'pointer' }}>
 
                                     {/* User */}
                                     <td className="px-3 py-2">
@@ -2657,7 +2698,6 @@ export default function Campaigns() {
                                       )}
                                       {u.cart_amount > 0 && <p className="text-[9px]" style={{ color: '#fb923c' }}>₹{u.cart_amount} cart</p>}
                                       {u.revenue > 0    && <p className="text-[9px]" style={{ color: '#4ade80' }}>₹{u.revenue} revenue</p>}
-                                      {u.stage > 0      && <p className="text-[8px]" style={{ color: '#475569' }}>msg {u.stage}/2</p>}
                                     </td>
 
                                     {/* City · Device */}
@@ -2668,20 +2708,70 @@ export default function Campaigns() {
                                       </p>}
                                     </td>
 
-                                    {/* Last activity / next send countdown */}
+                                    {/* Activity: show last-seen time */}
                                     <td className="px-2 py-2 whitespace-nowrap">
-                                      {u.minutes_until_next_send != null
-                                        ? <span className="text-[9px]" style={{ color: u.minutes_until_next_send === 0 ? '#4ade80' : '#818cf8' }}>
-                                            {u.minutes_until_next_send === 0 ? 'sending soon' : u.minutes_until_next_send < 60 ? `next ${u.minutes_until_next_send}m` : `next ${Math.floor(u.minutes_until_next_send/60)}h`}
-                                          </span>
-                                        : u.minutes_since_activity != null
-                                          ? <span className="text-[9px]" style={{ color: u.ready_to_send ? '#4ade80' : '#475569' }}>
-                                              {u.minutes_since_activity < 60 ? `${u.minutes_since_activity}m ago` : `${Math.floor(u.minutes_since_activity/60)}h ago`}
-                                              {u.ready_to_send && ' ✓'}
-                                            </span>
-                                          : <span className="text-[9px]" style={{ color: '#334155' }}>—</span>}
+                                      <p className="text-[9px]" style={{ color: '#64748b' }}>{fmtAgo(u.minutes_since_activity)}</p>
+                                      <p className="text-[8px]" style={{ color: '#334155' }}>click for details</p>
                                     </td>
                                   </tr>
+
+                                  {/* Expandable timeline row */}
+                                  {isExpanded && (
+                                    <tr style={{ background: 'rgba(99,102,241,0.05)', borderBottom: '1px solid rgba(99,102,241,0.15)' }}>
+                                      <td colSpan={7} className="px-4 py-3">
+                                        <div className="flex flex-col gap-1.5">
+                                          <p className="text-[9px] font-semibold uppercase tracking-wide mb-1" style={{ color: '#818cf8' }}>📋 Campaign Timeline — {u.name || u.phone}</p>
+
+                                          {/* Stage 1 */}
+                                          <div className="flex items-start gap-2">
+                                            <span className="text-[9px] w-16 flex-shrink-0" style={{ color: '#475569' }}>1st msg</span>
+                                            {u.stage_1_sent_at
+                                              ? <span className="text-[9px]" style={{ color: '#a3e635' }}>✅ Sent · {fmtTs(u.stage_1_sent_at)}</span>
+                                              : u.ready_to_send
+                                                ? <span className="text-[9px]" style={{ color: '#fbbf24' }}>📤 Queued — sends on next automation tick (≤1 min)</span>
+                                                : <span className="text-[9px]" style={{ color: '#475569' }}>⏳ Pending — waits for 30 min inactivity · viewed {fmtAgo(u.minutes_since_activity)}</span>
+                                            }
+                                          </div>
+
+                                          {/* User response after Stage 1 */}
+                                          {u.stage_1_sent_at && (
+                                            <div className="flex items-start gap-2 pl-2" style={{ borderLeft: '2px solid rgba(99,102,241,0.3)' }}>
+                                              <span className="text-[9px] w-14 flex-shrink-0" style={{ color: '#475569' }}>reply</span>
+                                              {u.last_response_text
+                                                ? <span className="text-[9px]" style={{ color: '#94a3b8' }}>💬 "{u.last_response_text}" · {fmtTs(u.last_response_at)}</span>
+                                                : <span className="text-[9px]" style={{ color: '#334155' }}>No reply yet</span>
+                                              }
+                                            </div>
+                                          )}
+
+                                          {/* Stage 2 */}
+                                          {u.stage_1_sent_at && (
+                                            <div className="flex items-start gap-2">
+                                              <span className="text-[9px] w-16 flex-shrink-0" style={{ color: '#475569' }}>2nd msg</span>
+                                              {u.stage_2_sent_at
+                                                ? <span className="text-[9px]" style={{ color: '#a3e635' }}>✅ Sent · {fmtTs(u.stage_2_sent_at)}</span>
+                                                : u.minutes_until_next_send === 0
+                                                  ? <span className="text-[9px]" style={{ color: '#fbbf24' }}>📤 Queued — sends on next automation tick (≤1 min)</span>
+                                                  : <span className="text-[9px]" style={{ color: '#818cf8' }}>⏳ Scheduled · sends in {fmtCountdown(u.minutes_until_next_send)} · {fmtTs(u.stage2_due_at)}</span>
+                                              }
+                                            </div>
+                                          )}
+
+                                          {/* Outcome */}
+                                          {(u.lock_status === 'purchased' || u.lock_status === 'cart_added') && (
+                                            <div className="flex items-start gap-2 mt-0.5">
+                                              <span className="text-[9px] w-16 flex-shrink-0" style={{ color: '#475569' }}>outcome</span>
+                                              {u.lock_status === 'purchased'
+                                                ? <span className="text-[9px]" style={{ color: '#4ade80' }}>✅ Purchased{u.revenue > 0 ? ` · ₹${u.revenue}` : ''}</span>
+                                                : <span className="text-[9px]" style={{ color: '#fb923c' }}>🛒 Added to cart{u.cart_amount > 0 ? ` · ₹${u.cart_amount}` : ''}</span>
+                                              }
+                                            </div>
+                                          )}
+                                        </div>
+                                      </td>
+                                    </tr>
+                                  )}
+                                  </React.Fragment>
                                 );
                               })}
                             </tbody>

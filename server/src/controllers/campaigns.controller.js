@@ -817,6 +817,8 @@ export const campaignsController = {
         );
         const lockedPhones = new Set(locks.map(l => l.phone));
 
+        const MAX_VIEW_AGE_MIN = 7 * 24 * 60; // 7 days in minutes
+
         // Locked users — enriched with command center data
         const lockedAudience = locks.map(l => {
           const ct      = contactMap.get(l.phone) || {};
@@ -830,6 +832,11 @@ export const campaignsController = {
           const minUntilNext = (l.lock_status === 'active' && l.stage === 1 && stage2DueMs)
             ? Math.max(0, Math.floor((stage2DueMs - now) / 60000))
             : null;
+          // Latest inbound response from this user (WhatsApp reply)
+          const inboundMsgs = (db.chat_messages || [])
+            .filter(m => m.phone === l.phone && m.channel_id === channelId && m.direction === 'in')
+            .sort((a, b) => new Date(b.timestamp || b.created_at) - new Date(a.timestamp || a.created_at));
+          const lastReply = inboundMsgs[0] || null;
           return {
             phone: l.phone, name: ct.name || 'Unknown',
             city: ct.city || '', device: ct.device || '',
@@ -849,7 +856,10 @@ export const campaignsController = {
             followup_count: l.stage || 0,
             minutes_since_activity: minSince,
             minutes_until_next_send: minUntilNext,
+            stage2_due_at: stage2DueMs ? new Date(stage2DueMs).toISOString() : null,
             ready_to_send: minUntilNext === 0, is_locked: true,
+            last_response_text: lastReply?.text || null,
+            last_response_at: lastReply?.timestamp || lastReply?.created_at || null,
           };
         });
 
@@ -862,6 +872,8 @@ export const campaignsController = {
           if ((viewRec?.followup_count || 0) >= 2) return null;
           const lastAct = c.last_seen || viewRec?.created_at;
           const minSince = lastAct ? Math.floor((now - new Date(lastAct).getTime()) / 60000) : null;
+          // Ignore product views older than 7 days — they are stale
+          if (minSince == null || minSince > MAX_VIEW_AGE_MIN) return null;
           return {
             phone: c.phone, name: c.name || 'Unknown',
             city: c.city || '', device: c.device || '',
@@ -876,8 +888,10 @@ export const campaignsController = {
             lock_status: 'pending', stage: 0, locked_at: null,
             followup_count: viewRec?.followup_count || 0,
             minutes_since_activity: minSince,
-            ready_to_send: minSince != null && minSince >= 30,
+            ready_to_send: minSince >= 30,
             is_locked: false,
+            last_response_text: null, last_response_at: null,
+            stage_1_sent_at: null, stage_2_sent_at: null, stage2_due_at: null,
           };
         }).filter(Boolean);
 
