@@ -257,28 +257,36 @@ async function checkLockedUsers() {
       }
     }
 
-    // ── Re-entry: user viewed the product again AFTER receiving stage 1 ────────
-    // Triggered by clicking WhatsApp link, organically revisiting, etc.
-    // Guard: only when stage >= 1, stage_1_sent_at is set, and a newer product
-    // view exists (>5 min after send — avoids resetting for the click itself).
-    // After reset, stage=0 so this block is skipped on next run (no loop).
+    // ── Re-entry: user viewed ANY product AFTER receiving stage 1 ──────────────
+    // Covers: clicking WhatsApp link → same product, or organically viewing a
+    // different product. In both cases restart the full cycle for the NEW product.
+    // Guard: 1 min after send to ignore the immediate tracking ping on send.
     if (lock.lock_status === 'active' && lock.stage >= 1 && lock.stage_1_sent_at) {
       const sentMs       = new Date(lock.stage_1_sent_at).getTime();
-      const reentryGuard = sentMs + 5 * 60 * 1000; // 5 min grace after send
-      const recentView = (db.product_views || []).find(pv =>
-        pv.phone === lock.phone && pv.channel_id === channelId &&
-        (!lock.product_url || pv.product_url === lock.product_url) &&
-        new Date(pv.created_at).getTime() > reentryGuard
-      );
+      const reentryGuard = sentMs + 1 * 60 * 1000; // 1 min grace (prod: 5 min)
+      // Find the most recent product view after the guard window (any product)
+      const recentViews = (db.product_views || [])
+        .filter(pv =>
+          pv.phone === lock.phone && pv.channel_id === channelId &&
+          new Date(pv.created_at).getTime() > reentryGuard
+        )
+        .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+      const recentView = recentViews[0] || null;
       if (recentView) {
+        const isSameProduct = lock.product_url && recentView.product_url === lock.product_url;
         lock.stage           = 0;
         lock.stage_1_sent_at = null;
         lock.stage_2_sent_at = null;
-        // Keep lock_status = 'active' so monitoring continues
+        // Update lock to the newly viewed product so Stage 1 message is about the right product
+        if (recentView.product_url)   lock.product_url   = recentView.product_url;
+        if (recentView.product_name)  lock.product_name  = recentView.product_name;
+        if (recentView.product_price) lock.product_price = recentView.product_price;
+        if (recentView.product_image) lock.product_image = recentView.product_image;
+        // Reset whatsapp_sent flags so automation picks this user up as fresh
         (db.product_views || []).filter(v => v.phone === lock.phone && v.channel_id === channelId)
           .forEach(v => { v.whatsapp_sent = 0; v.followup_count = 0; v.whatsapp_sent_at = null; });
         changed = true;
-        console.log(`[LockCheck] ${lock.phone} re-viewed product after stage 1 → APV restart (30-min wait applies)`);
+        console.log(`[LockCheck] ${lock.phone} re-entered APV — ${isSameProduct ? 'same' : 'NEW'} product: "${recentView.product_name || recentView.product_url}" → cycle restart`);
       }
     }
 
