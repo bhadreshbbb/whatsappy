@@ -196,92 +196,54 @@ async function applyCardsToAutoProductTemplates(channelId, productConfigCards) {
 }
 
 // ── Every-minute lock status checker ─────────────────────────────────────────
-// Monitors users locked into abandoned_product_view campaign.
-// Detects status changes (cart added, purchased) and marks loop as complete.
+// Source of truth: visitor.status.
+//   product_view_lock  → user is in APV campaign, all good
+//   product_view       → user re-entered (new product viewed) → reset lock, FLOW 2b picks up
+//   abandoned_cart     → user added to cart → mark lock, user exits APV
+//   purchased          → user purchased → mark lock
+//   product_recommendation → both msgs sent (set by sendMultiple) → mark shifted_recommendation
+// Any status ≠ product_view_lock means the user has left the campaign.
 async function checkLockedUsers() {
   const db = getDb();
   const channelId = process.env.CHANNEL_ID || 'demo';
   if (!db.campaign_locks?.length) return;
 
-  const now = Date.now();
   let changed = false;
 
+  // Collect locks to delete (post-purchase re-entry) — avoid mutating during iteration
+  const locksToDelete = new Set();
+
   for (const lock of db.campaign_locks) {
-    // Process active, cart_added, AND shifted_recommendation so re-entry is caught in all states
-    if (lock.channel_id !== channelId || !['active', 'cart_added', 'shifted_recommendation'].includes(lock.lock_status)) continue;
+    if (lock.channel_id !== channelId) continue;
+    if (!['active', 'shifted_recommendation'].includes(lock.lock_status)) continue;
 
     const visitor = db.website_visitors.find(v => v.phone === lock.phone && v.channel_id === channelId);
     if (!visitor) continue;
 
-    const currStatus = visitor.status;
     lock.last_status_check = new Date().toISOString();
+    const currStatus = visitor.status;
 
-    // ── Status transition → update lock ────────────────────────────────────────
-    if (currStatus !== lock.last_known_status) {
-      const prevStatus = lock.last_known_status;
-      lock.last_known_status = currStatus;
-      changed = true;
-      console.log(`[LockCheck] ${lock.phone}: ${prevStatus} → ${currStatus}`);
-
-      if ((currStatus === 'abandoned_cart' || currStatus === 'abandoned_checkout') && lock.lock_status === 'active') {
-        lock.lock_status   = 'cart_added';
-        lock.cart_added_at = new Date().toISOString();
-        lock.unlock_reason = 'user_added_to_cart';
-        const cartEvt = (db.cart_events || []).find(c => c.phone === lock.phone && !c.recovered && c.channel_id === channelId);
-        if (cartEvt) lock.cart_amount = parseFloat(cartEvt.total_amount) || 0;
-        console.log(`[LockCheck] ✓ ${lock.phone} added to cart (₹${lock.cart_amount || 0}) — paused from APV`);
-
-      } else if (currStatus === 'purchased') {
-        lock.lock_status   = 'purchased';
-        lock.purchased_at  = new Date().toISOString();
-        lock.unlock_reason = 'user_purchased';
-        const purchase = (db.purchase_history || [])
-          .filter(p => p.phone === lock.phone)
-          .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
-        if (purchase) lock.revenue = parseFloat(purchase.total_amount) || 0;
-        console.log(`[LockCheck] ✓ ${lock.phone} purchased — revenue ₹${lock.revenue}`);
-
-      } else if (currStatus === 'product_view' &&
-                 (prevStatus === 'abandoned_cart' || prevStatus === 'abandoned_checkout')) {
-        // Cart cleared without purchase → restart APV cycle from stage 1
-        lock.stage           = 0;
-        lock.stage_1_sent_at = null;
-        lock.stage_2_sent_at = null;
-        lock.lock_status     = 'active';
-        lock.unlock_reason   = null;
-        lock.cart_added_at   = null;
-        // Reset product_view whatsapp flags so automation re-targets from stage 1
-        (db.product_views || []).filter(v => v.phone === lock.phone && v.channel_id === channelId)
-          .forEach(v => { v.whatsapp_sent = 0; v.followup_count = 0; v.whatsapp_sent_at = null; });
-        console.log(`[LockCheck] ${lock.phone} cart cleared → APV restart stage 1 (30-min wait applies)`);
+    // ── Still locked — nothing to do ──────────────────────────────────────────
+    if (currStatus === 'product_view_lock') {
+      if (lock.last_known_status !== currStatus) {
+        lock.last_known_status = currStatus;
+        changed = true;
       }
+      continue;
     }
 
-    // ── Re-entry: user viewed any product after stage 1 (or after cycle completed) ─
-    // Applies to: active (stage >= 1), AND shifted_recommendation (both msgs sent)
-    // On re-entry: archive current cycle → history, clear old executions so dedup
-    // doesn't block the new stage 1, reset lock for a fresh campaign cycle.
-    // shifted_recommendation always allows re-entry regardless of stage_1_sent_at
-    // (handles old locks where stage_1_sent_at may be null due to legacy data)
-    const canReenter = (
-      (lock.lock_status === 'active' && lock.stage >= 1 && lock.stage_1_sent_at) ||
-      (lock.lock_status === 'shifted_recommendation')
-    );
-    if (canReenter) {
-      // Use stage_1_sent_at as guard base; fall back to shifted_at or locked_at
-      const guardBase = lock.stage_1_sent_at || lock.shifted_at || lock.locked_at;
-      const sentMs       = guardBase ? new Date(guardBase).getTime() : 0;
-      const reentryGuard = sentMs + 1 * 60 * 1000; // 1 min grace after send
-      const recentViews  = (db.product_views || [])
-        .filter(pv =>
-          pv.phone === lock.phone && pv.channel_id === channelId &&
-          new Date(pv.created_at).getTime() > reentryGuard
-        )
-        .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
-      const recentView = recentViews[0] || null;
+    // ── Status changed away from product_view_lock ────────────────────────────
+    if (lock.last_known_status !== currStatus) {
+      lock.last_known_status = currStatus;
+      changed = true;
+      console.log(`[LockCheck] ${lock.phone}: exited product_view_lock → ${currStatus}`);
+    }
 
-      if (recentView) {
-        // ── Archive current cycle before resetting ──────────────────────────────
+    if (currStatus === 'product_view') {
+      // Re-entry: user viewed a new product (statusMachine downgraded lock→product_view).
+      // tracking.controller.js handles this inline for immediacy, but this is the
+      // safety net for any case it missed. Reset lock so FLOW 2b starts fresh.
+      if (lock.lock_status === 'active' && lock.stage >= 1) {
         const cycleNum = (lock.cycle_count || 0) + 1;
         if (!lock.send_history) lock.send_history = [];
         lock.send_history.push({
@@ -289,110 +251,117 @@ async function checkLockedUsers() {
           product_name:   lock.product_name   || '',
           product_url:    lock.product_url    || '',
           product_price:  lock.product_price  || '',
-          stage1_sent_at: lock.stage_1_sent_at,
+          stage1_sent_at: lock.stage_1_sent_at || null,
           stage2_sent_at: lock.stage_2_sent_at || null,
           archived_at:    new Date().toISOString(),
-          reentry_product: recentView.product_name || recentView.product_url || '',
+          exit_reason:    'reentry_product_view',
         });
-        lock.cycle_count = cycleNum;
-
-        // ── Clear old execution records so dedup doesn't block new stage 1 ──────
-        // These sent records would prevent the automation from re-sending stage 1.
-        db.abandoned_cart_executions = (db.abandoned_cart_executions || []).filter(x =>
-          !(String(x.campaign_id) === String(lock.campaign_id) &&
-            x.phone === lock.phone && x.status === 'sent')
-        );
-
-        // ── Reset lock for new cycle ────────────────────────────────────────────
+        lock.cycle_count     = cycleNum;
         lock.stage           = 0;
         lock.stage_1_sent_at = null;
         lock.stage_2_sent_at = null;
         lock.lock_status     = 'active';
         lock.unlock_reason   = null;
         lock.shifted_at      = null;
-        // Update product to the newly viewed one
-        if (recentView.product_url)   lock.product_url   = recentView.product_url;
-        if (recentView.product_name)  lock.product_name  = recentView.product_name;
-        if (recentView.product_price) lock.product_price = recentView.product_price;
-        if (recentView.product_image) lock.product_image = recentView.product_image;
-
-        // Reset product_view flags so automation includes this user as fresh
+        lock.reentry_at      = new Date().toISOString();
+        // Clear dedup records so stage 1 can fire again
+        db.abandoned_cart_executions = (db.abandoned_cart_executions || []).filter(x =>
+          !(String(x.campaign_id) === String(lock.campaign_id) &&
+            x.phone === lock.phone && x.status === 'sent')
+        );
+        // Reset product_view flags
         (db.product_views || []).filter(v => v.phone === lock.phone && v.channel_id === channelId)
           .forEach(v => { v.whatsapp_sent = 0; v.followup_count = 0; v.whatsapp_sent_at = null; });
-
-        // Stamp when re-entry was detected so FLOW 2b can start the stage 1 timer
-        // from THIS moment (not from the old product_view created_at which is already stale)
-        lock.reentry_at = new Date().toISOString();
-
-        // CRITICAL: reset visitor status back to product_view
-        // After stage 2, visitor was upgraded to followup_complete.
-        // Automation FLOW 2b only picks up status=product_view, so without
-        // this reset the re-entered user is invisible to automation forever.
-        const vIdx = db.website_visitors.findIndex(v => v.phone === lock.phone && v.channel_id === channelId);
-        if (vIdx >= 0) {
-          db.website_visitors[vIdx].status          = 'product_view';
-          db.website_visitors[vIdx].whatsapp_sent   = 0;
-          db.website_visitors[vIdx].followup_count  = 0;
-          db.website_visitors[vIdx].whatsapp_sent_at = null;
-          db.website_visitors[vIdx].visited_at      = recentView.created_at || new Date().toISOString();
-          db.website_visitors[vIdx].last_product_name  = recentView.product_name  || '';
-          db.website_visitors[vIdx].last_product_url   = recentView.product_url   || '';
-          db.website_visitors[vIdx].last_product_image = recentView.product_image || '';
-          db.website_visitors[vIdx].last_product_price = recentView.product_price || '';
-        }
-
         changed = true;
-        console.log(`[LockCheck] ${lock.phone} re-entered APV cycle ${cycleNum} → status reset to product_view — product: "${recentView.product_name || recentView.product_url}"`);
+        console.log(`[LockCheck] ${lock.phone} re-entered APV cycle ${cycleNum} — lock reset, FLOW 2b will pick up`);
+      } else if (lock.lock_status === 'shifted_recommendation') {
+        // Re-entry after full cycle complete — same reset, FLOW 2b claims them again
+        const cycleNum = (lock.cycle_count || 0) + 1;
+        if (!lock.send_history) lock.send_history = [];
+        lock.send_history.push({
+          cycle:          cycleNum,
+          product_name:   lock.product_name   || '',
+          stage1_sent_at: lock.stage_1_sent_at || null,
+          stage2_sent_at: lock.stage_2_sent_at || null,
+          archived_at:    new Date().toISOString(),
+          exit_reason:    'reentry_after_completion',
+        });
+        lock.cycle_count     = cycleNum;
+        lock.stage           = 0;
+        lock.stage_1_sent_at = null;
+        lock.stage_2_sent_at = null;
+        lock.lock_status     = 'active';
+        lock.unlock_reason   = null;
+        lock.shifted_at      = null;
+        lock.reentry_at      = new Date().toISOString();
+        db.abandoned_cart_executions = (db.abandoned_cart_executions || []).filter(x =>
+          !(String(x.campaign_id) === String(lock.campaign_id) &&
+            x.phone === lock.phone && x.status === 'sent')
+        );
+        (db.product_views || []).filter(v => v.phone === lock.phone && v.channel_id === channelId)
+          .forEach(v => { v.whatsapp_sent = 0; v.followup_count = 0; v.whatsapp_sent_at = null; });
+        changed = true;
+        console.log(`[LockCheck] ${lock.phone} re-entered APV after full cycle — lock reset for new cycle ${cycleNum}`);
       }
-    }
 
-    // ── Both messages sent — mark cycle complete after 5 min (TEST; prod: 24h) ──
-    // Visitor status stays 'followup_complete' — this IS the product recommendation
-    // pool. post_cart_upsell campaign targets followup_complete users with weekly
-    // product recommendations. No activity needed to stay here; re-entry on product
-    // view resets to product_view and restarts the APV cycle.
-    if (
-      lock.lock_status === 'active' &&
-      lock.stage >= 2 &&
-      lock.stage_2_sent_at &&
-      (now - new Date(lock.stage_2_sent_at).getTime()) > 5 * 60 * 1000 // TEST: 5 min (prod: 24h)
-    ) {
-      lock.lock_status   = 'shifted_recommendation';
-      lock.shifted_at    = new Date().toISOString();
-      lock.unlock_reason = 'follow_up_loop_complete_no_conversion';
+    } else if (currStatus === 'abandoned_cart' || currStatus === 'abandoned_checkout') {
+      if (lock.lock_status === 'active') {
+        lock.lock_status   = 'cart_added';
+        lock.cart_added_at = new Date().toISOString();
+        lock.unlock_reason = 'user_added_to_cart';
+        const cartEvt = (db.cart_events || []).find(c =>
+          c.phone === lock.phone && !c.recovered && c.channel_id === channelId
+        );
+        if (cartEvt) lock.cart_amount = parseFloat(cartEvt.total_amount) || 0;
+        changed = true;
+        console.log(`[LockCheck] ✓ ${lock.phone} added to cart (₹${lock.cart_amount || 0}) — exited APV`);
+      }
+
+    } else if (currStatus === 'purchased') {
+      lock.lock_status   = 'purchased';
+      lock.purchased_at  = new Date().toISOString();
+      lock.unlock_reason = 'user_purchased';
+      const purchase = (db.purchase_history || [])
+        .filter(p => p.phone === lock.phone)
+        .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
+      if (purchase) lock.revenue = parseFloat(purchase.total_amount) || 0;
       changed = true;
-      // Ensure visitor is in followup_complete (product recommendation pool)
-      // Do NOT change visitor.status here — it was already set when stage 2 was sent
-      console.log(`[LockCheck] ${lock.phone} APV cycle complete → product recommendation pool (followup_complete) — waiting for re-entry or weekly upsell`);
+      console.log(`[LockCheck] ✓ ${lock.phone} purchased — revenue ₹${lock.revenue || 0}`);
+
+    } else if (currStatus === 'product_recommendation') {
+      // Both APV messages sent — sendMultiple already set this status and shifted_recommendation.
+      // Mark here as safety net in case sendMultiple missed setting lock_status.
+      if (lock.lock_status === 'active') {
+        lock.lock_status   = 'shifted_recommendation';
+        lock.shifted_at    = new Date().toISOString();
+        lock.unlock_reason = 'follow_up_loop_complete_no_conversion';
+        changed = true;
+        console.log(`[LockCheck] ${lock.phone} APV complete — shifted to recommendation pool`);
+      }
     }
   }
 
-  // ── Post-purchase re-entry: if purchased user has new product_view + empty cart,
-  //    delete their old locks so the campaign treats them as a fresh user ──────
-  const purchasedWithView = (db.website_visitors || []).filter(v =>
-    v.channel_id === channelId &&
-    v.phone &&
-    v.status === 'product_view' &&
-    (v.funnel_cycle || 1) > 1  // re-entry happened (new cycle after purchase)
+  // ── Post-purchase re-entry: if user's funnel_cycle > 1 and has product_view,
+  //    clear stale purchased/cart locks so FLOW 2b creates a fresh lock ──────────
+  const reenteredVisitors = (db.website_visitors || []).filter(v =>
+    v.channel_id === channelId && v.phone &&
+    v.status === 'product_view' && (v.funnel_cycle || 1) > 1
   );
-  for (const visitor of purchasedWithView) {
-    // Clear ANY old lock regardless of lock_status (purchased/shifted/active/cart_added).
-    // After purchase re-entry, old locks always block the new cycle — clear all of them.
-    const hasAnyLock = (db.campaign_locks || []).some(l =>
-      l.phone === visitor.phone && l.channel_id === channelId
+  for (const vis of reenteredVisitors) {
+    const stale = (db.campaign_locks || []).filter(l =>
+      l.phone === vis.phone && l.channel_id === channelId &&
+      ['purchased', 'cart_added'].includes(l.lock_status)
     );
-    if (hasAnyLock) {
-      db.campaign_locks = (db.campaign_locks || []).filter(l =>
-        !(l.phone === visitor.phone && l.channel_id === channelId)
-      );
-      // Reset product_views whatsapp_sent for new cycle
+    if (stale.length) {
+      const staleIds = new Set(stale.map(l => l.id));
+      db.campaign_locks = db.campaign_locks.filter(l => !staleIds.has(l.id));
       (db.product_views || []).forEach(v => {
-        if (v.phone === visitor.phone && v.channel_id === channelId) {
+        if (v.phone === vis.phone && v.channel_id === channelId) {
           v.whatsapp_sent = 0; v.followup_count = 0; v.whatsapp_sent_at = null;
         }
       });
       changed = true;
-      console.log(`[LockCheck] ${visitor.phone} re-entered funnel (cycle ${visitor.funnel_cycle}) — all old locks cleared for fresh campaign`);
+      console.log(`[LockCheck] ${vis.phone} re-entered funnel (cycle ${vis.funnel_cycle}) — stale locks cleared`);
     }
   }
 
@@ -869,8 +838,11 @@ async function runAutomation() {
       // ────────────────────────────────────────────────────────────────────
       // FLOW 2b: Abandoned Product View — slug-matched product views, single
       //          product template, 30-min first message, 24h follow-up, max 2
-      // Source of truth: website_visitors with status=product_view (same as analytics).
-      // Enriched from product_views for product details + from campaign_locks for stage.
+      //
+      // Status is the ONE source of truth for campaign membership:
+      //   product_view      → newly eligible, campaign claims immediately → product_view_lock
+      //   product_view_lock → in campaign, awaiting/between messages
+      //   any other status  → user exited, checkLockedUsers handles cleanup
       // ────────────────────────────────────────────────────────────────────
       else if (cam.campaign_type === 'abandoned_product_view') {
         const settingsRow = (db.channel_settings || []).find(s => s.channel_id === channelId);
@@ -897,17 +869,31 @@ async function runAutomation() {
           }
         }
 
-        // Source of truth: visitors with product_view status
+        // Pick up product_view AND product_view_lock visitors (both are in or entering the campaign)
         const MAX_VIEW_AGE_MS = 7 * 24 * 60 * 60 * 1000;
         const eligibleVisitors = (db.website_visitors || []).filter(vis => {
-          if (vis.channel_id !== channelId || !vis.phone || vis.status !== 'product_view') return false;
-          // Age check uses product_view created_at (when product was first seen this cycle)
-          // NOT visited_at — that updates on homepage/listing visits too
+          if (vis.channel_id !== channelId || !vis.phone) return false;
+          if (vis.status !== 'product_view' && vis.status !== 'product_view_lock') return false;
+          // Age check: uses product_view record timestamp, not visited_at
           const latestPV = latestViewByPhoneAPV[vis.phone];
           const lastAct = latestPV?.created_at || vis.visited_at || vis.created_at;
           if (!lastAct || (now - new Date(lastAct).getTime()) > MAX_VIEW_AGE_MS) return false;
           return true;
         });
+
+        // ── Immediately claim any product_view users — lock into campaign ─────────
+        // This blocks other campaigns from targeting them during the delay window.
+        // Status becomes product_view_lock; FLOW 2b then proceeds with timing + send.
+        let apvStatusChanged = false;
+        for (const vis of eligibleVisitors) {
+          if (vis.status === 'product_view') {
+            vis.status     = 'product_view_lock';
+            vis.updated_at = new Date().toISOString();
+            apvStatusChanged = true;
+            console.log(`[APV] ${vis.phone} claimed → product_view_lock`);
+          }
+        }
+        if (apvStatusChanged) db.save();
 
         // Build enriched event objects using visitor + product_views + lock data
         const views = eligibleVisitors.map(vis => {
@@ -1308,12 +1294,14 @@ function passesAudienceFilters(db, channelId, phone, cam) {
  * purchased            → post_purchase          (blocks everything else)
  */
 const STATUS_ALLOWED = {
-  active:                  ['website_visit'],
-  product_view:            ['product_view', 'abandoned_product_view'],
-  abandoned_cart:          ['abandoned_cart', 'discount'],
-  abandoned_checkout:      ['abandoned_checkout', 'discount'],
-  followup_complete:       ['post_cart_upsell'],
-  purchased:               ['post_purchase'],
+  active:                   ['website_visit'],
+  product_view:             ['product_view', 'abandoned_product_view'],
+  product_view_lock:        ['abandoned_product_view'],  // claimed by APV, blocks all other campaigns
+  abandoned_cart:           ['abandoned_cart', 'discount'],
+  abandoned_checkout:       ['abandoned_checkout', 'discount'],
+  followup_complete:        ['post_cart_upsell'],
+  product_recommendation:   [],  // APV complete — waiting for next product_view re-entry
+  purchased:                ['post_purchase'],
 };
 
 function isBlockedByStatus(visitorStatus, campaignType) {
@@ -1321,7 +1309,10 @@ function isBlockedByStatus(visitorStatus, campaignType) {
   if (campaignType === 'custom') return false;
   if (campaignType === 'product_recommendation') return false;
   if (campaignType === 'order_confirmation') return false;    // targets orders table, not visitor status
-  if (campaignType === 'abandoned_product_view') return visitorStatus !== 'product_view';
+  // APV campaign requires product_view_lock (or product_view for the initial claim tick)
+  if (campaignType === 'abandoned_product_view') {
+    return visitorStatus !== 'product_view_lock' && visitorStatus !== 'product_view';
+  }
   if (!visitorStatus) return false;
   const allowed = STATUS_ALLOWED[visitorStatus];
   if (!allowed) return false; // unknown status — don't block
@@ -1697,7 +1688,7 @@ async function sendMultiple(db, cam, events, type) {
               lock_status:       'active',
               revenue:           0,
               last_status_check: nowIso,
-              last_known_status: 'product_view',
+              last_known_status: 'product_view_lock',
               unlock_reason:     null,
             });
             console.log(`[Lock] Created lock for ${evt.phone} — stage ${currentStage} — product: "${evt.product_name}"`);
@@ -1727,18 +1718,27 @@ async function sendMultiple(db, cam, events, type) {
           }
         }
 
-        // abandoned_product_view: stage 2 is the final — move to followup_complete
-        // followup_complete = product recommendation pool (targeted by post_cart_upsell campaign)
+        // APV stage 2 complete — move to product_recommendation and close the lock immediately.
+        // Status product_recommendation = both follow-ups sent, user in recommendation pool.
+        // Any new product_view will restart the cycle via statusMachine re-entry rules.
         if (currentStage === 2 && cam.campaign_type === 'abandoned_product_view') {
           const vIdx = db.website_visitors.findIndex(v => v.phone === evt.phone);
           if (vIdx >= 0) {
-            const upgraded = upgradeStatus(db.website_visitors[vIdx], 'followup_complete');
+            const upgraded = upgradeStatus(db.website_visitors[vIdx], 'product_recommendation');
             if (upgraded) {
-              // Store campaign attribution — which APV campaign brought this user here
               db.website_visitors[vIdx].apv_source_campaign_id   = cam.id;
               db.website_visitors[vIdx].apv_source_campaign_name = cam.name;
               db.website_visitors[vIdx].apv_completed_at         = new Date().toISOString();
-              console.log(`[APV Stage 2] ${evt.phone} → followup_complete (product recommendation pool) — from campaign "${cam.name}"`);
+              // Close the lock immediately — no need to wait for checkLockedUsers 5-min timer
+              const closeLock = (db.campaign_locks || []).find(l =>
+                l.phone === evt.phone && String(l.campaign_id) === String(cam.id)
+              );
+              if (closeLock && closeLock.lock_status === 'active') {
+                closeLock.lock_status   = 'shifted_recommendation';
+                closeLock.shifted_at    = new Date().toISOString();
+                closeLock.unlock_reason = 'follow_up_loop_complete_no_conversion';
+              }
+              console.log(`[APV Stage 2] ${evt.phone} → product_recommendation — campaign "${cam.name}"`);
             }
           }
         }
@@ -1871,13 +1871,24 @@ async function sendMultiple(db, cam, events, type) {
         }
       }
 
-      // ── STAGE COMPLETION → followup_complete ──
-      const isFinalStage = currentStage === 4 ||
-        (currentStage === 2 && cam.campaign_type === 'abandoned_product_view');
-      if (isFinalStage) {
+      // ── STAGE COMPLETION ──
+      if (currentStage === 4) {
         const vIdx = db.website_visitors.findIndex(v => v.phone === evt.phone);
         if (vIdx >= 0 && upgradeStatus(db.website_visitors[vIdx], 'followup_complete')) {
-          console.log(`[Final Stage ${currentStage}] ${evt.phone} → followup_complete → weekly upsell loop`);
+          console.log(`[Stage 4] ${evt.phone} → followup_complete → weekly upsell loop`);
+        }
+      } else if (currentStage === 2 && cam.campaign_type === 'abandoned_product_view') {
+        const vIdx = db.website_visitors.findIndex(v => v.phone === evt.phone);
+        if (vIdx >= 0 && upgradeStatus(db.website_visitors[vIdx], 'product_recommendation')) {
+          const closeLock = (db.campaign_locks || []).find(l =>
+            l.phone === evt.phone && String(l.campaign_id) === String(cam.id)
+          );
+          if (closeLock && closeLock.lock_status === 'active') {
+            closeLock.lock_status   = 'shifted_recommendation';
+            closeLock.shifted_at    = new Date().toISOString();
+            closeLock.unlock_reason = 'follow_up_loop_complete_no_conversion';
+          }
+          console.log(`[APV Stage 2] ${evt.phone} → product_recommendation`);
         }
       }
 
@@ -1893,11 +1904,13 @@ async function sendMultiple(db, cam, events, type) {
  * Append ?ww_src=BASE64(phone) to a URL so the tracker can auto-identify
  * the user when they click from WhatsApp — works in incognito / any browser.
  */
-function _tagUrl(url, phone) {
+function _tagUrl(url, phone, campaignId = null) {
   if (!url || !phone) return url || '';
   const tag = Buffer.from(String(phone)).toString('base64')
     .replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
-  return url + (url.includes('?') ? '&' : '?') + 'ww_src=' + tag;
+  let out = url + (url.includes('?') ? '&' : '?') + 'ww_src=' + tag;
+  if (campaignId) out += '&ww_cam=' + encodeURIComponent(campaignId);
+  return out;
 }
 
 /**
@@ -1905,12 +1918,13 @@ function _tagUrl(url, phone) {
  * Each type has different dynamic data sources.
  */
 function buildVariables(db, cam, evt, visitor, type, channelId) {
-  const phone = evt.phone || visitor?.phone || '';
+  const phone  = evt.phone || visitor?.phone || '';
+  const camId  = cam?.id   || null;
   const base = {
     name: evt.name || visitor?.name || 'Customer',
     total_amount: (evt.total_amount || 0).toLocaleString(),
     currency: evt.currency || null,
-    cart_url: _tagUrl(evt.cart_url, phone),
+    cart_url: _tagUrl(evt.cart_url, phone, camId),
     shopify_carousel: typeof evt.shopify_carousel === 'string'
       ? evt.shopify_carousel
       : JSON.stringify(evt.shopify_carousel || [])
@@ -1922,7 +1936,7 @@ function buildVariables(db, cam, evt, visitor, type, channelId) {
       ...base,
       product_name:  evt.product_name  || extractFirstProductName(evt.products),
       product_image: evt.product_image || '',
-      product_url:   _tagUrl(evt.product_url, phone),
+      product_url:   _tagUrl(evt.product_url, phone, camId),
       product_price: evt.product_price || String(evt.total_amount || ''),
       product_list:  buildProductList(evt.products),
     };
@@ -1934,7 +1948,7 @@ function buildVariables(db, cam, evt, visitor, type, channelId) {
       ...base,
       product_name:  evt.product_name  || '',
       product_image: evt.product_image || '',
-      product_url:   _tagUrl(evt.product_url, phone),
+      product_url:   _tagUrl(evt.product_url, phone, camId),
       product_price: evt.product_price || '',
       product_list:  evt.product_name ? `• ${evt.product_name}` : '',
     };
@@ -1952,7 +1966,7 @@ function buildVariables(db, cam, evt, visitor, type, channelId) {
       ...base,
       product_name:  firstPick.name  || 'our latest collection',
       product_image: firstPick.image || '',
-      product_url:   _tagUrl(firstPick.url, phone),
+      product_url:   _tagUrl(firstPick.url, phone, camId),
       product_price: firstPick.price || '',
       product_list:  picks.map(p => `• ${p.name} — ₹${p.price}`).join('\n') || 'Check our latest products',
       recommended_products: JSON.stringify(picks),

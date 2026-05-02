@@ -879,7 +879,7 @@ export const campaignsController = {
       const allPurchases = (db.purchase_history || []).filter(p => p.channel_id === channelId);
       const allProdViews = (db.product_views    || []).filter(v => v.channel_id === channelId);
 
-      const STATUS_RANK = { purchased: 6, followup_complete: 5, abandoned_checkout: 4, abandoned_cart: 3, product_view: 2, active: 1 };
+      const STATUS_RANK = { purchased: 7, followup_complete: 6, product_recommendation: 6, abandoned_checkout: 5, abandoned_cart: 4, product_view_lock: 3, product_view: 2, active: 1 };
 
       const contactMap = new Map();
       for (const [phone, sessions] of phoneMap.entries()) {
@@ -971,33 +971,55 @@ export const campaignsController = {
         const allExecsForCampaign = (db.abandoned_cart_executions || [])
           .filter(x => String(x.campaign_id) === String(id));
 
-        let metricReplied = 0, metricClicked = 0;
+        const camIdStr = String(id);
+        let metricReplied = 0;
+        const lockedPhonesSet = new Set(locks.map(l => l.phone));
+
         for (const l of locks) {
           const s1Ms = l.stage_1_sent_at ? new Date(l.stage_1_sent_at).getTime() : null;
-          if (!s1Ms) continue; // stage 1 not yet sent this cycle
-          // Replied: inbound message AFTER stage 1 sent
+          if (!s1Ms) continue;
           const replied = (db.chat_messages || []).some(m =>
             m.phone === l.phone && m.channel_id === channelId && m.direction === 'in' &&
             new Date(m.timestamp || m.created_at).getTime() > s1Ms
           );
           if (replied) metricReplied++;
-          // Clicked: product_view > 1 min after stage 1 sent (inferred link click)
-          const clicked = (db.product_views || []).some(pv =>
-            pv.phone === l.phone && pv.channel_id === channelId &&
-            new Date(pv.created_at).getTime() > s1Ms + 60000
-          );
-          if (clicked) metricClicked++;
         }
 
+        // Attribution metrics — based on ww_cam tracking in URLs
+        // attributed_clicks: unique visitors who clicked a link from this campaign (last_click_campaign_id)
+        const attrClicks = (db.website_visitors || []).filter(v =>
+          v.channel_id === channelId && String(v.last_click_campaign_id) === camIdStr
+        );
+        // attributed_carts: cart events stamped with source_campaign_id = this campaign
+        const attrCarts = (db.cart_events || []).filter(c =>
+          c.channel_id === channelId && String(c.source_campaign_id) === camIdStr && !c.recovered
+        );
+        const attrCartsRecovered = (db.cart_events || []).filter(c =>
+          c.channel_id === channelId && String(c.source_campaign_id) === camIdStr
+        );
+        // attributed_purchases: purchases stamped with source_campaign_id = this campaign
+        const attrPurchases = (db.purchase_history || []).filter(p =>
+          p.channel_id === channelId && String(p.source_campaign_id) === camIdStr
+        );
+        const attrRevenue = attrPurchases.reduce((s, p) => s + (parseFloat(p.total_amount) || 0), 0);
+
+        const stage1SentExecs = allExecsForCampaign.filter(x => (x.stage || 1) === 1 && x.status === 'sent');
+        const stage2SentExecs = allExecsForCampaign.filter(x => x.stage === 2 && x.status === 'sent');
+
         const campaignMetrics = {
-          stage1_sent:  allExecsForCampaign.filter(x => (x.stage || 1) === 1 && x.status === 'sent').length,
-          stage2_sent:  allExecsForCampaign.filter(x => x.stage === 2 && x.status === 'sent').length,
-          total_failed: allExecsForCampaign.filter(x => x.status === 'failed').length,
-          conversations: metricReplied,   // unique users who replied after receiving msg
-          clicked:       metricClicked,   // unique users who clicked link (inferred)
-          cart_adds:    locks.filter(l => ['cart_added', 'purchased'].includes(l.lock_status)).length,
-          purchases:    locks.filter(l => l.lock_status === 'purchased').length,
-          revenue:      locks.reduce((s, l) => s + (parseFloat(l.revenue) || 0), 0),
+          total_reached:  stage1SentExecs.length,                              // unique users who received msg 1
+          stage1_sent:    stage1SentExecs.length,
+          stage2_sent:    stage2SentExecs.length,
+          total_failed:   allExecsForCampaign.filter(x => x.status === 'failed').length,
+          conversations:  metricReplied,                                        // unique users who replied
+          clicked:        attrClicks.length,                                    // clicked campaign URL (ww_cam)
+          cart_adds:      attrCartsRecovered.length,                            // cart adds attributed to this campaign
+          purchases:      attrPurchases.length,                                 // purchases attributed to this campaign
+          revenue:        attrRevenue,                                          // attributed revenue
+          // Legacy inferred metrics (from lock status — fallback when tracking code not present)
+          lock_cart_adds: locks.filter(l => ['cart_added', 'purchased'].includes(l.lock_status)).length,
+          lock_purchases: locks.filter(l => l.lock_status === 'purchased').length,
+          lock_revenue:   locks.reduce((s, l) => s + (parseFloat(l.revenue) || 0), 0),
         };
 
         // Helper: get execution records per phone for this campaign
@@ -1045,18 +1067,27 @@ export const campaignsController = {
           const lastReply = inboundMsgs[0] || null;
 
           // Clicked: product_view > 1 min after stage 1 send (inferred link click)
-          const userClicked = s1SentMs
-            ? (db.product_views || []).some(pv =>
-                pv.phone === l.phone && pv.channel_id === channelId &&
-                new Date(pv.created_at).getTime() > s1SentMs + 60000
-              )
-            : false;
+          // Attribution: did this user click the campaign link (ww_cam tracking)?
+          const visitorRec = db.website_visitors.find(v => v.phone === l.phone && v.channel_id === channelId);
+          const clickedCampaign = visitorRec && String(visitorRec.last_click_campaign_id) === camIdStr;
+          const clickedAt = clickedCampaign ? (visitorRec.last_click_at || null) : null;
+
+          // Attribution: cart add after campaign click
+          const attrCart = (db.cart_events || []).find(c =>
+            c.phone === l.phone && c.channel_id === channelId &&
+            String(c.source_campaign_id) === camIdStr
+          );
+          // Attribution: purchase after campaign click
+          const attrPurch = (db.purchase_history || []).find(p =>
+            p.phone === l.phone && p.channel_id === channelId &&
+            String(p.source_campaign_id) === camIdStr
+          );
 
           const execs = getExecs(l.phone);
           return {
             phone: l.phone, name: ct.name || 'Unknown',
             city: ct.city || '', device: ct.device || '',
-            status: ct.status || l.last_known_status || 'product_view',
+            status: ct.status || l.last_known_status || 'product_view_lock',
             power_score: ct.power_score || 0, engagement_score: ct.engagement_score || 0,
             page_views: ct.page_views || 0, cart_events: ct.cart_events || 0,
             is_repeat: ct.is_repeat || false,
@@ -1067,8 +1098,8 @@ export const campaignsController = {
             lock_status: l.lock_status, stage: l.stage || 0,
             locked_at: l.locked_at, stage_1_sent_at: l.stage_1_sent_at || execs.stage1_sent_at,
             stage_2_sent_at: l.stage_2_sent_at || execs.stage2_sent_at,
-            revenue: purch ? parseFloat(purch.total_amount || 0) : (l.revenue || 0),
-            cart_amount: cart?.total_amount || 0,
+            revenue: attrPurch ? parseFloat(attrPurch.total_amount || 0) : (purch ? parseFloat(purch.total_amount || 0) : (l.revenue || 0)),
+            cart_amount: attrCart?.total_amount || cart?.total_amount || 0,
             followup_count: l.stage || 0,
             minutes_since_activity: minSince,
             minutes_until_next_send: minUntilNext,
@@ -1078,14 +1109,21 @@ export const campaignsController = {
             response_count: inboundMsgs.length,
             last_response_text: lastReply?.text || null,
             last_response_at: lastReply?.timestamp || lastReply?.created_at || null,
-            clicked: userClicked,
+            // Attribution fields
+            clicked: clickedCampaign,          // clicked the campaign URL (ww_cam)
+            clicked_at: clickedAt,             // when they clicked
+            attributed_cart: !!attrCart,       // added to cart after clicking
+            attributed_cart_amount: attrCart ? parseFloat(attrCart.total_amount || 0) : 0,
+            attributed_purchase: !!attrPurch,  // purchased after clicking
+            attributed_revenue: attrPurch ? parseFloat(attrPurch.total_amount || 0) : 0,
             ...execs,
           };
         });
 
-        // Pending — contacts whose command center status = product_view, not yet locked
+        // Pending — contacts with product_view or product_view_lock status but no lock record yet
+        // (product_view_lock means campaign claimed them but stage 1 hasn't fired yet)
         const pendingAudience = [...contactMap.values()].filter(c =>
-          c.status === 'product_view' && !lockedPhones.has(c.phone)
+          (c.status === 'product_view' || c.status === 'product_view_lock') && !lockedPhones.has(c.phone)
         ).map(c => {
           // Use most recent product view (same as automation timer)
           const viewRec = latestViewByPhone[c.phone];

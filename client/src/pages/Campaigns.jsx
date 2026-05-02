@@ -2775,43 +2775,61 @@ export default function Campaigns() {
                           </button>
                         </div>
 
-                        {/* Campaign Metrics Bar — APV only */}
+                        {/* Campaign Analytics Bar — APV */}
                         {m && (
-                          <div className="px-3 py-2 flex flex-wrap gap-3" style={{ background: 'rgba(0,0,0,0.2)', borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
-                            <div className="flex flex-col">
-                              <span className="text-[8px] uppercase tracking-wide" style={{ color: '#475569' }}>Sent</span>
-                              <span className="text-[11px] font-bold" style={{ color: '#a3e635' }}>
-                                {m.stage1_sent} msg1 · {m.stage2_sent} msg2
-                              </span>
-                            </div>
-                            {m.total_failed > 0 && (
+                          <div style={{ background: 'rgba(0,0,0,0.2)', borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+                            {/* Row 1: delivery stats */}
+                            <div className="px-3 pt-2 pb-1 flex flex-wrap gap-x-4 gap-y-1.5">
                               <div className="flex flex-col">
-                                <span className="text-[8px] uppercase tracking-wide" style={{ color: '#475569' }}>Failed</span>
-                                <span className="text-[11px] font-bold" style={{ color: '#f87171' }}>{m.total_failed}</span>
+                                <span className="text-[8px] uppercase tracking-wide" style={{ color: '#475569' }}>Reached</span>
+                                <span className="text-[12px] font-bold" style={{ color: '#a3e635' }}>{m.total_reached || m.stage1_sent}</span>
                               </div>
-                            )}
-                            <div className="flex flex-col">
-                              <span className="text-[8px] uppercase tracking-wide" style={{ color: '#475569' }}>💬 Replied</span>
-                              <span className="text-[11px] font-bold" style={{ color: '#60a5fa' }}>{m.conversations || 0}</span>
-                            </div>
-                            <div className="flex flex-col">
-                              <span className="text-[8px] uppercase tracking-wide" style={{ color: '#475569' }}>👆 Clicked</span>
-                              <span className="text-[11px] font-bold" style={{ color: '#fbbf24' }}>{m.clicked || 0}</span>
-                            </div>
-                            <div className="flex flex-col">
-                              <span className="text-[8px] uppercase tracking-wide" style={{ color: '#475569' }}>Cart Add</span>
-                              <span className="text-[11px] font-bold" style={{ color: '#fb923c' }}>{m.cart_adds}</span>
-                            </div>
-                            <div className="flex flex-col">
-                              <span className="text-[8px] uppercase tracking-wide" style={{ color: '#475569' }}>Purchased</span>
-                              <span className="text-[11px] font-bold" style={{ color: '#4ade80' }}>{m.purchases}</span>
-                            </div>
-                            {m.revenue > 0 && (
                               <div className="flex flex-col">
-                                <span className="text-[8px] uppercase tracking-wide" style={{ color: '#475569' }}>Revenue</span>
-                                <span className="text-[11px] font-bold" style={{ color: '#4ade80' }}>₹{m.revenue.toLocaleString('en-IN')}</span>
+                                <span className="text-[8px] uppercase tracking-wide" style={{ color: '#475569' }}>Msg 1 sent</span>
+                                <span className="text-[12px] font-bold" style={{ color: '#a3e635' }}>{m.stage1_sent}</span>
                               </div>
-                            )}
+                              <div className="flex flex-col">
+                                <span className="text-[8px] uppercase tracking-wide" style={{ color: '#475569' }}>Msg 2 sent</span>
+                                <span className="text-[12px] font-bold" style={{ color: '#86efac' }}>{m.stage2_sent}</span>
+                              </div>
+                              {m.total_failed > 0 && (
+                                <div className="flex flex-col">
+                                  <span className="text-[8px] uppercase tracking-wide" style={{ color: '#475569' }}>Failed</span>
+                                  <span className="text-[12px] font-bold" style={{ color: '#f87171' }}>{m.total_failed}</span>
+                                </div>
+                              )}
+                              <div className="flex flex-col">
+                                <span className="text-[8px] uppercase tracking-wide" style={{ color: '#475569' }}>💬 Replied</span>
+                                <span className="text-[12px] font-bold" style={{ color: '#60a5fa' }}>{m.conversations || 0}</span>
+                              </div>
+                            </div>
+                            {/* Row 2: attribution (only shown once tracking fires) */}
+                            <div className="px-3 pb-2 pt-0.5 flex flex-wrap gap-x-4 gap-y-1.5" style={{ borderTop: '1px solid rgba(255,255,255,0.04)' }}>
+                              <div className="flex flex-col">
+                                <span className="text-[8px] uppercase tracking-wide" style={{ color: '#475569' }}>👆 Clicked link</span>
+                                <span className="text-[12px] font-bold" style={{ color: '#fbbf24' }}>{m.clicked || 0}</span>
+                              </div>
+                              <div className="flex flex-col">
+                                <span className="text-[8px] uppercase tracking-wide" style={{ color: '#475569' }}>🛒 Cart (from msg)</span>
+                                <span className="text-[12px] font-bold" style={{ color: '#fb923c' }}>
+                                  {m.cart_adds > 0 ? m.cart_adds : (m.lock_cart_adds || 0)}
+                                </span>
+                              </div>
+                              <div className="flex flex-col">
+                                <span className="text-[8px] uppercase tracking-wide" style={{ color: '#475569' }}>✅ Purchased</span>
+                                <span className="text-[12px] font-bold" style={{ color: '#4ade80' }}>
+                                  {m.purchases > 0 ? m.purchases : (m.lock_purchases || 0)}
+                                </span>
+                              </div>
+                              {(m.revenue > 0 || m.lock_revenue > 0) && (
+                                <div className="flex flex-col">
+                                  <span className="text-[8px] uppercase tracking-wide" style={{ color: '#475569' }}>Revenue</span>
+                                  <span className="text-[12px] font-bold" style={{ color: '#4ade80' }}>
+                                    ₹{(m.revenue > 0 ? m.revenue : m.lock_revenue).toLocaleString('en-IN')}
+                                  </span>
+                                </div>
+                              )}
+                            </div>
                           </div>
                         )}
 
@@ -2860,20 +2878,33 @@ export default function Campaigns() {
                                     {/* Command center status — same as Contacts tab */}
                                     <td className="px-2 py-2">{statusBadge(u)}</td>
 
-                                    {/* Campaign lock status + response/click indicators */}
+                                    {/* Campaign lock status + attribution badges */}
                                     <td className="px-2 py-2">
                                       <div className="flex flex-col gap-0.5">
                                         {lockBadge(u)}
-                                        <div className="flex gap-1 mt-0.5">
+                                        <div className="flex flex-wrap gap-1 mt-0.5">
                                           {u.responded && (
                                             <span className="text-[8px] px-1 py-0.5 rounded" style={{ background: 'rgba(192,132,252,0.15)', color: '#c084fc' }}
                                               title={u.last_response_text || 'Replied'}>
-                                              💬 {u.last_response_text ? `"${u.last_response_text.slice(0,18)}${u.last_response_text.length>18?'…':''}"` : 'replied'}
+                                              💬 {u.last_response_text ? `"${u.last_response_text.slice(0,14)}${u.last_response_text.length>14?'…':''}"` : 'replied'}
                                             </span>
                                           )}
                                           {u.clicked && (
-                                            <span className="text-[8px] px-1 py-0.5 rounded" style={{ background: 'rgba(251,191,36,0.15)', color: '#fbbf24' }}>
+                                            <span className="text-[8px] px-1 py-0.5 rounded" style={{ background: 'rgba(251,191,36,0.15)', color: '#fbbf24' }}
+                                              title={u.clicked_at ? `Clicked at ${new Date(u.clicked_at).toLocaleString()}` : 'Clicked campaign link'}>
                                               👆 clicked
+                                            </span>
+                                          )}
+                                          {u.attributed_cart && (
+                                            <span className="text-[8px] px-1 py-0.5 rounded" style={{ background: 'rgba(251,146,60,0.15)', color: '#fb923c' }}
+                                              title={`Added to cart after clicking · ₹${u.attributed_cart_amount || 0}`}>
+                                              🛒 cart ₹{u.attributed_cart_amount || 0}
+                                            </span>
+                                          )}
+                                          {u.attributed_purchase && (
+                                            <span className="text-[8px] px-1 py-0.5 rounded" style={{ background: 'rgba(74,222,128,0.15)', color: '#4ade80' }}
+                                              title={`Purchased after clicking · ₹${u.attributed_revenue || 0}`}>
+                                              ✅ bought ₹{u.attributed_revenue || 0}
                                             </span>
                                           )}
                                         </div>
@@ -2962,13 +2993,38 @@ export default function Campaigns() {
                                             </div>
                                           )}
 
+                                          {/* Link click attribution */}
+                                          {u.clicked && (
+                                            <div className="flex items-start gap-2 mt-0.5" style={{ borderLeft: '2px solid rgba(251,191,36,0.3)', paddingLeft: 6 }}>
+                                              <span className="text-[9px] w-14 flex-shrink-0" style={{ color: '#475569' }}>link click</span>
+                                              <span className="text-[9px]" style={{ color: '#fbbf24' }}>
+                                                👆 Clicked campaign URL{u.clicked_at ? ` · ${fmtTs(u.clicked_at)}` : ''}
+                                              </span>
+                                            </div>
+                                          )}
+
+                                          {/* Attributed cart */}
+                                          {u.attributed_cart && (
+                                            <div className="flex items-start gap-2" style={{ borderLeft: '2px solid rgba(251,146,60,0.3)', paddingLeft: 6 }}>
+                                              <span className="text-[9px] w-14 flex-shrink-0" style={{ color: '#475569' }}>cart</span>
+                                              <span className="text-[9px]" style={{ color: '#fb923c' }}>
+                                                🛒 Added to cart after clicking{u.attributed_cart_amount > 0 ? ` · ₹${u.attributed_cart_amount}` : ''}
+                                              </span>
+                                            </div>
+                                          )}
+
                                           {/* Outcome */}
-                                          {(u.lock_status === 'purchased' || u.lock_status === 'cart_added') && (
+                                          {(u.lock_status === 'purchased' || u.lock_status === 'cart_added' || u.attributed_purchase) && (
                                             <div className="flex items-start gap-2 mt-0.5">
                                               <span className="text-[9px] w-16 flex-shrink-0" style={{ color: '#475569' }}>outcome</span>
-                                              {u.lock_status === 'purchased'
-                                                ? <span className="text-[9px]" style={{ color: '#4ade80' }}>✅ Purchased{u.revenue > 0 ? ` · ₹${u.revenue}` : ''}</span>
-                                                : <span className="text-[9px]" style={{ color: '#fb923c' }}>🛒 Added to cart{u.cart_amount > 0 ? ` · ₹${u.cart_amount}` : ''}</span>
+                                              {(u.lock_status === 'purchased' || u.attributed_purchase)
+                                                ? <span className="text-[9px]" style={{ color: '#4ade80' }}>
+                                                    ✅ Purchased{(u.attributed_revenue || u.revenue) > 0 ? ` · ₹${u.attributed_revenue || u.revenue}` : ''}
+                                                    {u.attributed_purchase ? <span style={{ color: '#86efac' }}> (attributed to campaign)</span> : ''}
+                                                  </span>
+                                                : <span className="text-[9px]" style={{ color: '#fb923c' }}>
+                                                    🛒 Added to cart{(u.attributed_cart_amount || u.cart_amount) > 0 ? ` · ₹${u.attributed_cart_amount || u.cart_amount}` : ''}
+                                                  </span>
                                               }
                                             </div>
                                           )}

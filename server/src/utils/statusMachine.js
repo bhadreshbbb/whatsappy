@@ -1,22 +1,24 @@
 export const STATUS_PRIORITY = {
-  'active':             1,
-  'product_view':       2,
-  'abandoned_cart':     3,
-  'abandoned_checkout': 4,
-  'followup_complete':  5,
-  'purchased':          6,
+  'active':               1,
+  'product_view':         2,
+  'product_view_lock':    3,   // user claimed by APV campaign — locked until exit or completion
+  'abandoned_cart':       4,
+  'abandoned_checkout':   5,
+  'followup_complete':    6,
+  'product_recommendation': 6, // APV 2-follow-ups done — in recommendation pool
+  'purchased':            7,
 };
 
 /**
  * Downgrade status — only when cart is fully cleared (no purchase).
  * abandoned_cart/checkout → product_view or active
- * Never touches purchased or followup_complete.
+ * Never touches purchased, followup_complete, or product_recommendation.
  */
 export function downgradeStatus(visitor, newStatus) {
   if (!visitor) return false;
   const currentLevel = STATUS_PRIORITY[visitor.status] || 0;
   const targetLevel  = STATUS_PRIORITY[newStatus]      || 0;
-  if (currentLevel >= 3 && currentLevel <= 4 && targetLevel < currentLevel) {
+  if (currentLevel >= 4 && currentLevel <= 5 && targetLevel < currentLevel) {
     visitor.status     = newStatus;
     visitor.updated_at = new Date().toISOString();
     console.log(`[StatusMachine] Downgrade: ${visitor.phone || visitor.session_id} ${visitor.status} → ${newStatus} (cart cleared)`);
@@ -29,18 +31,17 @@ export function downgradeStatus(visitor, newStatus) {
  * Status rules:
  *
  *  FORWARD-ONLY within a cycle:
- *    active → product_view → abandoned_cart → abandoned_checkout → purchased
- *    Once abandoned_cart is set, product_view can NEVER override it.
- *    Once abandoned_checkout is set, abandoned_cart can NEVER override it.
+ *    active → product_view → product_view_lock → abandoned_cart → abandoned_checkout → purchased
+ *    Once abandoned_cart is set, product_view/product_view_lock can NEVER override it.
  *
- *  POST-PURCHASE RE-ENTRY:
- *    If user is purchased/followup_complete and triggers product_view or
- *    abandoned_cart again → reset status and start a new funnel cycle.
+ *  APV RE-ENTRY (product_view_lock → product_view):
+ *    If user views a new product while locked in APV campaign, status reverts to
+ *    product_view so the campaign picks them up fresh on the next tick.
+ *
+ *  POST-CYCLE RE-ENTRY:
+ *    If user is at followup_complete / product_recommendation / purchased and triggers
+ *    product_view or abandoned_cart again → reset status and start a new funnel cycle.
  *    funnel_cycle increments so we know this is their Nth trip through.
- *
- *  PURCHASE COUNT:
- *    purchase_count is managed by _markRecovered, not here.
- *    is_repeat_purchaser is set when purchase_count >= 2.
  */
 export function upgradeStatus(visitor, newStatus) {
   if (!visitor) return false;
@@ -48,10 +49,20 @@ export function upgradeStatus(visitor, newStatus) {
   const currentLevel = STATUS_PRIORITY[visitor.status] || 0;
   const targetLevel  = STATUS_PRIORITY[newStatus]      || 0;
 
-  // ── POST-PURCHASE RE-ENTRY ────────────────────────────────────────────────
-  // User completed a purchase cycle and is back on the site.
-  // Allow status to reset so automation can re-target them.
-  if (currentLevel >= 5 && targetLevel >= 2 && targetLevel <= 4) {
+  // ── APV RE-ENTRY: product_view overrides product_view_lock ───────────────
+  // User views a new product while in APV lock → exit campaign, re-enter fresh.
+  if (visitor.status === 'product_view_lock' && newStatus === 'product_view') {
+    visitor.status     = 'product_view';
+    visitor.updated_at = new Date().toISOString();
+    console.log(`[StatusMachine] APV re-entry: ${visitor.phone || visitor.session_id} product_view_lock → product_view`);
+    return true;
+  }
+
+  // ── POST-CYCLE RE-ENTRY ───────────────────────────────────────────────────
+  // User completed a full cycle (followup_complete / product_recommendation / purchased)
+  // and is back on the site. Allow status reset so automation can re-target them.
+  // Covers: followup_complete (6), product_recommendation (6), purchased (7).
+  if (currentLevel >= 6 && targetLevel >= 2 && targetLevel <= 5) {
     visitor.status       = newStatus;
     visitor.funnel_cycle = (visitor.funnel_cycle || 1) + 1;
     visitor.updated_at   = new Date().toISOString();

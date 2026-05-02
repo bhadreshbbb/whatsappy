@@ -7,13 +7,12 @@ import http from 'http';
 // Cross-browser identity: sync the best status from all phone sessions to one session.
 // Called after a phone is linked to a new session so the new browser immediately
 // reflects the correct funnel position (e.g. abandoned_cart) instead of starting at 'active'.
-const _STATUS_RANK = { purchased: 6, followup_complete: 5, abandoned_checkout: 4, abandoned_cart: 3, product_view: 2, active: 1 };
+const _STATUS_RANK = { purchased: 7, followup_complete: 6, product_recommendation: 6, abandoned_checkout: 5, abandoned_cart: 4, product_view_lock: 3, product_view: 2, active: 1 };
 function _syncBestStatus(db, cid, visitorIdx, phone) {
   const allSessions = db.website_visitors.filter(v => v.channel_id === cid && v.phone === phone);
-  // followup_complete and purchased are terminal states — don't propagate them to new sessions.
-  // A returning user who views a product should start a fresh re-entry cycle, not inherit the
-  // completed state which would block them from appearing in APV eligibleVisitors.
-  const TERMINAL = new Set(['followup_complete', 'purchased']);
+  // Terminal states — don't propagate to new sessions. A returning user who views a product
+  // should start a fresh re-entry cycle, not inherit the completed state.
+  const TERMINAL = new Set(['followup_complete', 'product_recommendation', 'product_view_lock', 'purchased']);
   const bestStatus = allSessions.reduce((best, s) => {
     if (TERMINAL.has(s.status)) return best;
     return (_STATUS_RANK[s.status] || 0) > (_STATUS_RANK[best] || 0) ? s.status : best;
@@ -145,11 +144,13 @@ export const trackingController = {
               utm_source, utm_medium, utm_campaign, phone: visitorPhone } = req.body;
       // Also parse UTM from the page URL itself (covers direct clicks from WhatsApp)
       let _utmSource = utm_source || null, _utmMedium = utm_medium || null, _utmCampaign = utm_campaign || null;
+      let _wwCam = null; // ww_cam = WhatsApp campaign ID (last-click attribution)
       try {
         const _u = new URL(url || '');
         _utmSource   = _utmSource   || _u.searchParams.get('utm_source')   || null;
         _utmMedium   = _utmMedium   || _u.searchParams.get('utm_medium')   || null;
         _utmCampaign = _utmCampaign || _u.searchParams.get('utm_campaign') || null;
+        _wwCam       = _u.searchParams.get('ww_cam') || null;
       } catch (_) {}
       // Device type: use client-sent value, fall back to server-side UA detection
       const _clientDevice = req.body.deviceType;
@@ -202,6 +203,10 @@ export const trackingController = {
         utm_source:   _utmSource   || (visitorIdx >= 0 ? db.website_visitors[visitorIdx].utm_source   : null) || null,
         utm_medium:   _utmMedium   || (visitorIdx >= 0 ? db.website_visitors[visitorIdx].utm_medium   : null) || null,
         utm_campaign: _utmCampaign || (visitorIdx >= 0 ? db.website_visitors[visitorIdx].utm_campaign : null) || null,
+        // Last-click WhatsApp campaign attribution — always updated on each campaign click
+        // ww_cam is injected into product URLs by the automation engine (_tagUrl)
+        last_click_campaign_id: _wwCam || (visitorIdx >= 0 ? db.website_visitors[visitorIdx].last_click_campaign_id : null) || null,
+        last_click_at:          _wwCam ? new Date().toISOString() : (visitorIdx >= 0 ? db.website_visitors[visitorIdx].last_click_at : null) || null,
         // ── Geo & Environment Enrichment ──
         city: geo.city || null,
         state: geo.state || null,
@@ -432,6 +437,18 @@ export const trackingController = {
         !c.recovered
       );
 
+      // ── Campaign attribution: stamp source_campaign_id if visitor clicked a campaign link recently ──
+      const _cartVisitor = db.website_visitors.find(v =>
+        v.channel_id === cid && (v.session_id === sessionId || (phone && v.phone === phone))
+      );
+      const ATTR_WINDOW_MS = 24 * 60 * 60 * 1000; // 24h attribution window
+      const _camAttr = (() => {
+        if (!_cartVisitor?.last_click_campaign_id) return null;
+        const clickedMs = _cartVisitor.last_click_at ? new Date(_cartVisitor.last_click_at).getTime() : 0;
+        if (Date.now() - clickedMs > ATTR_WINDOW_MS) return null;
+        return String(_cartVisitor.last_click_campaign_id);
+      })();
+
       if (existingIdx >= 0) {
         // Always sync products array to reflect current cart state (including removals)
         db.cart_events[existingIdx].products     = JSON.stringify(productsArr);
@@ -444,6 +461,9 @@ export const trackingController = {
         db.cart_events[existingIdx].product_image = curFirst.image || product_image || db.cart_events[existingIdx].product_image;
         db.cart_events[existingIdx].product_price = curFirst.price || product_price || db.cart_events[existingIdx].product_price;
         db.cart_events[existingIdx].product_url   = curFirst.url   || product_url   || db.cart_events[existingIdx].product_url;
+        if (_camAttr && !db.cart_events[existingIdx].source_campaign_id) {
+          db.cart_events[existingIdx].source_campaign_id = _camAttr;
+        }
       } else {
         db.cart_events.push({
           id: (db.cart_events.length || 0) + 1,
@@ -459,6 +479,7 @@ export const trackingController = {
           recovered:     0,
           created_at:    new Date().toISOString(),
           product_name, product_image, product_url, cart_url, product_price,
+          source_campaign_id: _camAttr || null,
         });
       }
 
@@ -574,6 +595,17 @@ export const trackingController = {
         : null;
 
       if (!existing) {
+        // Campaign attribution: stamp source_campaign_id if visitor clicked a campaign link recently
+        const _purchVisitor = db.website_visitors.find(v =>
+          v.channel_id === cid && (v.session_id === sessionId || (phone && v.phone === phone))
+        );
+        const _purchAttr = (() => {
+          if (!_purchVisitor?.last_click_campaign_id) return null;
+          const clickedMs = _purchVisitor.last_click_at ? new Date(_purchVisitor.last_click_at).getTime() : 0;
+          if (Date.now() - clickedMs > 24 * 60 * 60 * 1000) return null;
+          return String(_purchVisitor.last_click_campaign_id);
+        })();
+
         db.purchase_history.push({
           id:           (db.purchase_history.length || 0) + 1,
           channel_id:   cid,
@@ -584,8 +616,9 @@ export const trackingController = {
           total_amount: totalAmount || 0,
           currency:     currency || null,
           purchased_at: new Date().toISOString(),
+          source_campaign_id: _purchAttr || null,
         });
-        console.log(`[Purchase] Order ${orderId || 'N/A'} — ₹${totalAmount || 0} — phone=${phone || 'unknown'} session=${sessionId}`);
+        console.log(`[Purchase] Order ${orderId || 'N/A'} — ₹${totalAmount || 0} — phone=${phone || 'unknown'} session=${sessionId}${_purchAttr ? ` — attributed to campaign ${_purchAttr}` : ''}`);
       } else {
         console.log(`[Purchase] Duplicate order ${orderId} — skipped`);
       }
@@ -728,34 +761,39 @@ export const trackingController = {
           const prevStatus = v.status;
           upgradeStatus(v, 'product_view');
 
-          // ── Immediate APV re-entry when coming from followup_complete ────────
-          // Don't wait 60s for checkLockedUsers — reset the lock right now so the
-          // 2-min stage 1 delay starts from this moment.
-          if (prevStatus === 'followup_complete' && v.phone) {
+          // ── Immediate APV re-entry ───────────────────────────────────────────
+          // Triggered when:
+          //   product_view_lock → product_view: user viewed a new product while locked
+          //   product_recommendation → product_view: user re-entered after full cycle
+          // Reset the APV lock NOW so the stage-1 timer starts from this moment,
+          // not from when checkLockedUsers next runs (up to 60s later).
+          const wasInAPV = prevStatus === 'product_view_lock' || prevStatus === 'product_recommendation';
+          if (wasInAPV && v.phone) {
             const apvLock = (db.campaign_locks || []).find(l =>
               l.phone === v.phone && l.channel_id === cid &&
               l.campaign_type === 'abandoned_product_view' &&
-              (l.lock_status === 'shifted_recommendation' ||
-               (l.lock_status === 'active' && l.stage >= 1 && l.stage_1_sent_at))
+              ['active', 'shifted_recommendation'].includes(l.lock_status)
             );
             if (apvLock) {
+              const cycleNum = (apvLock.cycle_count || 0) + 1;
               if (!apvLock.send_history) apvLock.send_history = [];
               apvLock.send_history.push({
-                cycle:          (apvLock.cycle_count || 0) + 1,
+                cycle:          cycleNum,
                 product_name:   apvLock.product_name   || '',
                 product_url:    apvLock.product_url    || '',
-                stage1_sent_at: apvLock.stage_1_sent_at,
+                stage1_sent_at: apvLock.stage_1_sent_at || null,
                 stage2_sent_at: apvLock.stage_2_sent_at || null,
                 archived_at:    new Date().toISOString(),
+                exit_reason:    prevStatus === 'product_view_lock' ? 'reentry_new_product' : 'reentry_after_completion',
                 reentry_product: product_name || product_url || '',
               });
-              apvLock.cycle_count = (apvLock.cycle_count || 0) + 1;
-              // Clear sent executions so dedup doesn't block new stage 1
+              apvLock.cycle_count = cycleNum;
+              // Clear dedup records so stage 1 can fire for the new cycle
               db.abandoned_cart_executions = (db.abandoned_cart_executions || []).filter(x =>
                 !(String(x.campaign_id) === String(apvLock.campaign_id) &&
                   x.phone === v.phone && x.status === 'sent')
               );
-              // Reset lock for fresh cycle
+              // Reset lock — FLOW 2b will claim the user (status=product_view) and re-lock
               apvLock.stage           = 0;
               apvLock.stage_1_sent_at = null;
               apvLock.stage_2_sent_at = null;
@@ -767,10 +805,10 @@ export const trackingController = {
               if (product_name)  apvLock.product_name  = product_name;
               if (product_image) apvLock.product_image = product_image;
               if (product_price) apvLock.product_price = product_price;
-              // Reset product_view flags so FLOW 2b sees this as fresh
+              // Reset product_view send flags so FLOW 2b sees this as fresh
               (db.product_views || []).filter(pv => pv.phone === v.phone && pv.channel_id === cid)
                 .forEach(pv => { pv.whatsapp_sent = 0; pv.followup_count = 0; pv.whatsapp_sent_at = null; });
-              console.log(`[APV Re-entry] ${v.phone} followup_complete → product_view — lock reset, reentry_at=NOW, 2-min wait starts`);
+              console.log(`[APV Re-entry] ${v.phone} ${prevStatus} → product_view — lock reset, 2-min wait starts from NOW`);
             }
           }
         }
