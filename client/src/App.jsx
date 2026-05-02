@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { BrowserRouter, Routes, Route, Navigate, useLocation, useNavigate } from "react-router-dom";
-import { AlertTriangle, X, Settings2, ExternalLink } from "lucide-react";
+import { AlertTriangle, X, Settings2, ExternalLink, MessageSquare } from "lucide-react";
+import { io } from 'socket.io-client';
 import Sidebar from "./components/Sidebar";
 import Header  from "./components/Header";
 import Dashboard  from "./pages/Dashboard";
@@ -122,9 +123,33 @@ function PageWrapper({ children }) {
 function AppLayout({ sidebarOpen, setSidebarOpen, credError, setCredError }) {
   const location = useLocation();
   const isChat = location.pathname === '/chat';
+  const navigate = useNavigate();
+  const [inboundNotif, setInboundNotif] = useState(null);
+  const notifTimer = React.useRef(null);
+
+  React.useEffect(() => {
+    const CHANNEL_ID = localStorage.getItem('channelId') || 'demo';
+    const BASE = import.meta.env.VITE_API_URL || '';
+    const s = io(BASE || 'http://localhost:3005', {
+      query: { channelId: CHANNEL_ID },
+      transports: ['websocket', 'polling'],
+    });
+    s.on('new_message', ({ message, conversation }) => {
+      if (message?.direction !== 'in') return;
+      setInboundNotif({
+        name: conversation?.name || message.phone,
+        phone: message.phone,
+        text: message.text || '',
+      });
+      clearTimeout(notifTimer.current);
+      notifTimer.current = setTimeout(() => setInboundNotif(null), 5000);
+    });
+    return () => { s.disconnect(); clearTimeout(notifTimer.current); };
+  }, []);
 
   return (
     <div className="flex h-screen overflow-hidden" style={{ background: '#080d17' }}>
+      <style>{`@keyframes shrink { from { width: 100%; } to { width: 0%; } }`}</style>
       <Sidebar open={sidebarOpen} onToggle={() => setSidebarOpen(o => !o)} />
 
       <div className="flex-1 flex flex-col overflow-hidden min-w-0">
@@ -153,6 +178,40 @@ function AppLayout({ sidebarOpen, setSidebarOpen, credError, setCredError }) {
 
       {credError && (
         <CredErrorPopup msg={credError} onClose={() => setCredError(null)} />
+      )}
+
+      {/* Inbound WhatsApp reply notification */}
+      {inboundNotif && (
+        <div className="fixed bottom-6 right-6 z-[9999] w-72 rounded-2xl shadow-2xl overflow-hidden"
+          style={{ background: '#0f1f35', border: '1px solid rgba(99,102,241,0.3)' }}>
+          <div className="px-4 py-3">
+            <div className="flex items-start justify-between gap-2">
+              <div className="flex items-center gap-2 min-w-0">
+                <div className="w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0"
+                  style={{ background: 'rgba(99,102,241,0.2)' }}>
+                  <MessageSquare size={13} style={{ color: '#818cf8' }} />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-[10px] font-bold text-white truncate">💬 {inboundNotif.name}</p>
+                  <p className="text-[9px] truncate" style={{ color: '#94a3b8' }}>"{inboundNotif.text.slice(0, 55)}{inboundNotif.text.length > 55 ? '…' : ''}"</p>
+                </div>
+              </div>
+              <button onClick={() => setInboundNotif(null)} style={{ color: '#475569', flexShrink: 0 }}>
+                <X size={13} />
+              </button>
+            </div>
+            <button
+              onClick={() => { setInboundNotif(null); navigate('/chat'); }}
+              className="mt-2 w-full py-1.5 rounded-lg text-[9px] font-semibold transition-all"
+              style={{ background: 'rgba(99,102,241,0.2)', color: '#818cf8', border: '1px solid rgba(99,102,241,0.2)' }}>
+              View in Chat →
+            </button>
+          </div>
+          {/* Auto-dismiss progress bar */}
+          <div style={{ height: 2, background: 'rgba(99,102,241,0.15)' }}>
+            <div style={{ height: '100%', background: '#818cf8', animation: 'shrink 5s linear forwards' }} />
+          </div>
+        </div>
       )}
     </div>
   );

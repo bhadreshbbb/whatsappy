@@ -1916,6 +1916,8 @@ export default function Campaigns() {
   const [testOrderResult, setTestOrderResult]   = useState({});
   const [aiInsights, setAiInsights]             = useState(null);
   const [insightsLoading, setInsightsLoading]   = useState(false);
+  const [analyticsModal, setAnalyticsModal] = useState(null); // { campaign, data } | null
+  const [analyticsModalLoading, setAnalyticsModalLoading] = useState(false);
 
   const CH = () => ({ 'x-channel-id': localStorage.getItem('channelId') || 'demo' });
 
@@ -1941,6 +1943,19 @@ export default function Campaigns() {
 
   // Load AI insights on mount
   useState(() => { setTimeout(loadAiInsights, 500); }, []);
+
+  const openAnalytics = async (campaign) => {
+    setAnalyticsModalLoading(true);
+    setAnalyticsModal({ campaign, data: null });
+    try {
+      const data = await campaignsApi.analytics(campaign.id);
+      setAnalyticsModal({ campaign, data });
+    } catch (e) {
+      setAnalyticsModal(null);
+    } finally {
+      setAnalyticsModalLoading(false);
+    }
+  };
 
   const loadAnalytics = async (campaignId) => {
     if (analyticsLoading[campaignId]) return;
@@ -3221,6 +3236,11 @@ export default function Campaigns() {
                   <Send size={13}/>
                 </button>
 
+                {/* Analytics modal */}
+                <button onClick={() => openAnalytics(c)} className="text-[9px] flex items-center gap-1 px-2 py-1 rounded-lg transition-all" style={{ background: 'rgba(99,102,241,0.15)', color: '#818cf8', border: '1px solid rgba(99,102,241,0.2)' }}>
+                  📊 Analytics
+                </button>
+
                 {/* Broadcast now */}
                 <button title="Send to all matched contacts now"
                   onClick={async () => {
@@ -3251,6 +3271,136 @@ export default function Campaigns() {
       {showModal  && <CreateModal         onClose={() => setShowModal(false)}  onCreated={load} />}
       {showCustom && <CustomCampaignModal onClose={() => setShowCustom(false)} onCreated={load} />}
       {flowModal  && <FlowDiagramModal campaign={flowModal} onClose={() => setFlowModal(null)} />}
+
+      {/* Campaign Analytics Modal */}
+      {analyticsModal && (
+        <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto"
+          style={{ background: 'rgba(0,0,0,0.85)', backdropFilter: 'blur(4px)' }}>
+          <div className="w-full max-w-5xl mx-4 my-8 rounded-2xl overflow-hidden"
+            style={{ background: '#0d1929', border: '1px solid rgba(255,255,255,0.08)' }}>
+
+            {/* Header */}
+            <div className="px-6 py-4 flex items-center justify-between"
+              style={{ borderBottom: '1px solid rgba(255,255,255,0.06)', background: 'rgba(99,102,241,0.08)' }}>
+              <div>
+                <h2 className="text-white font-bold text-base">📊 {analyticsModal.campaign.name}</h2>
+                <p className="text-[11px] mt-0.5" style={{ color: '#475569' }}>Campaign Analytics · {analyticsModal.campaign.campaign_type}</p>
+              </div>
+              <button onClick={() => setAnalyticsModal(null)} className="w-8 h-8 rounded-lg flex items-center justify-center transition-all hover:bg-white/10" style={{ color: '#64748b' }}>
+                <X size={16} />
+              </button>
+            </div>
+
+            {analyticsModalLoading || !analyticsModal.data ? (
+              <div className="py-16 text-center" style={{ color: '#475569' }}>Loading analytics…</div>
+            ) : (() => {
+              const { summary, users } = analyticsModal.data;
+              const fmtTime = (iso) => iso ? new Date(iso).toLocaleString('en-IN', { day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit', hour12:true }) : '—';
+              return (
+                <>
+                  {/* Summary Cards */}
+                  <div className="px-6 py-4 grid grid-cols-4 gap-3" style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+                    {[
+                      { label: 'Msg 1 Sent', value: summary.stage1_sent, color: '#4ade80' },
+                      { label: 'Msg 2 Sent', value: summary.stage2_sent, color: '#60a5fa' },
+                      { label: 'Failed', value: summary.total_failed, color: summary.total_failed > 0 ? '#f87171' : '#334155' },
+                      { label: 'Responded', value: `${summary.responded} (${summary.response_rate}%)`, color: '#a78bfa' },
+                      { label: 'Link Clicked', value: summary.clicked, color: '#fbbf24' },
+                      { label: 'Cart Adds', value: summary.cart_adds, color: '#fb923c' },
+                      { label: 'Purchases', value: summary.purchases, color: '#4ade80' },
+                      { label: 'Revenue', value: summary.revenue > 0 ? `₹${summary.revenue.toLocaleString('en-IN')}` : '₹0', color: '#4ade80' },
+                    ].map(({ label, value, color }) => (
+                      <div key={label} className="rounded-xl p-3" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.05)' }}>
+                        <p className="text-[9px] uppercase tracking-wide mb-1" style={{ color: '#475569' }}>{label}</p>
+                        <p className="text-lg font-bold" style={{ color }}>{value}</p>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Per-user table */}
+                  <div className="overflow-x-auto" style={{ maxHeight: '60vh', overflowY: 'auto' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
+                      <thead style={{ position: 'sticky', top: 0, background: '#0d1929', zIndex: 1 }}>
+                        <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+                          {['User', 'Product', 'Msg 1', 'Msg 2', 'Response', 'Clicked', 'Status'].map(h => (
+                            <th key={h} className="text-left px-4 py-2 text-[9px] font-semibold uppercase tracking-wide" style={{ color: '#475569' }}>{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {users.map((u, i) => (
+                          <tr key={i} style={{ borderBottom: '1px solid rgba(255,255,255,0.03)', background: i % 2 === 0 ? 'rgba(255,255,255,0.01)' : 'transparent' }}>
+                            {/* User */}
+                            <td className="px-4 py-2.5">
+                              <p className="text-[10px] font-semibold text-white">{u.name}</p>
+                              <p className="text-[9px] font-mono" style={{ color: '#4ade80' }}>{u.phone}</p>
+                              {u.city && <p className="text-[8px]" style={{ color: '#334155' }}>📍{u.city}</p>}
+                            </td>
+                            {/* Product */}
+                            <td className="px-4 py-2.5 max-w-[140px]">
+                              <p className="text-[9px] truncate" style={{ color: '#94a3b8' }}>{u.product_name || '—'}</p>
+                              {u.product_price && <p className="text-[9px]" style={{ color: '#fbbf24' }}>₹{u.product_price}</p>}
+                            </td>
+                            {/* Msg 1 */}
+                            <td className="px-4 py-2.5">
+                              {u.stage1_status === 'sent'
+                                ? <div><p className="text-[9px]" style={{ color: '#4ade80' }}>✅ Sent</p><p className="text-[8px]" style={{ color: '#334155' }}>{fmtTime(u.stage1_sent_at)}</p></div>
+                                : u.stage1_status === 'failed'
+                                  ? <div><p className="text-[9px]" style={{ color: '#f87171' }}>❌ Failed</p><p className="text-[8px] max-w-[100px] truncate" style={{ color: '#475569' }}>{u.stage1_error || 'API error'}</p></div>
+                                  : <span className="text-[9px]" style={{ color: '#334155' }}>⏳ Pending</span>
+                              }
+                            </td>
+                            {/* Msg 2 */}
+                            <td className="px-4 py-2.5">
+                              {u.stage2_status === 'sent'
+                                ? <div><p className="text-[9px]" style={{ color: '#4ade80' }}>✅ Sent</p><p className="text-[8px]" style={{ color: '#334155' }}>{fmtTime(u.stage2_sent_at)}</p></div>
+                                : u.stage2_status === 'failed'
+                                  ? <div><p className="text-[9px]" style={{ color: '#f87171' }}>❌ Failed</p><p className="text-[8px]" style={{ color: '#475569' }}>{u.stage2_error || 'API error'}</p></div>
+                                  : u.stage1_status === 'sent'
+                                    ? <span className="text-[9px]" style={{ color: '#475569' }}>⏳ Waiting</span>
+                                    : <span className="text-[9px]" style={{ color: '#334155' }}>—</span>
+                              }
+                            </td>
+                            {/* Response */}
+                            <td className="px-4 py-2.5 max-w-[160px]">
+                              {u.responded
+                                ? <div>
+                                    <p className="text-[9px] truncate" style={{ color: '#c084fc' }}>💬 "{u.last_response}"</p>
+                                    <p className="text-[8px]" style={{ color: '#334155' }}>{fmtTime(u.last_response_at)}</p>
+                                    {u.response_count > 1 && <p className="text-[8px]" style={{ color: '#475569' }}>{u.response_count} replies total</p>}
+                                  </div>
+                                : <span className="text-[9px]" style={{ color: '#334155' }}>—</span>
+                              }
+                            </td>
+                            {/* Clicked */}
+                            <td className="px-4 py-2.5 text-center">
+                              <span className="text-[10px]" style={{ color: u.clicked ? '#fbbf24' : '#334155' }}>
+                                {u.clicked ? '✓' : '—'}
+                              </span>
+                            </td>
+                            {/* Status */}
+                            <td className="px-4 py-2.5">
+                              <span className="text-[9px] px-1.5 py-0.5 rounded" style={{
+                                background: u.lock_status === 'purchased' ? 'rgba(74,222,128,0.1)' : u.lock_status === 'cart_added' ? 'rgba(251,146,60,0.1)' : u.lock_status === 'active' ? 'rgba(99,102,241,0.1)' : 'rgba(100,116,139,0.1)',
+                                color: u.lock_status === 'purchased' ? '#4ade80' : u.lock_status === 'cart_added' ? '#fb923c' : u.lock_status === 'active' ? '#818cf8' : '#64748b',
+                              }}>
+                                {u.lock_status}
+                              </span>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    {users.length === 0 && (
+                      <p className="text-center py-8 text-[11px]" style={{ color: '#334155' }}>No users in this campaign yet.</p>
+                    )}
+                  </div>
+                </>
+              );
+            })()}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

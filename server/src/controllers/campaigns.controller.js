@@ -640,44 +640,182 @@ export const campaignsController = {
       const { id } = req.params;
       const channelId = req.headers['x-channel-id'] || 'demo';
 
-      // Visitors who clicked through from this campaign (UTM attribution)
+      const campaign = db.abandoned_cart_campaigns.find(c => String(c.id) === String(id));
+      if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
+
+      // ── All locks for this campaign ───────────────────────────────────────────
+      const locks = (db.campaign_locks || []).filter(l =>
+        l.channel_id === channelId && String(l.campaign_id) === String(id)
+      );
+      const lockedPhones = new Set(locks.map(l => l.phone));
+
+      // ── All executions for this campaign ─────────────────────────────────────
+      const executions = (db.abandoned_cart_executions || [])
+        .filter(e => String(e.campaign_id) === String(id));
+
+      // Helper: get per-phone execution records (stage 1 + stage 2)
+      const getExecs = (phone) => {
+        const ph = executions.filter(x => x.phone === phone)
+          .sort((a, b) => new Date(a.sent_at) - new Date(b.sent_at));
+        const s1 = ph.find(x => (x.stage || 1) === 1) || null;
+        const s2 = ph.find(x => x.stage === 2) || null;
+        return {
+          stage1_status:  s1?.status  || null,
+          stage1_sent_at: s1?.sent_at || null,
+          stage1_error:   s1?.error   || null,
+          stage2_status:  s2?.status  || null,
+          stage2_sent_at: s2?.sent_at || null,
+          stage2_error:   s2?.error   || null,
+        };
+      };
+
+      // ── Inbound chat messages for locked users ────────────────────────────────
+      const inboundByPhone = {};
+      (db.chat_messages || [])
+        .filter(m => m.channel_id === channelId && m.direction === 'in' && lockedPhones.has(m.phone))
+        .forEach(m => {
+          if (!inboundByPhone[m.phone]) inboundByPhone[m.phone] = [];
+          inboundByPhone[m.phone].push(m);
+        });
+
+      // ── UTM-attributed visitors (clicked the link) ────────────────────────────
       const utmVisitors = (db.website_visitors || []).filter(v =>
         v.channel_id === channelId && String(v.utm_campaign) === String(id)
       );
-      const utmPhones   = new Set(utmVisitors.map(v => v.phone).filter(Boolean));
-      const utmSessions = new Set(utmVisitors.map(v => v.session_id).filter(Boolean));
+      const clickedPhones = new Set(utmVisitors.map(v => v.phone).filter(Boolean));
 
-      // Unique clicks: count unique phones (or sessions for anon)
-      const clickPhones = new Set(utmVisitors.filter(v=>v.phone).map(v=>v.phone));
-      const clickAnon   = new Set(utmVisitors.filter(v=>!v.phone).map(v=>v.session_id));
-      const clicks    = clickPhones.size + clickAnon.size;
-      // Unique purchasers by phone
-      const purchases = new Set(utmVisitors.filter(v => v.status === 'purchased' && v.phone).map(v=>v.phone)).size
-                      + utmVisitors.filter(v => v.status === 'purchased' && !v.phone).length;
+      // Also infer click if user has a product_view record AFTER stage 1 was sent
+      // (for campaigns that don't use UTM)
+      const stage1SentByPhone = {};
+      executions.filter(x => (x.stage || 1) === 1 && x.status === 'sent').forEach(x => {
+        stage1SentByPhone[x.phone] = x.sent_at;
+      });
+      (db.product_views || [])
+        .filter(v => v.channel_id === channelId && lockedPhones.has(v.phone))
+        .forEach(v => {
+          const s1At = stage1SentByPhone[v.phone];
+          if (s1At && new Date(v.created_at) > new Date(s1At)) {
+            clickedPhones.add(v.phone);
+          }
+        });
 
-      // Unique cart adders by phone from UTM visitors
-      const cartPhones = new Set(
-        (db.cart_events || []).filter(c =>
-          c.channel_id === channelId &&
-          (utmPhones.has(c.phone) || utmSessions.has(c.session_id))
-        ).map(c => c.phone || c.session_id)
+      // ── Visitor map for enrichment ────────────────────────────────────────────
+      const visitorByPhone = {};
+      (db.website_visitors || [])
+        .filter(v => v.channel_id === channelId && v.phone)
+        .forEach(v => {
+          if (!visitorByPhone[v.phone] || new Date(v.visited_at) > new Date(visitorByPhone[v.phone].visited_at)) {
+            visitorByPhone[v.phone] = v;
+          }
+        });
+
+      // ── Latest product view per phone ─────────────────────────────────────────
+      const latestViewByPhone = {};
+      (db.product_views || [])
+        .filter(v => v.channel_id === channelId)
+        .forEach(v => {
+          const ph = v.phone || (db.website_visitors.find(vis => vis.session_id === v.session_id && vis.channel_id === channelId))?.phone;
+          if (!ph) return;
+          if (!latestViewByPhone[ph] || new Date(v.created_at) > new Date(latestViewByPhone[ph].created_at)) {
+            latestViewByPhone[ph] = { ...v, phone: ph };
+          }
+        });
+
+      // ── Purchases ─────────────────────────────────────────────────────────────
+      const purchasedPhones = new Set(
+        locks.filter(l => l.lock_status === 'purchased').map(l => l.phone)
       );
-      const addToCarts = cartPhones.size;
+      const revenueByPhone = {};
+      locks.forEach(l => {
+        if (l.lock_status === 'purchased' && l.revenue) {
+          revenueByPhone[l.phone] = (revenueByPhone[l.phone] || 0) + parseFloat(l.revenue || 0);
+        }
+      });
+      // Also pull from purchase_history
+      (db.purchase_history || []).filter(p => p.channel_id === channelId && lockedPhones.has(p.phone)).forEach(p => {
+        if (!revenueByPhone[p.phone]) revenueByPhone[p.phone] = 0;
+        revenueByPhone[p.phone] += parseFloat(p.total_amount || 0);
+      });
 
-      // Execution stats
-      const executions  = (db.abandoned_cart_executions || []).filter(e => String(e.campaign_id) === String(id));
-      const totalSent   = executions.filter(e => e.status === 'sent').length;
-      const totalFailed = executions.filter(e => e.status === 'failed').length;
-      const msgClicked  = executions.filter(e => e.clicked).length;
-      const openRate    = totalSent > 0 ? +((msgClicked / totalSent) * 100).toFixed(1) : 0;
-      const cartRate    = clicks    > 0 ? +((addToCarts  / clicks   ) * 100).toFixed(1) : 0;
-      const buyRate     = clicks    > 0 ? +((purchases   / clicks   ) * 100).toFixed(1) : 0;
+      // ── Build all unique phones (from locks + non-locked executions) ──────────
+      const allPhones = new Set([
+        ...locks.map(l => l.phone),
+        ...executions.filter(x => x.phone).map(x => x.phone),
+      ]);
+
+      // ── Per-user data ─────────────────────────────────────────────────────────
+      const users = [...allPhones].map(phone => {
+        const lock     = locks.find(l => l.phone === phone) || null;
+        const visitor  = visitorByPhone[phone] || {};
+        const viewRec  = latestViewByPhone[phone] || null;
+        const execs    = getExecs(phone);
+        const msgs     = inboundByPhone[phone] || [];
+        msgs.sort((a, b) => new Date(b.timestamp || b.created_at) - new Date(a.timestamp || a.created_at));
+        const lastMsg  = msgs[0] || null;
+        const allResps = msgs.map(m => ({ text: m.text || '', at: m.timestamp || m.created_at }));
+
+        return {
+          phone,
+          name:         lock?.name     || visitor.name     || 'Unknown',
+          city:         visitor.city   || '',
+          device:       visitor.device_type || '',
+          product_name: lock?.product_name  || viewRec?.product_name  || '',
+          product_url:  lock?.product_url   || viewRec?.product_url   || '',
+          stage1_status:  execs.stage1_status,
+          stage1_sent_at: execs.stage1_sent_at,
+          stage1_error:   execs.stage1_error,
+          stage2_status:  execs.stage2_status,
+          stage2_sent_at: execs.stage2_sent_at,
+          stage2_error:   execs.stage2_error,
+          responded:       msgs.length > 0,
+          response_count:  msgs.length,
+          last_response:   lastMsg?.text || null,
+          last_response_at: lastMsg ? (lastMsg.timestamp || lastMsg.created_at) : null,
+          all_responses:   allResps,
+          clicked:         clickedPhones.has(phone),
+          lock_status:     lock?.lock_status || 'pending',
+          purchased:       purchasedPhones.has(phone),
+          revenue:         revenueByPhone[phone] || 0,
+          locked_at:       lock?.locked_at || null,
+        };
+      });
+
+      // ── Summary ───────────────────────────────────────────────────────────────
+      const stage1Sent   = executions.filter(e => (e.stage || 1) === 1 && e.status === 'sent').length;
+      const stage2Sent   = executions.filter(e => e.stage === 2 && e.status === 'sent').length;
+      const totalFailed  = executions.filter(e => e.status === 'failed').length;
+      const respondedCount = users.filter(u => u.responded).length;
+      const clickedCount   = users.filter(u => u.clicked).length;
+      const cartAdds       = locks.filter(l => ['cart_added', 'purchased'].includes(l.lock_status)).length;
+      const purchasesCount = locks.filter(l => l.lock_status === 'purchased').length;
+      const totalRevenue   = locks.reduce((s, l) => s + parseFloat(l.revenue || 0), 0);
+      const responseRate   = users.length > 0 ? +((respondedCount / users.length) * 100).toFixed(1) : 0;
+
+      const summary = {
+        total_users:   users.length,
+        stage1_sent:   stage1Sent,
+        stage2_sent:   stage2Sent,
+        total_failed:  totalFailed,
+        responded:     respondedCount,
+        clicked:       clickedCount,
+        cart_adds:     cartAdds,
+        purchases:     purchasesCount,
+        revenue:       totalRevenue,
+        response_rate: responseRate,
+        // legacy fields kept for existing analytics panel
+        total_sent:    stage1Sent,
+        msg_clicked:   clickedCount,
+        clicks:        clickedCount,
+        add_to_carts:  cartAdds,
+        open_rate:     stage1Sent > 0 ? +((clickedCount / stage1Sent) * 100).toFixed(1) : 0,
+        cart_rate:     clickedCount > 0 ? +((cartAdds / clickedCount) * 100).toFixed(1) : 0,
+        buy_rate:      clickedCount > 0 ? +((purchasesCount / clickedCount) * 100).toFixed(1) : 0,
+      };
 
       res.json({
-        clicks, add_to_carts: addToCarts, purchases,
-        total_sent: totalSent, total_failed: totalFailed,
-        msg_clicked: msgClicked,
-        open_rate: openRate, cart_rate: cartRate, buy_rate: buyRate,
+        summary,
+        users: users.slice(0, 200),
+        campaign: { id: campaign.id, name: campaign.name, campaign_type: campaign.campaign_type },
       });
     } catch (error) { next(error); }
   },

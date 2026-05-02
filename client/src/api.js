@@ -35,6 +35,7 @@ export const campaignsApi = {
   send:       (id)           => request(`/campaigns/${id}/send`,      { method:'POST', body: JSON.stringify({}) }),
   sendTest:   (id, phone)   => request(`/campaigns/${id}/send-test`, { method:'POST', body: JSON.stringify({ phone }) }),
   executions: (id)           => request(`/campaigns/${id}/executions`),
+  analytics:  (id)           => request(`/campaigns/${id}/analytics`),
 };
 
 export const templatesApi = {
