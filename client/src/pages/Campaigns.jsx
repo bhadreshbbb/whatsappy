@@ -1930,6 +1930,8 @@ export default function Campaigns() {
   const [audienceMap, setAudienceMap]   = useState({});  // campaignId → { count, audience[] }
   const [audienceLoading, setAudienceLoading] = useState({});
   const [expandedAPVRow, setExpandedAPVRow] = useState(null); // "campaignId-rowIndex"
+  const [editTiming, setEditTiming] = useState(null); // { id, stage1Min, stage2Min, saving }
+
   const [sendResultMap, setSendResultMap] = useState({}); // campaignId → { sent, skipped, errors[] }
   const [testModal, setTestModal] = useState(null);  // { id, name } | null
   const [testPhone, setTestPhone] = useState('');
@@ -2138,6 +2140,21 @@ export default function Campaigns() {
   }), [campaigns]);
 
   useEffect(() => { load(); }, []);
+
+  const saveTimingEdit = async () => {
+    if (!editTiming) return;
+    setEditTiming(p => ({ ...p, saving: true }));
+    try {
+      await campaignsApi.update(editTiming.id, {
+        apv_delay_min:    editTiming.stage1Min,
+        apv_followup_min: editTiming.stage2Min,
+      });
+      await load();
+      setEditTiming(null);
+    } catch (_) {
+      setEditTiming(p => ({ ...p, saving: false }));
+    }
+  };
 
   return (
     <div className="space-y-6">
@@ -2370,6 +2387,25 @@ export default function Campaigns() {
                         ? <Repeat size={10} className="animate-spin"/>
                         : isActive ? '⏸' : '▶'}
                     </button>
+                    {/* APV timing edit button */}
+                    {c.campaign_type === 'abandoned_product_view' && (
+                      <button
+                        onClick={() => setEditTiming(editTiming?.id === c.id ? null : {
+                          id: c.id,
+                          stage1Min: c.apv_delay_min || 2,
+                          stage2Min: c.apv_followup_min || 4,
+                          saving: false,
+                        })}
+                        title="Edit message timing"
+                        className="text-[10px] px-2 py-1.5 rounded-lg font-semibold transition-all"
+                        style={{
+                          background: editTiming?.id === c.id ? 'rgba(6,182,212,0.2)' : 'rgba(6,182,212,0.08)',
+                          border: `1px solid rgba(6,182,212,${editTiming?.id === c.id ? '0.4' : '0.2'})`,
+                          color: '#67e8f9',
+                        }}>
+                        ⏱ {c.apv_delay_min || 2}m / {c.apv_followup_min || 4}m
+                      </button>
+                    )}
                     {/* Delete */}
                     <button
                       onClick={async () => {
@@ -2406,6 +2442,65 @@ export default function Campaigns() {
                   </div>
                 )}
               </div>
+
+              {/* ── APV Timing Edit Panel ── */}
+              {editTiming?.id === c.id && (
+                <div className="px-5 py-4" style={{ background: 'rgba(6,182,212,0.04)', borderBottom: '1px solid rgba(6,182,212,0.15)' }}>
+                  <p className="text-[10px] font-semibold text-cyan-400 mb-3">⏱ Edit Message Timing</p>
+                  <div className="grid grid-cols-2 gap-4">
+                    {/* Stage 1 */}
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-[9px]" style={{ color: '#94a3b8' }}>1st msg — after product view</span>
+                        <span className="text-[10px] font-bold text-cyan-300">{editTiming.stage1Min} min</span>
+                      </div>
+                      <input type="range" min="1" max="60" value={editTiming.stage1Min}
+                        onChange={e => setEditTiming(p => ({ ...p, stage1Min: Number(e.target.value) }))}
+                        className="w-full accent-cyan-400" />
+                      <div className="flex gap-1 mt-1 flex-wrap">
+                        {[1,2,5,10,15,30,60].map(m => (
+                          <button key={m} onClick={() => setEditTiming(p => ({ ...p, stage1Min: m }))}
+                            className="text-[8px] px-1.5 py-0.5 rounded"
+                            style={{ background: editTiming.stage1Min === m ? 'rgba(6,182,212,0.3)' : 'rgba(255,255,255,0.04)', color: editTiming.stage1Min === m ? '#67e8f9' : '#475569' }}>
+                            {m}m
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    {/* Stage 2 */}
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-[9px]" style={{ color: '#94a3b8' }}>2nd msg — after 1st</span>
+                        <span className="text-[10px] font-bold" style={{ color: '#a78bfa' }}>{editTiming.stage2Min} min</span>
+                      </div>
+                      <input type="range" min="1" max="120" value={editTiming.stage2Min}
+                        onChange={e => setEditTiming(p => ({ ...p, stage2Min: Number(e.target.value) }))}
+                        className="w-full accent-purple-400" />
+                      <div className="flex gap-1 mt-1 flex-wrap">
+                        {[2,4,5,10,15,30,60].map(m => (
+                          <button key={m} onClick={() => setEditTiming(p => ({ ...p, stage2Min: m }))}
+                            className="text-[8px] px-1.5 py-0.5 rounded"
+                            style={{ background: editTiming.stage2Min === m ? 'rgba(167,139,250,0.3)' : 'rgba(255,255,255,0.04)', color: editTiming.stage2Min === m ? '#c4b5fd' : '#475569' }}>
+                            {m}m
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex gap-2 mt-3">
+                    <button onClick={saveTimingEdit} disabled={editTiming.saving}
+                      className="flex-1 py-1.5 rounded-lg text-[10px] font-bold transition-all"
+                      style={{ background: 'rgba(6,182,212,0.2)', border: '1px solid rgba(6,182,212,0.4)', color: '#67e8f9', opacity: editTiming.saving ? 0.5 : 1 }}>
+                      {editTiming.saving ? 'Saving...' : '✓ Save Timing'}
+                    </button>
+                    <button onClick={() => setEditTiming(null)}
+                      className="px-4 py-1.5 rounded-lg text-[10px] font-semibold"
+                      style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', color: '#475569' }}>
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
 
               {/* ── Quick Stats Strip ── */}
               <div className="grid grid-cols-4 px-5 py-3" style={{ background: 'rgba(0,0,0,0.2)', borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
