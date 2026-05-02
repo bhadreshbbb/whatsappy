@@ -788,6 +788,11 @@ async function refreshTemplateForSend(db, tpl, channelId) {
 }
 
 async function runAutomation() {
+  // Run lock checker FIRST so re-entries and status resets are visible to FLOW 2b
+  // Without this, a user with product_view status but shifted_recommendation lock
+  // (stage=2) would be blocked by the followup_count>=2 guard in FLOW 2b.
+  await checkLockedUsers().catch(err => console.error('[LockCheck] Error in runAutomation:', err));
+
   const db = getDb();
   const channelId = process.env.CHANNEL_ID || 'demo';
 
@@ -899,10 +904,14 @@ async function runAutomation() {
           const lock    = (db.campaign_locks || []).find(l =>
             l.phone === vis.phone && String(l.campaign_id) === String(cam.id)
           );
-          // Determine stage from lock (reliable) or product_views (fallback)
-          const stageFromLock    = lock ? lock.stage : 0;
-          const followupCount    = stageFromLock || (viewRec?.followup_count || 0);
-          const whatsappSent     = (stageFromLock > 0) || !!(viewRec?.whatsapp_sent);
+          // Determine stage from lock — if lock was reset (re-entry) treat as fresh
+          // A 'shifted_recommendation' lock that hasn't been reset by checkLockedUsers
+          // yet should be treated as fresh since the visitor status is already product_view
+          const lockIsReset = lock && lock.stage === 0 && !lock.stage_1_sent_at;
+          const lockIsStale = lock && ['shifted_recommendation'].includes(lock.lock_status) && lock.stage >= 2;
+          const stageFromLock    = (lockIsReset || lockIsStale) ? 0 : (lock ? lock.stage : 0);
+          const followupCount    = stageFromLock || (lockIsStale ? 0 : (viewRec?.followup_count || 0));
+          const whatsappSent     = (stageFromLock > 0) || (!lockIsStale && !!(viewRec?.whatsapp_sent));
           const whatsappSentAt   = lock?.stage_1_sent_at || viewRec?.whatsapp_sent_at || null;
           return {
             phone:           vis.phone,
