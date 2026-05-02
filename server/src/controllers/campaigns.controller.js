@@ -819,6 +819,23 @@ export const campaignsController = {
 
         const MAX_VIEW_AGE_MIN = 7 * 24 * 60; // 7 days in minutes
 
+        // Helper: get execution records per phone for this campaign
+        const getExecs = (phone) => {
+          const execs = (db.abandoned_cart_executions || [])
+            .filter(x => String(x.campaign_id) === String(id) && x.phone === phone)
+            .sort((a, b) => new Date(b.sent_at) - new Date(a.sent_at));
+          const s1 = execs.find(x => (x.stage || 1) === 1) || null;
+          const s2 = execs.find(x => x.stage === 2) || null;
+          return {
+            stage1_status: s1?.status || null,   // 'sent' | 'failed' | null
+            stage1_error:  s1?.error  || null,
+            stage1_sent_at: s1?.sent_at || null,
+            stage2_status: s2?.status || null,
+            stage2_error:  s2?.error  || null,
+            stage2_sent_at: s2?.sent_at || null,
+          };
+        };
+
         // Locked users — enriched with command center data
         const lockedAudience = locks.map(l => {
           const ct      = contactMap.get(l.phone) || {};
@@ -837,6 +854,7 @@ export const campaignsController = {
             .filter(m => m.phone === l.phone && m.channel_id === channelId && m.direction === 'in')
             .sort((a, b) => new Date(b.timestamp || b.created_at) - new Date(a.timestamp || a.created_at));
           const lastReply = inboundMsgs[0] || null;
+          const execs = getExecs(l.phone);
           return {
             phone: l.phone, name: ct.name || 'Unknown',
             city: ct.city || '', device: ct.device || '',
@@ -849,8 +867,8 @@ export const campaignsController = {
             product_price: l.product_price || viewRec?.product_price || '',
             product_image: l.product_image || viewRec?.product_image || '',
             lock_status: l.lock_status, stage: l.stage || 0,
-            locked_at: l.locked_at, stage_1_sent_at: l.stage_1_sent_at || null,
-            stage_2_sent_at: l.stage_2_sent_at || null,
+            locked_at: l.locked_at, stage_1_sent_at: l.stage_1_sent_at || execs.stage1_sent_at,
+            stage_2_sent_at: l.stage_2_sent_at || execs.stage2_sent_at,
             revenue: purch ? parseFloat(purch.total_amount || 0) : (l.revenue || 0),
             cart_amount: cart?.total_amount || 0,
             followup_count: l.stage || 0,
@@ -860,6 +878,7 @@ export const campaignsController = {
             ready_to_send: minUntilNext === 0, is_locked: true,
             last_response_text: lastReply?.text || null,
             last_response_at: lastReply?.timestamp || lastReply?.created_at || null,
+            ...execs,
           };
         });
 
@@ -874,6 +893,7 @@ export const campaignsController = {
           const minSince = lastAct ? Math.floor((now - new Date(lastAct).getTime()) / 60000) : null;
           // Ignore product views older than 7 days — they are stale
           if (minSince == null || minSince > MAX_VIEW_AGE_MIN) return null;
+          const execs = getExecs(c.phone);
           return {
             phone: c.phone, name: c.name || 'Unknown',
             city: c.city || '', device: c.device || '',
@@ -891,7 +911,8 @@ export const campaignsController = {
             ready_to_send: minSince >= 30,
             is_locked: false,
             last_response_text: null, last_response_at: null,
-            stage_1_sent_at: null, stage_2_sent_at: null, stage2_due_at: null,
+            stage_1_sent_at: execs.stage1_sent_at, stage_2_sent_at: execs.stage2_sent_at, stage2_due_at: null,
+            ...execs,
           };
         }).filter(Boolean);
 

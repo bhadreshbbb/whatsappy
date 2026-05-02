@@ -2545,11 +2545,16 @@ export default function Campaigns() {
 
                       // PENDING — not yet locked, viewing product, 1st msg not sent
                       if (u.lock_status === 'pending') {
-                        if (u.ready_to_send) {
-                          // 30+ min passed → automation sends Stage 1 automatically within ≤1 min
-                          return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(74,222,128,0.15)', color: '#4ade80' }}>🤖 auto-sending 1st msg...</span>;
+                        // Check real execution status first
+                        if (u.stage1_status === 'failed') {
+                          return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(239,68,68,0.15)', color: '#f87171' }}>❌ 1st msg failed</span>;
                         }
-                        // < 30 min — still within inactivity window
+                        if (u.stage1_status === 'sent') {
+                          return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(74,222,128,0.15)', color: '#4ade80' }}>✅ 1st sent</span>;
+                        }
+                        if (u.ready_to_send) {
+                          return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(74,222,128,0.12)', color: '#4ade80' }}>🤖 auto-sending 1st...</span>;
+                        }
                         const waitLeft = mAgo != null ? Math.max(0, 30 - mAgo) : null;
                         return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(100,116,139,0.1)', color: '#64748b' }}>
                           ⏳ 1st msg in {waitLeft != null ? `${waitLeft}m` : '…'}
@@ -2559,20 +2564,18 @@ export default function Campaigns() {
                       // ACTIVE — locked in campaign
                       if (u.lock_status === 'active') {
                         if (u.stage === 0) {
-                          // Re-entered after cart cleared — fresh 30 min wait for Stage 1
                           const waitLeft = mAgo != null ? Math.max(0, 30 - mAgo) : null;
                           return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(251,191,36,0.1)', color: '#fbbf24' }}>
                             🔄 re-entered · 1st msg in {waitLeft != null ? `${waitLeft}m` : '…'}
                           </span>;
                         }
                         if (u.stage === 1) {
-                          // Stage 1 sent — waiting 24h before Stage 2
-                          if (mUntil === 0) return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(74,222,128,0.15)', color: '#4ade80' }}>🤖 auto-sending 2nd msg...</span>;
+                          if (u.stage2_status === 'failed') return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(239,68,68,0.15)', color: '#f87171' }}>✅ 1st sent · ❌ 2nd failed</span>;
+                          if (mUntil === 0) return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(74,222,128,0.12)', color: '#4ade80' }}>🤖 auto-sending 2nd...</span>;
                           return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(99,102,241,0.1)', color: '#818cf8' }}>
                             ✅ 1st sent · 2nd in {fmtCountdown(mUntil)}
                           </span>;
                         }
-                        // stage >= 2 — both sent
                         return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(56,189,248,0.1)', color: '#38bdf8' }}>✅ both msgs sent</span>;
                       }
 
@@ -2724,19 +2727,21 @@ export default function Campaigns() {
 
                                           {/* Stage 1 */}
                                           <div className="flex items-start gap-2">
-                                            <span className="text-[9px] w-16 flex-shrink-0" style={{ color: '#475569' }}>1st msg</span>
-                                            {u.stage_1_sent_at
-                                              ? <span className="text-[9px]" style={{ color: '#a3e635' }}>✅ Sent · {fmtTs(u.stage_1_sent_at)}</span>
-                                              : u.ready_to_send
-                                                ? <span className="text-[9px]" style={{ color: '#fbbf24' }}>📤 Queued — sends on next automation tick (≤1 min)</span>
-                                                : <span className="text-[9px]" style={{ color: '#475569' }}>⏳ Pending — waits for 30 min inactivity · viewed {fmtAgo(u.minutes_since_activity)}</span>
+                                            <span className="text-[9px] w-16 flex-shrink-0 font-medium" style={{ color: '#64748b' }}>1st msg</span>
+                                            {u.stage1_status === 'sent'
+                                              ? <span className="text-[9px]" style={{ color: '#4ade80' }}>✅ Sent · {fmtTs(u.stage1_sent_at || u.stage_1_sent_at)}</span>
+                                              : u.stage1_status === 'failed'
+                                                ? <span className="text-[9px]" style={{ color: '#f87171' }}>❌ Failed — {u.stage1_error || 'WhatsApp API error'} · Retry on next tick</span>
+                                                : u.ready_to_send
+                                                  ? <span className="text-[9px]" style={{ color: '#4ade80' }}>🤖 Automation sending now (every 60s)</span>
+                                                  : <span className="text-[9px]" style={{ color: '#475569' }}>⏳ Waiting · 30 min inactivity needed · viewed {fmtAgo(u.minutes_since_activity)}</span>
                                             }
                                           </div>
 
-                                          {/* User response after Stage 1 */}
-                                          {u.stage_1_sent_at && (
-                                            <div className="flex items-start gap-2 pl-2" style={{ borderLeft: '2px solid rgba(99,102,241,0.3)' }}>
-                                              <span className="text-[9px] w-14 flex-shrink-0" style={{ color: '#475569' }}>reply</span>
+                                          {/* User reply after Stage 1 */}
+                                          {(u.stage1_status === 'sent' || u.stage_1_sent_at) && (
+                                            <div className="flex items-start gap-2 pl-2" style={{ borderLeft: '2px solid rgba(99,102,241,0.2)' }}>
+                                              <span className="text-[9px] w-14 flex-shrink-0" style={{ color: '#475569' }}>user reply</span>
                                               {u.last_response_text
                                                 ? <span className="text-[9px]" style={{ color: '#94a3b8' }}>💬 "{u.last_response_text}" · {fmtTs(u.last_response_at)}</span>
                                                 : <span className="text-[9px]" style={{ color: '#334155' }}>No reply yet</span>
@@ -2745,14 +2750,16 @@ export default function Campaigns() {
                                           )}
 
                                           {/* Stage 2 */}
-                                          {u.stage_1_sent_at && (
+                                          {(u.stage1_status === 'sent' || u.stage_1_sent_at) && (
                                             <div className="flex items-start gap-2">
-                                              <span className="text-[9px] w-16 flex-shrink-0" style={{ color: '#475569' }}>2nd msg</span>
-                                              {u.stage_2_sent_at
-                                                ? <span className="text-[9px]" style={{ color: '#a3e635' }}>✅ Sent · {fmtTs(u.stage_2_sent_at)}</span>
-                                                : u.minutes_until_next_send === 0
-                                                  ? <span className="text-[9px]" style={{ color: '#fbbf24' }}>📤 Queued — sends on next automation tick (≤1 min)</span>
-                                                  : <span className="text-[9px]" style={{ color: '#818cf8' }}>⏳ Scheduled · sends in {fmtCountdown(u.minutes_until_next_send)} · {fmtTs(u.stage2_due_at)}</span>
+                                              <span className="text-[9px] w-16 flex-shrink-0 font-medium" style={{ color: '#64748b' }}>2nd msg</span>
+                                              {u.stage2_status === 'sent'
+                                                ? <span className="text-[9px]" style={{ color: '#4ade80' }}>✅ Sent · {fmtTs(u.stage2_sent_at || u.stage_2_sent_at)}</span>
+                                                : u.stage2_status === 'failed'
+                                                  ? <span className="text-[9px]" style={{ color: '#f87171' }}>❌ Failed — {u.stage2_error || 'WhatsApp API error'}</span>
+                                                  : u.minutes_until_next_send === 0
+                                                    ? <span className="text-[9px]" style={{ color: '#4ade80' }}>🤖 Automation sending now (every 60s)</span>
+                                                    : <span className="text-[9px]" style={{ color: '#818cf8' }}>⏳ Scheduled · sends in {fmtCountdown(u.minutes_until_next_send)}{u.stage2_due_at ? ` · ${fmtTs(u.stage2_due_at)}` : ''}</span>
                                               }
                                             </div>
                                           )}
@@ -2767,6 +2774,9 @@ export default function Campaigns() {
                                               }
                                             </div>
                                           )}
+
+                                          {/* Refresh hint */}
+                                          <p className="text-[8px] mt-0.5" style={{ color: '#1e293b' }}>⟳ auto-refreshes every 60s · click row to collapse</p>
                                         </div>
                                       </td>
                                     </tr>
