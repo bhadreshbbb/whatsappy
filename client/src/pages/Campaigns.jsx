@@ -1921,13 +1921,13 @@ export default function Campaigns() {
 
   const CH = () => ({ 'x-channel-id': localStorage.getItem('channelId') || 'demo' });
 
-  // Auto-refresh open audience panels every 60 seconds
+  // Auto-refresh open audience panels every 20 seconds for near-real-time analytics
   useEffect(() => {
     const openIds = Object.keys(audienceOpen).filter(id => audienceOpen[id]);
     if (!openIds.length) return;
     const interval = setInterval(() => {
       openIds.forEach(id => loadAudience(id));
-    }, 60000);
+    }, 20000);
     return () => clearInterval(interval);
   }, [audienceOpen]);
 
@@ -2645,7 +2645,7 @@ export default function Campaigns() {
                         {/* Header */}
                         <div className="px-3 py-2 flex items-center justify-between" style={{ background: 'rgba(251,191,36,0.05)', borderBottom: '1px solid rgba(251,191,36,0.08)' }}>
                           <span className="text-[10px] font-bold" style={{ color: '#fbbf24' }}>
-                            {aud.count} user{aud.count !== 1 ? 's' : ''} · 🔄 auto-refresh 60s
+                            {aud.count} user{aud.count !== 1 ? 's' : ''} · 🔄 auto-refresh 20s
                           </span>
                           <button onClick={() => loadAudience(c.id)} className="text-[9px] flex items-center gap-1" style={{ color: '#64748b' }}>
                             <Repeat size={9}/> Refresh

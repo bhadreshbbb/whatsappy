@@ -1020,8 +1020,8 @@ export const campaignsController = {
           const purch   = ct._userPurch?.sort((a,b) => new Date(b.created_at)-new Date(a.created_at))[0];
           // Use most recent product view (same logic as automation timer)
           const viewRec = latestViewByPhone[l.phone];
-          // minSince = time since last product view (not last page visit)
-          const lastPVTime = viewRec?.created_at || ct.last_seen;
+          // minSince uses last_seen (visitor.visited_at) — matches automation inactivity check
+          const lastPVTime = ct.last_seen || viewRec?.created_at;
           const minSince = lastPVTime ? Math.floor((now - new Date(lastPVTime).getTime()) / 60000) : null;
           // Compute time until next stage send for locked users
           const stage1Ms   = l.stage_1_sent_at ? new Date(l.stage_1_sent_at).getTime() : null;
@@ -1086,8 +1086,9 @@ export const campaignsController = {
           const viewRec = latestViewByPhone[c.phone];
           if (viewRec?.product_url && !viewRec.product_url.includes(productSlug)) return null;
           if ((viewRec?.followup_count || 0) >= 2) return null;
-          // minSince based on last product view time, not last page visit
-          const lastAct = viewRec?.created_at || c.last_seen;
+          // minSince must match automation's inactivity check: use last_seen (visitor.visited_at)
+          // so the badge countdown is accurate — automation fires when visited_at is 2+ min old
+          const lastAct = c.last_seen || viewRec?.created_at;
           const minSince = lastAct ? Math.floor((now - new Date(lastAct).getTime()) / 60000) : null;
           // Ignore product views older than 7 days — they are stale
           if (minSince == null || minSince > MAX_VIEW_AGE_MIN) return null;

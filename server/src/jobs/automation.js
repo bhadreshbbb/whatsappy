@@ -891,11 +891,11 @@ async function runAutomation() {
         }
 
         // Source of truth: visitors with product_view status
-        // 30-min timer uses latest product_view.created_at (not visitor.visited_at which updates on any page)
         const MAX_VIEW_AGE_MS = 7 * 24 * 60 * 60 * 1000;
         const eligibleVisitors = (db.website_visitors || []).filter(vis => {
           if (vis.channel_id !== channelId || !vis.phone || vis.status !== 'product_view') return false;
-          // Use the most recent product view timestamp for age check
+          // Age check uses product_view created_at (when product was first seen this cycle)
+          // NOT visited_at — that updates on homepage/listing visits too
           const latestPV = latestViewByPhoneAPV[vis.phone];
           const lastAct = latestPV?.created_at || vis.visited_at || vis.created_at;
           if (!lastAct || (now - new Date(lastAct).getTime()) > MAX_VIEW_AGE_MS) return false;
@@ -945,10 +945,12 @@ async function runAutomation() {
           if (isInitial) {
             // Lock guard: stage 1 already sent
             if (v._lock && v._lock.stage >= 1) return false;
-            // 30-min inactivity: use the most recent product_view timestamp
-            // (visited_at updates on any page visit, not just product views)
-            const lastProductView = v._viewRec?.created_at || v._visitor?.visited_at || v.created_at;
-            if ((now - new Date(lastProductView).getTime()) < THIRTY_MIN_MS) return false;
+            // Inactivity check: use visitor.visited_at (last page ping, updates every ~15s
+            // while user is on site). NOT viewRec.created_at — tracker pings create new
+            // product_view records continuously, keeping created_at fresh and preventing fire.
+            // visited_at stops updating when user LEAVES → true inactivity detector.
+            const lastActivity = v._visitor?.visited_at || v._viewRec?.created_at || v.created_at;
+            if ((now - new Date(lastActivity).getTime()) < THIRTY_MIN_MS) return false;
           }
           if (isFollowup) {
             // TEST: 5 min gap (prod: 24h → hoursSince < 24)
