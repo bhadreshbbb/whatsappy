@@ -883,10 +883,10 @@ async function runAutomation() {
             if ((now - new Date(lastProductView).getTime()) < THIRTY_MIN_MS) return false;
           }
           if (isFollowup) {
-            // 24h gap from stage 1
+            // TEST: 5 min gap (prod: 24h → hoursSince < 24)
             const sentAt = v._lock?.stage_1_sent_at || v.whatsapp_sent_at;
-            const hoursSince = sentAt ? (now - new Date(sentAt).getTime()) / 3600000 : Infinity;
-            if (hoursSince < 24) return false;
+            const minsSince = sentAt ? (now - new Date(sentAt).getTime()) / 60000 : Infinity;
+            if (minsSince < 5) return false;
             // Skip if user converted (cart added / purchased)
             if (v._lock && v._lock.lock_status !== 'active') return false;
           }

@@ -866,7 +866,7 @@ export const campaignsController = {
           const minSince = lastPVTime ? Math.floor((now - new Date(lastPVTime).getTime()) / 60000) : null;
           // Compute time until next stage send for locked users
           const stage1Ms   = l.stage_1_sent_at ? new Date(l.stage_1_sent_at).getTime() : null;
-          const stage2DueMs = stage1Ms ? stage1Ms + 24 * 60 * 60 * 1000 : null;
+          const stage2DueMs = stage1Ms ? stage1Ms + 5 * 60 * 1000 : null; // TEST: 5 min (prod: 24 * 60 * 60 * 1000)
           const minUntilNext = (l.lock_status === 'active' && l.stage === 1 && stage2DueMs)
             ? Math.max(0, Math.floor((stage2DueMs - now) / 60000))
             : null;
@@ -919,7 +919,7 @@ export const campaignsController = {
           const execs = getExecs(c.phone);
           // Compute stage 2 countdown even for pending users whose stage 1 exec exists
           const s1SentMs = execs.stage1_sent_at ? new Date(execs.stage1_sent_at).getTime() : null;
-          const s2DueMs  = s1SentMs ? s1SentMs + 24 * 60 * 60 * 1000 : null;
+          const s2DueMs  = s1SentMs ? s1SentMs + 5 * 60 * 1000 : null; // TEST: 5 min (prod: 24 * 60 * 60 * 1000)
           const minUntilNext = (s2DueMs && execs.stage1_status === 'sent' && !execs.stage2_sent_at)
             ? Math.max(0, Math.floor((s2DueMs - now) / 60000))
             : null;
