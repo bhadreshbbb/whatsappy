@@ -379,20 +379,19 @@
       console.groupEnd();
     });
 
-    // Auto-track product view if on a product page and product data found
+    // Auto-track product view if on a product page.
+    // Always track even without auto-detected name — server scrapes missing fields
+    // in the background. Skipping here means the user is never targetable if their
+    // store's page doesn't have JSON-LD/OpenGraph but still has a product URL.
     if (pageType === 'product') {
       var auto = captureProductFromPage();
-      if (auto && auto.name) {
-        // Store for use when identify() is called
-        window._wwAutoProduct = auto;
-        // Track product view automatically
-        WhatsWay.trackProductView({
-          product_name:  auto.name,
-          product_image: auto.image,
-          product_url:   auto.url,
-          product_price: auto.price,
-        });
-      }
+      window._wwAutoProduct = (auto && auto.name) ? auto : null;
+      WhatsWay.trackProductView({
+        product_name:  (auto && auto.name)  ? auto.name  : document.title,
+        product_image: (auto && auto.image) ? auto.image : '',
+        product_url:   (auto && auto.url)   ? auto.url   : window.location.href,
+        product_price: (auto && auto.price) ? auto.price : '',
+      });
     }
   }
 

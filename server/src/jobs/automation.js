@@ -320,6 +320,10 @@ async function checkLockedUsers() {
         (db.product_views || []).filter(v => v.phone === lock.phone && v.channel_id === channelId)
           .forEach(v => { v.whatsapp_sent = 0; v.followup_count = 0; v.whatsapp_sent_at = null; });
 
+        // Stamp when re-entry was detected so FLOW 2b can start the stage 1 timer
+        // from THIS moment (not from the old product_view created_at which is already stale)
+        lock.reentry_at = new Date().toISOString();
+
         // CRITICAL: reset visitor status back to product_view
         // After stage 2, visitor was upgraded to followup_complete.
         // Automation FLOW 2b only picks up status=product_view, so without
@@ -911,19 +915,13 @@ async function runAutomation() {
           const lock    = (db.campaign_locks || []).find(l =>
             l.phone === vis.phone && String(l.campaign_id) === String(cam.id)
           );
-          // Determine stage from lock — treat as fresh when lock was reset OR is stale
-          // lockIsReset: re-entry already processed by checkLockedUsers (stage cleared to 0)
-          // lockIsStale: both msgs sent (active stage>=2 OR shifted_recommendation)
-          //   visitor has product_view status → checkLockedUsers may not have run yet
-          //   treat as fresh so dedup-cleared user can get stage 1 again
-          const lockIsReset = lock && lock.stage === 0 && !lock.stage_1_sent_at;
-          const lockIsStale = lock && lock.stage >= 2 && (
-            lock.lock_status === 'shifted_recommendation' ||
-            lock.lock_status === 'active'   // active stage=2: between stage2 send and shifted window
-          );
-          const stageFromLock = (lockIsReset || lockIsStale) ? 0 : (lock ? lock.stage : 0);
-          const followupCount = stageFromLock || (lockIsStale ? 0 : (viewRec?.followup_count || 0));
-          const whatsappSent  = (stageFromLock > 0) || (!lockIsStale && !lockIsReset && !!(viewRec?.whatsapp_sent));
+          // Stage/sent state comes directly from lock + product_views flags.
+          // checkLockedUsers (runs before this in runAutomation) resets both on re-entry:
+          //   lock.stage=0, stage_1_sent_at=null, lock.reentry_at=NOW,
+          //   viewRec.whatsapp_sent=0, viewRec.followup_count=0
+          const stageFromLock = lock ? lock.stage : 0;
+          const followupCount = stageFromLock > 0 ? stageFromLock : (viewRec?.followup_count || 0);
+          const whatsappSent  = stageFromLock > 0 || !!(viewRec?.whatsapp_sent);
           const whatsappSentAt   = lock?.stage_1_sent_at || viewRec?.whatsapp_sent_at || null;
           return {
             phone:           vis.phone,
@@ -953,10 +951,14 @@ async function runAutomation() {
           if (isInitial) {
             // Lock guard: stage 1 already sent
             if (v._lock && v._lock.stage >= 1) return false;
-            // Timer from product VIEW time (viewRec.created_at = when page first loaded).
-            // This is set once per visit and does NOT update with subsequent pings.
-            // Fallback to visited_at only if no product_view record exists.
-            const productViewTime = v._viewRec?.created_at || v._visitor?.visited_at || v.created_at;
+            // Timer anchor: for re-entered users (lockIsReset), use lock.reentry_at so the
+            // 2-min delay is counted from when re-entry was detected — NOT the old product_view
+            // created_at which is already stale (5+ min ago) and would fire immediately.
+            // For first-time users, use product_view created_at (set once on page load).
+            const lockIsReset = v._lock && v._lock.stage === 0 && !v._lock.stage_1_sent_at;
+            const productViewTime = (lockIsReset && v._lock?.reentry_at)
+              ? v._lock.reentry_at
+              : (v._viewRec?.created_at || v._visitor?.visited_at || v.created_at);
             if ((now - new Date(productViewTime).getTime()) < STAGE1_DELAY_MS) return false;
           }
           if (isFollowup) {
@@ -969,9 +971,8 @@ async function runAutomation() {
           }
 
           // Cart has priority — abandoned_cart campaign handles those users
-          const productInCart = (db.cart_events || []).some(c => {
+          const productInCart = v.product_url && (db.cart_events || []).some(c => {
             if (c.phone !== v.phone || c.recovered || c.channel_id !== channelId) return false;
-            if (!v.product_url) return true; // no URL to compare → assume in cart
             if (c.product_url && c.product_url === v.product_url) return true;
             try {
               const prods = JSON.parse(c.products || '[]');

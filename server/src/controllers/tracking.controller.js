@@ -661,6 +661,7 @@ export const trackingController = {
         const chSettings = settingsRow ? (() => { try { return JSON.parse(settingsRow.settings || '{}'); } catch(_) { return {}; } })() : {};
         const productSlug = (chSettings.product_url_slug || '/products').replace(/\/+$/, '');
         if (product_url && productSlug && !product_url.includes(productSlug)) {
+          console.warn(`[Track] Product view SKIPPED — URL "${product_url}" does not contain slug "${productSlug}". Update product_url_slug in Settings if this is a real product page.`);
           return res.json({ success: true, skipped: true, reason: 'URL does not match product_url_slug' });
         }
       }
