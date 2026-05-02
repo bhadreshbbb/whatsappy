@@ -872,7 +872,10 @@ async function runAutomation() {
         const settingsRow = (db.channel_settings || []).find(s => s.channel_id === channelId);
         const channelSettings = settingsRow ? (() => { try { return JSON.parse(settingsRow.settings || '{}'); } catch(_) { return {}; } })() : {};
         const productSlug = channelSettings.product_url_slug || '/products';
-        const THIRTY_MIN_MS = 2 * 60 * 1000; // TEST: 2 min (prod: 30 * 60 * 1000)
+        // Stage 1 delay: from campaign setting (apv_delay_min), fallback to 2 min test default
+        const STAGE1_DELAY_MS = (cam.apv_delay_min || 2) * 60 * 1000;
+        // Stage 2 gap: from campaign setting (apv_followup_min), fallback to 4 min test default
+        const STAGE2_GAP_MIN  = cam.apv_followup_min || 4;
         const now = Date.now();
 
         // Build MOST RECENT product_view per phone
@@ -950,18 +953,17 @@ async function runAutomation() {
           if (isInitial) {
             // Lock guard: stage 1 already sent
             if (v._lock && v._lock.stage >= 1) return false;
-            // Inactivity check: use visitor.visited_at (last page ping, updates every ~15s
-            // while user is on site). NOT viewRec.created_at — tracker pings create new
-            // product_view records continuously, keeping created_at fresh and preventing fire.
-            // visited_at stops updating when user LEAVES → true inactivity detector.
-            const lastActivity = v._visitor?.visited_at || v._viewRec?.created_at || v.created_at;
-            if ((now - new Date(lastActivity).getTime()) < THIRTY_MIN_MS) return false;
+            // Timer from product VIEW time (viewRec.created_at = when page first loaded).
+            // This is set once per visit and does NOT update with subsequent pings.
+            // Fallback to visited_at only if no product_view record exists.
+            const productViewTime = v._viewRec?.created_at || v._visitor?.visited_at || v.created_at;
+            if ((now - new Date(productViewTime).getTime()) < STAGE1_DELAY_MS) return false;
           }
           if (isFollowup) {
-            // TEST: 5 min gap (prod: 24h → hoursSince < 24)
+            // Gap from stage 1: use campaign's apv_followup_min (default 4 min test / 24h prod)
             const sentAt = v._lock?.stage_1_sent_at || v.whatsapp_sent_at;
             const minsSince = sentAt ? (now - new Date(sentAt).getTime()) / 60000 : Infinity;
-            if (minsSince < 5) return false;
+            if (minsSince < STAGE2_GAP_MIN) return false;
             // Skip if user converted (cart added / purchased)
             if (v._lock && v._lock.lock_status !== 'active') return false;
           }

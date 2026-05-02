@@ -72,6 +72,8 @@ export const campaignsController = {
         template_ids: templateIds,
         meta_template_id: metaTemplateId,
         stage_vars: b.stage_vars || null,   // { s1: { v1, v2 }, s2: { v1, v2 } } for abandoned_product_view
+        apv_delay_min:    b.apv_delay_min    != null ? Number(b.apv_delay_min)    : null, // APV: mins before 1st msg
+        apv_followup_min: b.apv_followup_min != null ? Number(b.apv_followup_min) : null, // APV: mins gap before 2nd msg
         schedule_type: 'delayed',
         delay_hours: delayHours,
         run_times: runTimes,
@@ -110,6 +112,8 @@ export const campaignsController = {
         template_ids:     template_ids ?? existing.template_ids,
         meta_template_id: req.body.meta_template_id !== undefined ? (req.body.meta_template_id || null) : existing.meta_template_id,
         delay_hours:      delayHours ?? existing.delay_hours,
+        apv_delay_min:    req.body.apv_delay_min    != null ? Number(req.body.apv_delay_min)    : existing.apv_delay_min,
+        apv_followup_min: req.body.apv_followup_min != null ? Number(req.body.apv_followup_min) : existing.apv_followup_min,
         is_active:        isActive !== undefined ? (isActive ? 1 : 0) : existing.is_active,
         updated_at:       new Date().toISOString()
       };
@@ -1025,7 +1029,8 @@ export const campaignsController = {
           const minSince = lastPVTime ? Math.floor((now - new Date(lastPVTime).getTime()) / 60000) : null;
           // Compute time until next stage send for locked users
           const stage1Ms   = l.stage_1_sent_at ? new Date(l.stage_1_sent_at).getTime() : null;
-          const stage2DueMs = stage1Ms ? stage1Ms + 5 * 60 * 1000 : null; // TEST: 5 min (prod: 24 * 60 * 60 * 1000)
+          const followupMs = (campaign.apv_followup_min || 4) * 60 * 1000;
+          const stage2DueMs = stage1Ms ? stage1Ms + followupMs : null;
           const minUntilNext = (l.lock_status === 'active' && l.stage === 1 && stage2DueMs)
             ? Math.max(0, Math.floor((stage2DueMs - now) / 60000))
             : null;
@@ -1095,10 +1100,12 @@ export const campaignsController = {
           const execs = getExecs(c.phone);
           // Compute stage 2 countdown even for pending users whose stage 1 exec exists
           const s1SentMs = execs.stage1_sent_at ? new Date(execs.stage1_sent_at).getTime() : null;
-          const s2DueMs  = s1SentMs ? s1SentMs + 5 * 60 * 1000 : null; // TEST: 5 min (prod: 24 * 60 * 60 * 1000)
+          const pendingFollowupMs = (campaign.apv_followup_min || 4) * 60 * 1000;
+          const s2DueMs  = s1SentMs ? s1SentMs + pendingFollowupMs : null;
           const minUntilNext = (s2DueMs && execs.stage1_status === 'sent' && !execs.stage2_sent_at)
             ? Math.max(0, Math.floor((s2DueMs - now) / 60000))
             : null;
+          const stage1DelayMin = campaign.apv_delay_min || 2;
           return {
             phone: c.phone, name: c.name || 'Unknown',
             city: c.city || '', device: c.device || '',
@@ -1114,7 +1121,8 @@ export const campaignsController = {
             followup_count: viewRec?.followup_count || 0,
             minutes_since_activity: minSince,
             minutes_until_next_send: minUntilNext,
-            ready_to_send: minSince >= 2 && execs.stage1_status !== 'sent', // TEST: 2 min (prod: 30)
+            apv_delay_min: stage1DelayMin,
+            ready_to_send: minSince >= stage1DelayMin && execs.stage1_status !== 'sent',
             is_locked: false,
             last_response_text: null, last_response_at: null,
             stage_1_sent_at: execs.stage1_sent_at, stage_2_sent_at: execs.stage2_sent_at,

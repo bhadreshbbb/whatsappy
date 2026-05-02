@@ -278,6 +278,8 @@ function CreateModal({ onClose, onCreated }) {
   const [templateIds, setTplIds] = useState(["", "", "", ""]); // 4-Stage Selectable templates
   const [previewStage, setPreviewStage] = useState(1); // Current stage being previewed
   const [delayHrs, setDelay] = useState(1);
+  const [apvStage1Min, setApvStage1Min] = useState(2);   // APV: minutes before 1st msg
+  const [apvStage2Min, setApvStage2Min] = useState(4);   // APV: minutes gap before 2nd msg
   const [templates, setTemplates] = useState([]);
   const [metaTemplates, setMetaTemplates] = useState([]);   // approved carousel Meta templates
   const [metaTemplateId, setMetaTplId] = useState("");      // selected Meta template id
@@ -460,6 +462,8 @@ function CreateModal({ onClose, onCreated }) {
         meta_template_id: metaTemplateId || null,
         stage_vars: type.singleProductOnly ? stageVars : null,
         delay_hours: delayHrs,
+        apv_delay_min:    type.singleProductOnly ? Number(apvStage1Min) : null,
+        apv_followup_min: type.singleProductOnly ? Number(apvStage2Min) : null,
         is_active: true,
         filters: audRules.length > 0 ? JSON.stringify({ logic: 'AND', rules: audRules }) : null,
       });
@@ -1101,24 +1105,48 @@ function CreateModal({ onClose, onCreated }) {
                 ) : type?.singleProductOnly ? (
                   <div className="p-4 rounded-2xl" style={{ background: 'rgba(6,182,212,0.04)', border: '1px solid rgba(6,182,212,0.2)' }}>
                     <label className="text-xs font-semibold text-cyan-400 flex items-center gap-2 mb-3">
-                      <Clock size={13} /> Automation Schedule — Fixed
+                      <Clock size={13} /> Message Timing — Configurable
                     </label>
-                    <div className="space-y-2">
-                      <div className="flex items-center gap-3 px-3 py-2 rounded-xl" style={{ background: 'rgba(6,182,212,0.08)', border: '1px solid rgba(6,182,212,0.15)' }}>
-                        <span className="text-base">⏱️</span>
-                        <div>
-                          <p className="text-xs font-bold text-cyan-300">Stage 1 — 30 minutes</p>
-                          <p className="text-[10px]" style={{ color: '#64748b' }}>First message sent after 30 min of inactivity since product view</p>
+                    <div className="space-y-3">
+                      {/* Stage 1 delay */}
+                      <div className="p-3 rounded-xl" style={{ background: 'rgba(6,182,212,0.08)', border: '1px solid rgba(6,182,212,0.15)' }}>
+                        <div className="flex items-center justify-between mb-1.5">
+                          <p className="text-xs font-bold text-cyan-300">⏱ 1st Message — after product view</p>
+                          <span className="text-xs font-bold text-cyan-300">{apvStage1Min} min</span>
+                        </div>
+                        <input type="range" min="1" max="60" value={apvStage1Min}
+                          onChange={e => setApvStage1Min(Number(e.target.value))}
+                          className="w-full accent-cyan-400" />
+                        <div className="flex justify-between mt-1">
+                          {[1,2,5,10,15,30,60].map(m => (
+                            <button key={m} onClick={() => setApvStage1Min(m)}
+                              className="text-[9px] px-1.5 py-0.5 rounded"
+                              style={{ background: apvStage1Min === m ? 'rgba(6,182,212,0.3)' : 'rgba(255,255,255,0.04)', color: apvStage1Min === m ? '#67e8f9' : '#475569' }}>
+                              {m}m
+                            </button>
+                          ))}
                         </div>
                       </div>
-                      <div className="flex items-center gap-3 px-3 py-2 rounded-xl" style={{ background: 'rgba(167,139,250,0.08)', border: '1px solid rgba(167,139,250,0.15)' }}>
-                        <span className="text-base">🔄</span>
-                        <div>
-                          <p className="text-xs font-bold" style={{ color: '#a78bfa' }}>Stage 2 — 24 hours later</p>
-                          <p className="text-[10px]" style={{ color: '#64748b' }}>Follow-up message sent 24h after Stage 1 if no action taken</p>
+                      {/* Stage 2 gap */}
+                      <div className="p-3 rounded-xl" style={{ background: 'rgba(167,139,250,0.08)', border: '1px solid rgba(167,139,250,0.15)' }}>
+                        <div className="flex items-center justify-between mb-1.5">
+                          <p className="text-xs font-bold" style={{ color: '#a78bfa' }}>🔄 2nd Message — after 1st</p>
+                          <span className="text-xs font-bold" style={{ color: '#a78bfa' }}>{apvStage2Min} min</span>
+                        </div>
+                        <input type="range" min="1" max="120" value={apvStage2Min}
+                          onChange={e => setApvStage2Min(Number(e.target.value))}
+                          className="w-full accent-purple-400" />
+                        <div className="flex justify-between mt-1">
+                          {[2,4,5,10,15,30,60].map(m => (
+                            <button key={m} onClick={() => setApvStage2Min(m)}
+                              className="text-[9px] px-1.5 py-0.5 rounded"
+                              style={{ background: apvStage2Min === m ? 'rgba(167,139,250,0.3)' : 'rgba(255,255,255,0.04)', color: apvStage2Min === m ? '#c4b5fd' : '#475569' }}>
+                              {m}m
+                            </button>
+                          ))}
                         </div>
                       </div>
-                      <p className="text-[10px] mt-1" style={{ color: '#475569' }}>If user adds to cart — automatically exits this campaign and enters Abandoned Cart flow.</p>
+                      <p className="text-[10px]" style={{ color: '#475569' }}>If user adds to cart → exits APV, enters Abandoned Cart campaign automatically.</p>
                     </div>
                   </div>
                 ) : (
@@ -2572,7 +2600,7 @@ export default function Campaigns() {
                         if (u.ready_to_send) {
                           return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(74,222,128,0.12)', color: '#4ade80' }}>🤖 auto-sending 1st...</span>;
                         }
-                        const waitLeft = mAgo != null ? Math.max(0, 2 - mAgo) : null;
+                        const waitLeft = mAgo != null ? Math.max(0, (u.apv_delay_min || 2) - mAgo) : null;
                         return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(100,116,139,0.1)', color: '#64748b' }}>
                           ⏳ 1st msg in {waitLeft != null ? `${waitLeft}m` : '…'}
                         </span>;
@@ -2581,7 +2609,7 @@ export default function Campaigns() {
                       // ACTIVE — locked in campaign
                       if (u.lock_status === 'active') {
                         if (u.stage === 0) {
-                          const waitLeft = mAgo != null ? Math.max(0, 2 - mAgo) : null;
+                          const waitLeft = mAgo != null ? Math.max(0, (u.apv_delay_min || 2) - mAgo) : null;
                           return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(251,191,36,0.1)', color: '#fbbf24' }}>
                             🔄 re-entered · 1st msg in {waitLeft != null ? `${waitLeft}m` : '…'}
                           </span>;
