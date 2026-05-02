@@ -938,7 +938,7 @@ export const campaignsController = {
             followup_count: viewRec?.followup_count || 0,
             minutes_since_activity: minSince,
             minutes_until_next_send: minUntilNext,
-            ready_to_send: minSince >= 30 && execs.stage1_status !== 'sent',
+            ready_to_send: minSince >= 2 && execs.stage1_status !== 'sent', // TEST: 2 min (prod: 30)
             is_locked: false,
             last_response_text: null, last_response_at: null,
             stage_1_sent_at: execs.stage1_sent_at, stage_2_sent_at: execs.stage2_sent_at,

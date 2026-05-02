@@ -2557,7 +2557,7 @@ export default function Campaigns() {
                         if (u.ready_to_send) {
                           return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(74,222,128,0.12)', color: '#4ade80' }}>🤖 auto-sending 1st...</span>;
                         }
-                        const waitLeft = mAgo != null ? Math.max(0, 30 - mAgo) : null;
+                        const waitLeft = mAgo != null ? Math.max(0, 2 - mAgo) : null;
                         return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(100,116,139,0.1)', color: '#64748b' }}>
                           ⏳ 1st msg in {waitLeft != null ? `${waitLeft}m` : '…'}
                         </span>;
@@ -2566,7 +2566,7 @@ export default function Campaigns() {
                       // ACTIVE — locked in campaign
                       if (u.lock_status === 'active') {
                         if (u.stage === 0) {
-                          const waitLeft = mAgo != null ? Math.max(0, 30 - mAgo) : null;
+                          const waitLeft = mAgo != null ? Math.max(0, 2 - mAgo) : null;
                           return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(251,191,36,0.1)', color: '#fbbf24' }}>
                             🔄 re-entered · 1st msg in {waitLeft != null ? `${waitLeft}m` : '…'}
                           </span>;

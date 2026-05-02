@@ -808,7 +808,7 @@ async function runAutomation() {
         const settingsRow = (db.channel_settings || []).find(s => s.channel_id === channelId);
         const channelSettings = settingsRow ? (() => { try { return JSON.parse(settingsRow.settings || '{}'); } catch(_) { return {}; } })() : {};
         const productSlug = channelSettings.product_url_slug || '/products';
-        const THIRTY_MIN_MS = 30 * 60 * 1000;
+        const THIRTY_MIN_MS = 2 * 60 * 1000; // TEST: 2 min (prod: 30 * 60 * 1000)
         const now = Date.now();
 
         // Build MOST RECENT product_view per phone
