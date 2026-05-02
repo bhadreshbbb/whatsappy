@@ -908,14 +908,19 @@ async function runAutomation() {
           const lock    = (db.campaign_locks || []).find(l =>
             l.phone === vis.phone && String(l.campaign_id) === String(cam.id)
           );
-          // Determine stage from lock — if lock was reset (re-entry) treat as fresh
-          // A 'shifted_recommendation' lock that hasn't been reset by checkLockedUsers
-          // yet should be treated as fresh since the visitor status is already product_view
+          // Determine stage from lock — treat as fresh when lock was reset OR is stale
+          // lockIsReset: re-entry already processed by checkLockedUsers (stage cleared to 0)
+          // lockIsStale: both msgs sent (active stage>=2 OR shifted_recommendation)
+          //   visitor has product_view status → checkLockedUsers may not have run yet
+          //   treat as fresh so dedup-cleared user can get stage 1 again
           const lockIsReset = lock && lock.stage === 0 && !lock.stage_1_sent_at;
-          const lockIsStale = lock && ['shifted_recommendation'].includes(lock.lock_status) && lock.stage >= 2;
-          const stageFromLock    = (lockIsReset || lockIsStale) ? 0 : (lock ? lock.stage : 0);
-          const followupCount    = stageFromLock || (lockIsStale ? 0 : (viewRec?.followup_count || 0));
-          const whatsappSent     = (stageFromLock > 0) || (!lockIsStale && !!(viewRec?.whatsapp_sent));
+          const lockIsStale = lock && lock.stage >= 2 && (
+            lock.lock_status === 'shifted_recommendation' ||
+            lock.lock_status === 'active'   // active stage=2: between stage2 send and shifted window
+          );
+          const stageFromLock = (lockIsReset || lockIsStale) ? 0 : (lock ? lock.stage : 0);
+          const followupCount = stageFromLock || (lockIsStale ? 0 : (viewRec?.followup_count || 0));
+          const whatsappSent  = (stageFromLock > 0) || (!lockIsStale && !lockIsReset && !!(viewRec?.whatsapp_sent));
           const whatsappSentAt   = lock?.stage_1_sent_at || viewRec?.whatsapp_sent_at || null;
           return {
             phone:           vis.phone,
