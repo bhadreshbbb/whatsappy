@@ -207,7 +207,8 @@ async function checkLockedUsers() {
   let changed = false;
 
   for (const lock of db.campaign_locks) {
-    if (lock.channel_id !== channelId || lock.lock_status !== 'active') continue;
+    // Process both active AND cart_added locks so we catch cart-cleared re-entry
+    if (lock.channel_id !== channelId || !['active', 'cart_added'].includes(lock.lock_status)) continue;
 
     const visitor = db.website_visitors.find(v => v.phone === lock.phone && v.channel_id === channelId);
     if (!visitor) continue;
@@ -215,20 +216,20 @@ async function checkLockedUsers() {
     const currStatus = visitor.status;
     lock.last_status_check = new Date().toISOString();
 
-    // Status changed → update lock
+    // ── Status transition → update lock ────────────────────────────────────────
     if (currStatus !== lock.last_known_status) {
       const prevStatus = lock.last_known_status;
       lock.last_known_status = currStatus;
       changed = true;
       console.log(`[LockCheck] ${lock.phone}: ${prevStatus} → ${currStatus}`);
 
-      if (currStatus === 'abandoned_cart' || currStatus === 'abandoned_checkout') {
+      if ((currStatus === 'abandoned_cart' || currStatus === 'abandoned_checkout') && lock.lock_status === 'active') {
         lock.lock_status   = 'cart_added';
         lock.cart_added_at = new Date().toISOString();
         lock.unlock_reason = 'user_added_to_cart';
         const cartEvt = (db.cart_events || []).find(c => c.phone === lock.phone && !c.recovered && c.channel_id === channelId);
         if (cartEvt) lock.cart_amount = parseFloat(cartEvt.total_amount) || 0;
-        console.log(`[LockCheck] ✓ ${lock.phone} added to cart (₹${lock.cart_amount || 0}) — unlocked from product view campaign`);
+        console.log(`[LockCheck] ✓ ${lock.phone} added to cart (₹${lock.cart_amount || 0}) — paused from APV`);
 
       } else if (currStatus === 'purchased') {
         lock.lock_status   = 'purchased';
@@ -240,16 +241,48 @@ async function checkLockedUsers() {
         if (purchase) lock.revenue = parseFloat(purchase.total_amount) || 0;
         console.log(`[LockCheck] ✓ ${lock.phone} purchased — revenue ₹${lock.revenue}`);
 
-      } else if (prevStatus === 'abandoned_cart' && currStatus === 'product_view') {
-        // Cart was cleared without purchase → user is back to product_view
-        lock.lock_status   = 'active';
-        lock.unlock_reason = null;
-        lock.cart_added_at = null;
-        console.log(`[LockCheck] ${lock.phone} cart cleared → re-locked as product_view`);
+      } else if (currStatus === 'product_view' &&
+                 (prevStatus === 'abandoned_cart' || prevStatus === 'abandoned_checkout')) {
+        // Cart cleared without purchase → restart APV cycle from stage 1
+        lock.stage           = 0;
+        lock.stage_1_sent_at = null;
+        lock.stage_2_sent_at = null;
+        lock.lock_status     = 'active';
+        lock.unlock_reason   = null;
+        lock.cart_added_at   = null;
+        // Reset product_view whatsapp flags so automation re-targets from stage 1
+        (db.product_views || []).filter(v => v.phone === lock.phone && v.channel_id === channelId)
+          .forEach(v => { v.whatsapp_sent = 0; v.followup_count = 0; v.whatsapp_sent_at = null; });
+        console.log(`[LockCheck] ${lock.phone} cart cleared → APV restart stage 1 (30-min wait applies)`);
       }
     }
 
-    // Follow-up loop complete (stage 2 sent + 24h passed + no conversion) → shift to recommendation
+    // ── Re-entry: user viewed the product again AFTER receiving stage 1 ────────
+    // Triggered by clicking WhatsApp link, organically revisiting, etc.
+    // Guard: only when stage >= 1, stage_1_sent_at is set, and a newer product
+    // view exists (>5 min after send — avoids resetting for the click itself).
+    // After reset, stage=0 so this block is skipped on next run (no loop).
+    if (lock.lock_status === 'active' && lock.stage >= 1 && lock.stage_1_sent_at) {
+      const sentMs       = new Date(lock.stage_1_sent_at).getTime();
+      const reentryGuard = sentMs + 5 * 60 * 1000; // 5 min grace after send
+      const recentView = (db.product_views || []).find(pv =>
+        pv.phone === lock.phone && pv.channel_id === channelId &&
+        (!lock.product_url || pv.product_url === lock.product_url) &&
+        new Date(pv.created_at).getTime() > reentryGuard
+      );
+      if (recentView) {
+        lock.stage           = 0;
+        lock.stage_1_sent_at = null;
+        lock.stage_2_sent_at = null;
+        // Keep lock_status = 'active' so monitoring continues
+        (db.product_views || []).filter(v => v.phone === lock.phone && v.channel_id === channelId)
+          .forEach(v => { v.whatsapp_sent = 0; v.followup_count = 0; v.whatsapp_sent_at = null; });
+        changed = true;
+        console.log(`[LockCheck] ${lock.phone} re-viewed product after stage 1 → APV restart (30-min wait applies)`);
+      }
+    }
+
+    // ── Follow-up loop complete: stage 2 sent + 24h + no conversion ───────────
     if (
       lock.lock_status === 'active' &&
       lock.stage >= 2 &&
@@ -263,10 +296,9 @@ async function checkLockedUsers() {
       console.log(`[LockCheck] ${lock.phone} → product_recommendation (loop done, no conversion)`);
       const vIdx = db.website_visitors.findIndex(v => v.phone === lock.phone && v.channel_id === channelId);
       if (vIdx >= 0) {
-        // Reset so product_recommendation (website_visit) campaign picks them up
-        db.website_visitors[vIdx].status        = 'active';
-        db.website_visitors[vIdx].whatsapp_sent  = 0;
-        db.website_visitors[vIdx].followup_count = 0;
+        db.website_visitors[vIdx].status          = 'active';
+        db.website_visitors[vIdx].whatsapp_sent   = 0;
+        db.website_visitors[vIdx].followup_count  = 0;
         db.website_visitors[vIdx].whatsapp_sent_at = null;
       }
     }

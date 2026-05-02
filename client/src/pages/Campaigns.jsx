@@ -2521,9 +2521,26 @@ export default function Campaigns() {
                     if (!aud.audience?.length) return <div className="mt-2 text-[10px] text-center py-3 rounded-xl" style={{ color: '#475569', border: '1px solid rgba(255,255,255,0.05)' }}>No eligible users right now.</div>;
 
                     const lockBadge = (u) => {
-                      if (u.lock_status === 'pending')                return <span className="text-[9px] px-1.5 rounded" style={{ background: 'rgba(251,191,36,0.1)', color: '#fbbf24' }}>⏱ {u.ready_to_send ? 'ready' : `${u.minutes_since_activity != null ? u.minutes_since_activity + 'm ago' : 'waiting'}`}</span>;
+                      const mAgo = u.minutes_since_activity;
+                      const mUntil = u.minutes_until_next_send;
+                      if (u.lock_status === 'pending') {
+                        if (u.ready_to_send) return <span className="text-[9px] px-1.5 rounded" style={{ background: 'rgba(74,222,128,0.1)', color: '#4ade80' }}>⏱ ready ✓</span>;
+                        const agoTxt = mAgo != null ? (mAgo < 60 ? `${mAgo}m ago` : `${Math.floor(mAgo/60)}h ago`) : 'waiting';
+                        return <span className="text-[9px] px-1.5 rounded" style={{ background: 'rgba(251,191,36,0.1)', color: '#fbbf24' }}>⏱ {agoTxt} · wait 30m</span>;
+                      }
+                      if (u.lock_status === 'active') {
+                        if (u.stage === 0) {
+                          // Reset/re-entry — waiting 30 min for stage 1
+                          const agoTxt = mAgo != null ? (mAgo < 60 ? `${mAgo}m ago` : `${Math.floor(mAgo/60)}h ago`) : '…';
+                          return <span className="text-[9px] px-1.5 rounded" style={{ background: 'rgba(251,191,36,0.1)', color: '#fbbf24' }}>🔄 re-entered · {agoTxt}</span>;
+                        }
+                        if (mUntil != null) {
+                          const untilTxt = mUntil === 0 ? 'sending soon' : mUntil < 60 ? `next in ${mUntil}m` : `next in ${Math.floor(mUntil/60)}h ${mUntil%60}m`;
+                          return <span className="text-[9px] px-1.5 rounded" style={{ background: 'rgba(99,102,241,0.1)', color: u.ready_to_send ? '#4ade80' : '#818cf8' }}>🔒 s{u.stage} · {untilTxt}</span>;
+                        }
+                        return <span className="text-[9px] px-1.5 rounded" style={{ background: 'rgba(99,102,241,0.1)', color: '#818cf8' }}>🔒 stage {u.stage}</span>;
+                      }
                       if (u.lock_status === 'messaged')               return <span className="text-[9px] px-1.5 rounded" style={{ background: 'rgba(56,189,248,0.1)', color: '#38bdf8' }}>📨 sent{u.stage > 0 ? ` ×${u.stage}` : ''}</span>;
-                      if (u.lock_status === 'active')                 return <span className="text-[9px] px-1.5 rounded" style={{ background: 'rgba(99,102,241,0.1)', color: '#818cf8' }}>🔒 stage {u.stage}</span>;
                       if (u.lock_status === 'cart_added')             return <span className="text-[9px] px-1.5 rounded" style={{ background: 'rgba(251,146,60,0.1)', color: '#fb923c' }}>🛒 added to cart</span>;
                       if (u.lock_status === 'purchased')              return <span className="text-[9px] px-1.5 rounded" style={{ background: 'rgba(74,222,128,0.1)', color: '#4ade80' }}>✅ purchased</span>;
                       if (u.lock_status === 'shifted_recommendation') return <span className="text-[9px] px-1.5 rounded" style={{ background: 'rgba(167,139,250,0.1)', color: '#a78bfa' }}>✨ recommendation</span>;
@@ -2651,16 +2668,18 @@ export default function Campaigns() {
                                       </p>}
                                     </td>
 
-                                    {/* Last activity */}
+                                    {/* Last activity / next send countdown */}
                                     <td className="px-2 py-2 whitespace-nowrap">
-                                      {u.minutes_since_activity != null
-                                        ? <span className="text-[9px]" style={{ color: u.ready_to_send ? '#4ade80' : '#475569' }}>
-                                            {u.minutes_since_activity < 60
-                                              ? `${u.minutes_since_activity}m ago`
-                                              : `${Math.floor(u.minutes_since_activity/60)}h ago`}
-                                            {u.ready_to_send && ' ✓'}
+                                      {u.minutes_until_next_send != null
+                                        ? <span className="text-[9px]" style={{ color: u.minutes_until_next_send === 0 ? '#4ade80' : '#818cf8' }}>
+                                            {u.minutes_until_next_send === 0 ? 'sending soon' : u.minutes_until_next_send < 60 ? `next ${u.minutes_until_next_send}m` : `next ${Math.floor(u.minutes_until_next_send/60)}h`}
                                           </span>
-                                        : <span className="text-[9px]" style={{ color: '#334155' }}>—</span>}
+                                        : u.minutes_since_activity != null
+                                          ? <span className="text-[9px]" style={{ color: u.ready_to_send ? '#4ade80' : '#475569' }}>
+                                              {u.minutes_since_activity < 60 ? `${u.minutes_since_activity}m ago` : `${Math.floor(u.minutes_since_activity/60)}h ago`}
+                                              {u.ready_to_send && ' ✓'}
+                                            </span>
+                                          : <span className="text-[9px]" style={{ color: '#334155' }}>—</span>}
                                     </td>
                                   </tr>
                                 );

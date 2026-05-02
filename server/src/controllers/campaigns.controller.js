@@ -824,6 +824,12 @@ export const campaignsController = {
           const purch   = ct._userPurch?.sort((a,b) => new Date(b.created_at)-new Date(a.created_at))[0];
           const viewRec = bestViewByPhone[l.phone];
           const minSince = ct.last_seen ? Math.floor((now - new Date(ct.last_seen).getTime()) / 60000) : null;
+          // Compute time until next stage send for locked users
+          const stage1Ms   = l.stage_1_sent_at ? new Date(l.stage_1_sent_at).getTime() : null;
+          const stage2DueMs = stage1Ms ? stage1Ms + 24 * 60 * 60 * 1000 : null;
+          const minUntilNext = (l.lock_status === 'active' && l.stage === 1 && stage2DueMs)
+            ? Math.max(0, Math.floor((stage2DueMs - now) / 60000))
+            : null;
           return {
             phone: l.phone, name: ct.name || 'Unknown',
             city: ct.city || '', device: ct.device || '',
@@ -835,14 +841,15 @@ export const campaignsController = {
             product_url:   l.product_url   || viewRec?.product_url   || '',
             product_price: l.product_price || viewRec?.product_price || '',
             product_image: l.product_image || viewRec?.product_image || '',
-            lock_status: l.lock_status, stage: l.stage || 1,
+            lock_status: l.lock_status, stage: l.stage || 0,
             locked_at: l.locked_at, stage_1_sent_at: l.stage_1_sent_at || null,
             stage_2_sent_at: l.stage_2_sent_at || null,
             revenue: purch ? parseFloat(purch.total_amount || 0) : (l.revenue || 0),
             cart_amount: cart?.total_amount || 0,
             followup_count: l.stage || 0,
             minutes_since_activity: minSince,
-            ready_to_send: false, is_locked: true,
+            minutes_until_next_send: minUntilNext,
+            ready_to_send: minUntilNext === 0, is_locked: true,
           };
         });
 
