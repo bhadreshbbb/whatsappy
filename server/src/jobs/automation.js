@@ -312,11 +312,29 @@ async function checkLockedUsers() {
         if (recentView.product_price) lock.product_price = recentView.product_price;
         if (recentView.product_image) lock.product_image = recentView.product_image;
 
-        // Reset product_view whatsapp_sent so automation includes this user
+        // Reset product_view flags so automation includes this user as fresh
         (db.product_views || []).filter(v => v.phone === lock.phone && v.channel_id === channelId)
           .forEach(v => { v.whatsapp_sent = 0; v.followup_count = 0; v.whatsapp_sent_at = null; });
+
+        // CRITICAL: reset visitor status back to product_view
+        // After stage 2, visitor was upgraded to followup_complete.
+        // Automation FLOW 2b only picks up status=product_view, so without
+        // this reset the re-entered user is invisible to automation forever.
+        const vIdx = db.website_visitors.findIndex(v => v.phone === lock.phone && v.channel_id === channelId);
+        if (vIdx >= 0) {
+          db.website_visitors[vIdx].status          = 'product_view';
+          db.website_visitors[vIdx].whatsapp_sent   = 0;
+          db.website_visitors[vIdx].followup_count  = 0;
+          db.website_visitors[vIdx].whatsapp_sent_at = null;
+          db.website_visitors[vIdx].visited_at      = recentView.created_at || new Date().toISOString();
+          db.website_visitors[vIdx].last_product_name  = recentView.product_name  || '';
+          db.website_visitors[vIdx].last_product_url   = recentView.product_url   || '';
+          db.website_visitors[vIdx].last_product_image = recentView.product_image || '';
+          db.website_visitors[vIdx].last_product_price = recentView.product_price || '';
+        }
+
         changed = true;
-        console.log(`[LockCheck] ${lock.phone} re-entered APV cycle ${cycleNum} — product: "${recentView.product_name || recentView.product_url}"`);
+        console.log(`[LockCheck] ${lock.phone} re-entered APV cycle ${cycleNum} → status reset to product_view — product: "${recentView.product_name || recentView.product_url}"`);
       }
     }
 
