@@ -2668,8 +2668,12 @@ export default function Campaigns() {
                               </div>
                             )}
                             <div className="flex flex-col">
-                              <span className="text-[8px] uppercase tracking-wide" style={{ color: '#475569' }}>Replied</span>
-                              <span className="text-[11px] font-bold" style={{ color: '#60a5fa' }}>{m.conversations}</span>
+                              <span className="text-[8px] uppercase tracking-wide" style={{ color: '#475569' }}>💬 Replied</span>
+                              <span className="text-[11px] font-bold" style={{ color: '#60a5fa' }}>{m.conversations || 0}</span>
+                            </div>
+                            <div className="flex flex-col">
+                              <span className="text-[8px] uppercase tracking-wide" style={{ color: '#475569' }}>👆 Clicked</span>
+                              <span className="text-[11px] font-bold" style={{ color: '#fbbf24' }}>{m.clicked || 0}</span>
                             </div>
                             <div className="flex flex-col">
                               <span className="text-[8px] uppercase tracking-wide" style={{ color: '#475569' }}>Cart Add</span>
@@ -2733,8 +2737,25 @@ export default function Campaigns() {
                                     {/* Command center status — same as Contacts tab */}
                                     <td className="px-2 py-2">{statusBadge(u)}</td>
 
-                                    {/* Campaign lock status */}
-                                    <td className="px-2 py-2">{lockBadge(u)}</td>
+                                    {/* Campaign lock status + response/click indicators */}
+                                    <td className="px-2 py-2">
+                                      <div className="flex flex-col gap-0.5">
+                                        {lockBadge(u)}
+                                        <div className="flex gap-1 mt-0.5">
+                                          {u.responded && (
+                                            <span className="text-[8px] px-1 py-0.5 rounded" style={{ background: 'rgba(192,132,252,0.15)', color: '#c084fc' }}
+                                              title={u.last_response_text || 'Replied'}>
+                                              💬 {u.last_response_text ? `"${u.last_response_text.slice(0,18)}${u.last_response_text.length>18?'…':''}"` : 'replied'}
+                                            </span>
+                                          )}
+                                          {u.clicked && (
+                                            <span className="text-[8px] px-1 py-0.5 rounded" style={{ background: 'rgba(251,191,36,0.15)', color: '#fbbf24' }}>
+                                              👆 clicked
+                                            </span>
+                                          )}
+                                        </div>
+                                      </div>
+                                    </td>
 
                                     {/* Power score */}
                                     <td className="px-2 py-2">

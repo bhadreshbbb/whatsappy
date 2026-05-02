@@ -963,22 +963,37 @@ export const campaignsController = {
 
         const MAX_VIEW_AGE_MIN = 7 * 24 * 60; // 7 days in minutes
 
-        // Campaign-level metrics
+        // Campaign-level metrics — all counts filtered to CURRENT cycle per lock
         const allExecsForCampaign = (db.abandoned_cart_executions || [])
           .filter(x => String(x.campaign_id) === String(id));
+
+        let metricReplied = 0, metricClicked = 0;
+        for (const l of locks) {
+          const s1Ms = l.stage_1_sent_at ? new Date(l.stage_1_sent_at).getTime() : null;
+          if (!s1Ms) continue; // stage 1 not yet sent this cycle
+          // Replied: inbound message AFTER stage 1 sent
+          const replied = (db.chat_messages || []).some(m =>
+            m.phone === l.phone && m.channel_id === channelId && m.direction === 'in' &&
+            new Date(m.timestamp || m.created_at).getTime() > s1Ms
+          );
+          if (replied) metricReplied++;
+          // Clicked: product_view > 1 min after stage 1 sent (inferred link click)
+          const clicked = (db.product_views || []).some(pv =>
+            pv.phone === l.phone && pv.channel_id === channelId &&
+            new Date(pv.created_at).getTime() > s1Ms + 60000
+          );
+          if (clicked) metricClicked++;
+        }
+
         const campaignMetrics = {
-          stage1_sent:   allExecsForCampaign.filter(x => (x.stage || 1) === 1 && x.status === 'sent').length,
-          stage2_sent:   allExecsForCampaign.filter(x => x.stage === 2 && x.status === 'sent').length,
-          total_failed:  allExecsForCampaign.filter(x => x.status === 'failed').length,
-          cart_adds:     locks.filter(l => ['cart_added', 'purchased'].includes(l.lock_status)).length,
-          purchases:     locks.filter(l => l.lock_status === 'purchased').length,
-          revenue:       locks.reduce((s, l) => s + (parseFloat(l.revenue) || 0), 0),
-          conversations: [...new Set(
-            (db.chat_messages || [])
-              .filter(m => m.channel_id === channelId && m.direction === 'in' &&
-                lockedPhones.has(m.phone))
-              .map(m => m.phone)
-          )].length,
+          stage1_sent:  allExecsForCampaign.filter(x => (x.stage || 1) === 1 && x.status === 'sent').length,
+          stage2_sent:  allExecsForCampaign.filter(x => x.stage === 2 && x.status === 'sent').length,
+          total_failed: allExecsForCampaign.filter(x => x.status === 'failed').length,
+          conversations: metricReplied,   // unique users who replied after receiving msg
+          clicked:       metricClicked,   // unique users who clicked link (inferred)
+          cart_adds:    locks.filter(l => ['cart_added', 'purchased'].includes(l.lock_status)).length,
+          purchases:    locks.filter(l => l.lock_status === 'purchased').length,
+          revenue:      locks.reduce((s, l) => s + (parseFloat(l.revenue) || 0), 0),
         };
 
         // Helper: get execution records per phone for this campaign
@@ -1014,11 +1029,24 @@ export const campaignsController = {
           const minUntilNext = (l.lock_status === 'active' && l.stage === 1 && stage2DueMs)
             ? Math.max(0, Math.floor((stage2DueMs - now) / 60000))
             : null;
-          // Latest inbound response from this user (WhatsApp reply)
+          // Inbound replies — filtered to AFTER stage 1 sent (current cycle only)
+          const s1SentMs = stage1Ms;
           const inboundMsgs = (db.chat_messages || [])
-            .filter(m => m.phone === l.phone && m.channel_id === channelId && m.direction === 'in')
+            .filter(m =>
+              m.phone === l.phone && m.channel_id === channelId && m.direction === 'in' &&
+              (!s1SentMs || new Date(m.timestamp || m.created_at).getTime() > s1SentMs)
+            )
             .sort((a, b) => new Date(b.timestamp || b.created_at) - new Date(a.timestamp || a.created_at));
           const lastReply = inboundMsgs[0] || null;
+
+          // Clicked: product_view > 1 min after stage 1 send (inferred link click)
+          const userClicked = s1SentMs
+            ? (db.product_views || []).some(pv =>
+                pv.phone === l.phone && pv.channel_id === channelId &&
+                new Date(pv.created_at).getTime() > s1SentMs + 60000
+              )
+            : false;
+
           const execs = getExecs(l.phone);
           return {
             phone: l.phone, name: ct.name || 'Unknown',
@@ -1041,8 +1069,11 @@ export const campaignsController = {
             minutes_until_next_send: minUntilNext,
             stage2_due_at: stage2DueMs ? new Date(stage2DueMs).toISOString() : null,
             ready_to_send: minUntilNext === 0, is_locked: true,
+            responded: inboundMsgs.length > 0,
+            response_count: inboundMsgs.length,
             last_response_text: lastReply?.text || null,
             last_response_at: lastReply?.timestamp || lastReply?.created_at || null,
+            clicked: userClicked,
             ...execs,
           };
         });
