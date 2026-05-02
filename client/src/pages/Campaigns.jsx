@@ -2546,8 +2546,8 @@ export default function Campaigns() {
                       // PENDING — not yet locked, viewing product, 1st msg not sent
                       if (u.lock_status === 'pending') {
                         if (u.ready_to_send) {
-                          // >= 30 min since last activity → automation will send Stage 1 on next cron tick (≤1 min)
-                          return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(251,191,36,0.15)', color: '#fbbf24' }}>📤 1st msg queued</span>;
+                          // 30+ min passed → automation sends Stage 1 automatically within ≤1 min
+                          return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(74,222,128,0.15)', color: '#4ade80' }}>🤖 auto-sending 1st msg...</span>;
                         }
                         // < 30 min — still within inactivity window
                         const waitLeft = mAgo != null ? Math.max(0, 30 - mAgo) : null;
@@ -2567,7 +2567,7 @@ export default function Campaigns() {
                         }
                         if (u.stage === 1) {
                           // Stage 1 sent — waiting 24h before Stage 2
-                          if (mUntil === 0) return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(74,222,128,0.15)', color: '#4ade80' }}>📤 2nd msg queued</span>;
+                          if (mUntil === 0) return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(74,222,128,0.15)', color: '#4ade80' }}>🤖 auto-sending 2nd msg...</span>;
                           return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(99,102,241,0.1)', color: '#818cf8' }}>
                             ✅ 1st sent · 2nd in {fmtCountdown(mUntil)}
                           </span>;
