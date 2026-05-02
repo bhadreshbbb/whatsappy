@@ -1295,13 +1295,23 @@ async function sendMultiple(db, cam, events, type) {
         ? (evt.upsell_count || 0) + 1
         : (evt.followup_count || 0) + 1;
 
-      // ── DEDUP CHECK ──
+      // ── DEDUP CHECK — only block if already successfully sent (allow retry on failure) ──
       const alreadySent = db.abandoned_cart_executions.find(x =>
-        x.campaign_id === cam.id && x.phone === evt.phone && (x.stage || 1) === currentStage
+        x.campaign_id === cam.id && x.phone === evt.phone &&
+        (x.stage || 1) === currentStage && x.status === 'sent'
       );
       if (alreadySent) {
         console.log(`[De-dupe] Already sent stage ${currentStage} of ${cam.name} to ${evt.phone}`);
         continue;
+      }
+      // Remove any previous failed execution for this stage so the new attempt gets logged cleanly
+      const failedIdx = db.abandoned_cart_executions.findIndex(x =>
+        x.campaign_id === cam.id && x.phone === evt.phone &&
+        (x.stage || 1) === currentStage && x.status === 'failed'
+      );
+      if (failedIdx >= 0) {
+        db.abandoned_cart_executions.splice(failedIdx, 1);
+        console.log(`[Retry] Removed previous failed attempt for stage ${currentStage} of ${cam.name} → ${evt.phone}`);
       }
 
       // ── TEMPLATE SELECTION (4-stage array & infinite loop support) ──

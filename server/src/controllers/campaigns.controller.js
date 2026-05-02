@@ -894,6 +894,12 @@ export const campaignsController = {
           // Ignore product views older than 7 days — they are stale
           if (minSince == null || minSince > MAX_VIEW_AGE_MIN) return null;
           const execs = getExecs(c.phone);
+          // Compute stage 2 countdown even for pending users whose stage 1 exec exists
+          const s1SentMs = execs.stage1_sent_at ? new Date(execs.stage1_sent_at).getTime() : null;
+          const s2DueMs  = s1SentMs ? s1SentMs + 24 * 60 * 60 * 1000 : null;
+          const minUntilNext = (s2DueMs && execs.stage1_status === 'sent' && !execs.stage2_sent_at)
+            ? Math.max(0, Math.floor((s2DueMs - now) / 60000))
+            : null;
           return {
             phone: c.phone, name: c.name || 'Unknown',
             city: c.city || '', device: c.device || '',
@@ -908,10 +914,12 @@ export const campaignsController = {
             lock_status: 'pending', stage: 0, locked_at: null,
             followup_count: viewRec?.followup_count || 0,
             minutes_since_activity: minSince,
-            ready_to_send: minSince >= 30,
+            minutes_until_next_send: minUntilNext,
+            ready_to_send: minSince >= 30 && execs.stage1_status !== 'sent',
             is_locked: false,
             last_response_text: null, last_response_at: null,
-            stage_1_sent_at: execs.stage1_sent_at, stage_2_sent_at: execs.stage2_sent_at, stage2_due_at: null,
+            stage_1_sent_at: execs.stage1_sent_at, stage_2_sent_at: execs.stage2_sent_at,
+            stage2_due_at: s2DueMs ? new Date(s2DueMs).toISOString() : null,
             ...execs,
           };
         }).filter(Boolean);

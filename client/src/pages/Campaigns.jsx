@@ -2543,13 +2543,15 @@ export default function Campaigns() {
                       const mAgo = u.minutes_since_activity;
                       const mUntil = u.minutes_until_next_send;
 
-                      // PENDING — not yet locked, viewing product, 1st msg not sent
+                      // PENDING — not yet locked (or lock not yet created), check execution records for real state
                       if (u.lock_status === 'pending') {
-                        // Check real execution status first
                         if (u.stage1_status === 'failed') {
-                          return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(239,68,68,0.15)', color: '#f87171' }}>❌ 1st msg failed</span>;
+                          return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(239,68,68,0.15)', color: '#f87171' }}>❌ 1st msg failed · retrying...</span>;
                         }
                         if (u.stage1_status === 'sent') {
+                          // Stage 1 sent, lock creation may have lagged — show stage 2 countdown
+                          if (mUntil === 0) return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(74,222,128,0.12)', color: '#4ade80' }}>🤖 auto-sending 2nd...</span>;
+                          if (mUntil != null) return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(99,102,241,0.1)', color: '#818cf8' }}>✅ 1st sent · 2nd in {fmtCountdown(mUntil)}</span>;
                           return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(74,222,128,0.15)', color: '#4ade80' }}>✅ 1st sent</span>;
                         }
                         if (u.ready_to_send) {
