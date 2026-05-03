@@ -838,7 +838,7 @@ function CreateModal({ onClose, onCreated }) {
                         as tokens — replaced with real values per user at send time.
                       </p>
                       {[
-                        { key: 's1', label: 'Stage 1', sub: 'First message (30 min after inactivity)', color: '#22d3ee' },
+                        { key: 's1', label: 'Stage 1', sub: `First message (${apvStage1Min}m after inactivity)`, color: '#22d3ee' },
                         { key: 's2', label: 'Stage 2', sub: 'Follow-up (24h later)', color: '#a78bfa' },
                       ].map(({ key, label, sub, color }) => (
                         <div key={key} className="space-y-2">
@@ -2704,9 +2704,11 @@ export default function Campaigns() {
                       // ACTIVE — locked in campaign
                       if (u.lock_status === 'active') {
                         if (u.stage === 0) {
-                          const waitLeft = mAgo != null ? Math.max(0, (u.apv_delay_min || 2) - mAgo) : null;
+                          if (u.ready_to_send) return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(74,222,128,0.12)', color: '#4ade80' }}>🤖 auto-sending 1st...</span>;
+                          const waitLeft = u.minutes_until_stage1 != null ? u.minutes_until_stage1
+                            : (mAgo != null ? Math.max(0, (u.apv_delay_min || 2) - mAgo) : null);
                           return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(251,191,36,0.1)', color: '#fbbf24' }}>
-                            🔄 re-entered · 1st msg in {waitLeft != null ? `${waitLeft}m` : '…'}
+                            🔄 re-entered · 1st msg in {waitLeft != null ? fmtCountdown(waitLeft) : '…'}
                           </span>;
                         }
                         if (u.stage === 1) {
@@ -2963,7 +2965,7 @@ export default function Campaigns() {
                                                 ? <span className="text-[9px]" style={{ color: '#f87171' }}>❌ Failed — {u.stage1_error || 'WhatsApp API error'} · Retry on next tick</span>
                                                 : u.ready_to_send
                                                   ? <span className="text-[9px]" style={{ color: '#4ade80' }}>🤖 Automation sending now (every 60s)</span>
-                                                  : <span className="text-[9px]" style={{ color: '#475569' }}>⏳ Waiting · 30 min inactivity needed · viewed {fmtAgo(u.minutes_since_activity)}</span>
+                                                  : <span className="text-[9px]" style={{ color: '#475569' }}>⏳ Waiting · {u.minutes_until_stage1 != null ? `${fmtCountdown(u.minutes_until_stage1)} until send` : `${u.apv_delay_min ?? 2}m inactivity needed`}{u.minutes_since_activity != null ? ` · viewed ${fmtAgo(u.minutes_since_activity)}` : ''}</span>
                                             }
                                           </div>
 
@@ -3640,7 +3642,7 @@ function FlowDiagramModal({ campaign, onClose }) {
         { icon: "💾", label: "product_views record created", sub: "Stored in DB with product_url, phone, session_id", type: "action" },
         { icon: "🔍", label: "URL slug check", sub: `URL must contain the configured product slug (e.g. /products)`, type: "check" },
         { icon: "📊", label: "Status → product_view", sub: "Forward-only status upgrade (won't downgrade if already carted)", type: "action" },
-        { icon: "⏱️", label: "30-minute inactivity wait", sub: "Automation checks visitor's last_activity — must be silent for 30 min", type: "wait" },
+        { icon: "⏱️", label: "Inactivity wait (configurable)", sub: "Automation checks visitor's last_activity — must be silent for the configured delay (default: 2 min)", type: "wait" },
         { icon: "🛒", label: "Cart check (product-level)", sub: "If same product URL found in unrecovered cart → skip, cart campaign handles it", type: "check" },
         { icon: "📱", label: "Stage 1 — WhatsApp message sent", sub: "Single product template with dynamic: product name, price, image, URL", type: "send" },
         { icon: "⏱️", label: "24-hour gap", sub: "If user hasn't purchased or carted after 24h", type: "wait" },

@@ -1131,11 +1131,20 @@ export const campaignsController = {
           const lastPVTime = ct.last_seen || viewRec?.created_at;
           const minSince = lastPVTime ? Math.floor((now - new Date(lastPVTime).getTime()) / 60000) : null;
           // Compute time until next stage send for locked users
+          const stage1DelayMin = campaign.apv_delay_min != null ? campaign.apv_delay_min : 2;
           const stage1Ms   = l.stage_1_sent_at ? new Date(l.stage_1_sent_at).getTime() : null;
-          const followupMs = (campaign.apv_followup_min || 4) * 60 * 1000;
+          const followupMs = (campaign.apv_followup_min != null ? campaign.apv_followup_min : 4) * 60 * 1000;
           const stage2DueMs = stage1Ms ? stage1Ms + followupMs : null;
           const minUntilNext = (l.lock_status === 'active' && l.stage === 1 && stage2DueMs)
             ? Math.max(0, Math.floor((stage2DueMs - now) / 60000))
+            : null;
+          // Stage 1 countdown — for locked users at stage 0 waiting for first send
+          const lockAnchorTime = l.reentry_at || l.locked_at;
+          const stage1DueMs = (l.lock_status === 'active' && l.stage === 0 && lockAnchorTime)
+            ? new Date(lockAnchorTime).getTime() + stage1DelayMin * 60 * 1000
+            : null;
+          const minUntilStage1 = stage1DueMs != null
+            ? Math.max(0, Math.floor((stage1DueMs - now) / 60000))
             : null;
           // Inbound replies — filtered to AFTER stage 1 sent (current cycle only)
           const s1SentMs = stage1Ms;
@@ -1185,7 +1194,10 @@ export const campaignsController = {
             minutes_since_activity: minSince,
             minutes_until_next_send: minUntilNext,
             stage2_due_at: stage2DueMs ? new Date(stage2DueMs).toISOString() : null,
-            ready_to_send: minUntilNext === 0, is_locked: true,
+            stage1_due_at: stage1DueMs ? new Date(stage1DueMs).toISOString() : null,
+            minutes_until_stage1: minUntilStage1,
+            apv_delay_min: stage1DelayMin,
+            ready_to_send: minUntilNext === 0 || minUntilStage1 === 0, is_locked: true,
             responded: inboundMsgs.length > 0,
             response_count: inboundMsgs.length,
             last_response_text: lastReply?.text || null,
