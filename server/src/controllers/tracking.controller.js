@@ -748,9 +748,10 @@ export const trackingController = {
         v.last_product_price = product_price || v.last_product_price;
 
         // Only upgrade to product_view if user has NO active cart items.
-        // abandoned_cart (level 3) already blocks product_view (level 2) via upgradeStatus,
-        // but we check explicitly here to log clearly when it's blocked.
-        const hasActiveCart = db.cart_events.some(c =>
+        // Exception: post-cycle statuses (product_recommendation, followup_complete) completed
+        // the APV loop WITHOUT adding to cart — stale carts from prior cycles must not block re-entry.
+        const isPostCycle = v.status === 'product_recommendation' || v.status === 'followup_complete';
+        const hasActiveCart = !isPostCycle && db.cart_events.some(c =>
           c.channel_id === cid &&
           (c.session_id === sessionId || (v.phone && c.phone === v.phone)) &&
           !c.recovered
@@ -825,6 +826,18 @@ export const trackingController = {
               }
             } else {
               console.log(`[APV] ${v.phone || sessionId} → product_view_lock immediately (from ${prevStatus})`);
+            }
+            // Cross-session cleanup: other sessions for this phone stuck at product_recommendation
+            // (e.g. user cleared storage and re-identified) — reset them so contacts dedup shows
+            // the current product_view_lock, not the stale completed state.
+            if (v.phone) {
+              (db.website_visitors || []).forEach(other => {
+                if (other !== v && other.phone === v.phone && other.channel_id === cid &&
+                    other.status === 'product_recommendation') {
+                  other.status = 'active';
+                  other.updated_at = now;
+                }
+              });
             }
           } else {
             // No active APV campaign — standard status upgrade
