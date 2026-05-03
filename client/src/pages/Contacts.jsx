@@ -219,11 +219,14 @@ function UserProfile({ contact: c, activity, loading, onBack }) {
   const allSessions = activity?.allSessions || [];
   const timeline    = activity?.timeline    || [];
   const ss =
-    c.status === 'purchased'          ? { color: "#4ade80", label: "Purchased"          } :
-    c.status === 'abandoned_cart'     ? { color: "#fb923c", label: "Abandoned Cart"     } :
-    c.status === 'abandoned_checkout' ? { color: "#f87171", label: "Checkout Abandoned" } :
-    c.status === 'product_view'       ? { color: "#60a5fa", label: "Product View"       } :
-                                        { color: "#94a3b8", label: "Active"             };
+    c.status === 'purchased'              ? { color: "#4ade80", label: "Purchased"            } :
+    c.status === 'abandoned_cart'         ? { color: "#fb923c", label: "Abandoned Cart"       } :
+    c.status === 'abandoned_checkout'     ? { color: "#f87171", label: "Checkout Abandoned"   } :
+    c.status === 'product_view_lock'      ? { color: "#818cf8", label: "In Campaign"          } :
+    c.status === 'product_view'           ? { color: "#60a5fa", label: "Product View"         } :
+    c.status === 'product_recommendation' ? { color: "#c084fc", label: "Recommended"          } :
+    c.status === 'followup_complete'      ? { color: "#f59e0b", label: "Followup Complete"    } :
+                                            { color: "#94a3b8", label: "Active"               };
   return (
     <div className="space-y-5">
       <button onClick={onBack} className="flex items-center gap-2 text-xs font-semibold transition-colors"
@@ -364,17 +367,19 @@ export default function Contacts() {
   const allUsers = contacts?.contacts || [];
 
   const USER_SEGMENTS = useMemo(() => [
-    { id: 'all',        label: 'All Users',        icon: Users,        color: "#60a5fa", desc: "Every tracked visitor",           filterFn: () => true },
-    { id: 'hot',        label: 'Hot Users',         icon: Flame,        color: "#f87171", desc: "Power score ≥ 80",               filterFn: c => (c.power_score || 0) >= 80 },
-    { id: 'active',     label: 'Active',            icon: Activity,     color: "#4ade80", desc: "Currently browsing your store",  filterFn: c => c.status === 'active' },
-    { id: 'product',    label: 'Product Viewed',    icon: Package,      color: "#a855f7", desc: "Viewed at least one product",    filterFn: c => c.status === 'product_view' },
-    { id: 'cart',       label: 'Cart Abandoned',    icon: ShoppingCart, color: "#fb923c", desc: "Added to cart but didn't buy",   filterFn: c => c.status === 'abandoned_cart' },
-    { id: 'checkout',   label: 'Checkout Dropped',  icon: MousePointer, color: "#f59e0b", desc: "Started checkout, didn't finish",filterFn: c => c.status === 'abandoned_checkout' },
-    { id: 'purchased',  label: 'Purchasers',        icon: Trophy,       color: "#22c55e", desc: "Completed a purchase",          filterFn: c => c.status === 'purchased' },
-    { id: 'repeat',     label: 'Repeat Customers',  icon: Repeat,       color: "#c084fc", desc: "Returned more than once",       filterFn: c => !!c.is_repeat },
-    { id: 'identified', label: 'Identified',        icon: CheckCircle,  color: "#38bdf8", desc: "Has phone number",              filterFn: c => !!c.phone },
-    { id: 'anonymous',  label: 'Anonymous',         icon: UserCheck,    color: "#64748b", desc: "No phone captured yet",         filterFn: c => !c.phone },
-    { id: 'mobile',     label: 'Mobile',            icon: Smartphone,   color: "#06b6d4", desc: "Visiting on mobile device",     filterFn: c => c.device === 'mobile' },
+    { id: 'all',            label: 'All Users',        icon: Users,        color: "#60a5fa", desc: "Every tracked visitor",              filterFn: () => true },
+    { id: 'hot',            label: 'Hot Users',         icon: Flame,        color: "#f87171", desc: "Power score ≥ 80",                  filterFn: c => (c.power_score || 0) >= 80 },
+    { id: 'active',         label: 'Active',            icon: Activity,     color: "#4ade80", desc: "Currently browsing your store",     filterFn: c => c.status === 'active' },
+    { id: 'product',        label: 'Product Viewed',    icon: Package,      color: "#60a5fa", desc: "Viewed at least one product",       filterFn: c => c.status === 'product_view' },
+    { id: 'in_campaign',    label: 'In Campaign',       icon: Package,      color: "#818cf8", desc: "Locked in abandoned product campaign", filterFn: c => c.status === 'product_view_lock' },
+    { id: 'recommended',    label: 'Recommended',       icon: Package,      color: "#c084fc", desc: "APV complete — in recommendation pool", filterFn: c => c.status === 'product_recommendation' },
+    { id: 'cart',           label: 'Cart Abandoned',    icon: ShoppingCart, color: "#fb923c", desc: "Added to cart but didn't buy",      filterFn: c => c.status === 'abandoned_cart' },
+    { id: 'checkout',       label: 'Checkout Dropped',  icon: MousePointer, color: "#f59e0b", desc: "Started checkout, didn't finish",   filterFn: c => c.status === 'abandoned_checkout' },
+    { id: 'purchased',      label: 'Purchasers',        icon: Trophy,       color: "#22c55e", desc: "Completed a purchase",             filterFn: c => c.status === 'purchased' },
+    { id: 'repeat',         label: 'Repeat Customers',  icon: Repeat,       color: "#c084fc", desc: "Returned more than once",          filterFn: c => !!c.is_repeat },
+    { id: 'identified',     label: 'Identified',        icon: CheckCircle,  color: "#38bdf8", desc: "Has phone number",                 filterFn: c => !!c.phone },
+    { id: 'anonymous',      label: 'Anonymous',         icon: UserCheck,    color: "#64748b", desc: "No phone captured yet",            filterFn: c => !c.phone },
+    { id: 'mobile',         label: 'Mobile',            icon: Smartphone,   color: "#06b6d4", desc: "Visiting on mobile device",        filterFn: c => c.device === 'mobile' },
   ], []);
 
   const filteredContacts = useMemo(() => {
@@ -484,11 +489,12 @@ export default function Contacts() {
       {/* Funnel */}
       {!loading && allUsers.length > 0 && (() => {
         const steps = [
-          { label: 'Active',       cnt: allUsers.filter(c => c.status === 'active').length,             color: "#4ade80" },
-          { label: 'Product View', cnt: allUsers.filter(c => c.status === 'product_view').length,       color: "#a855f7" },
-          { label: 'Cart',         cnt: allUsers.filter(c => c.status === 'abandoned_cart').length,     color: "#fb923c" },
-          { label: 'Checkout',     cnt: allUsers.filter(c => c.status === 'abandoned_checkout').length, color: "#f59e0b" },
-          { label: 'Purchased',    cnt: allUsers.filter(c => c.status === 'purchased').length,          color: "#22c55e" },
+          { label: 'Active',       status: 'active',               cnt: allUsers.filter(c => c.status === 'active').length,               color: "#4ade80" },
+          { label: 'Product View', status: 'product_view',         cnt: allUsers.filter(c => c.status === 'product_view').length,         color: "#60a5fa" },
+          { label: 'In Campaign',  status: 'product_view_lock',    cnt: allUsers.filter(c => c.status === 'product_view_lock').length,    color: "#818cf8" },
+          { label: 'Cart',         status: 'abandoned_cart',       cnt: allUsers.filter(c => c.status === 'abandoned_cart').length,       color: "#fb923c" },
+          { label: 'Checkout',     status: 'abandoned_checkout',   cnt: allUsers.filter(c => c.status === 'abandoned_checkout').length,   color: "#f59e0b" },
+          { label: 'Purchased',    status: 'purchased',            cnt: allUsers.filter(c => c.status === 'purchased').length,            color: "#22c55e" },
         ];
         const max = Math.max(...steps.map(s => s.cnt), 1);
         return (
@@ -504,10 +510,7 @@ export default function Contacts() {
                 const pct  = Math.round((s.cnt / allUsers.length) * 100);
                 const barH = Math.max(Math.round((s.cnt / max) * 64), 4);
                 return (
-                  <button key={s.label} onClick={() => { setCtSegment('all'); setCtStatus(
-                    s.label === 'Active' ? 'active' : s.label === 'Product View' ? 'product_view' :
-                    s.label === 'Cart' ? 'abandoned_cart' : s.label === 'Checkout' ? 'abandoned_checkout' : 'purchased'
-                  ); }}
+                  <button key={s.label} onClick={() => { setCtSegment('all'); setCtStatus(s.status); }}
                     className="flex-1 flex flex-col items-center gap-1 group">
                     <span className="text-xs font-bold tabular-nums text-white">{s.cnt}</span>
                     <div className="w-full rounded-t-lg transition-all group-hover:opacity-80"
@@ -536,6 +539,8 @@ export default function Contacts() {
             <option value="all">All Status</option>
             <option value="active">🟢 Active</option>
             <option value="product_view">🔵 Product View</option>
+            <option value="product_view_lock">🟣 In Campaign</option>
+            <option value="product_recommendation">💜 Recommended</option>
             <option value="abandoned_cart">🟠 Abandoned Cart</option>
             <option value="abandoned_checkout">🔴 Checkout Dropped</option>
             <option value="purchased">✅ Purchased</option>
@@ -626,11 +631,14 @@ export default function Contacts() {
                 )}
                 {filteredContacts.slice(0, 500).map((c, i) => {
                   const ss =
-                    c.status === 'purchased'          ? { bg: "rgba(34,197,94,0.1)",   border: "rgba(34,197,94,0.25)",   color: "#4ade80"  } :
-                    c.status === 'abandoned_cart'     ? { bg: "rgba(249,115,22,0.1)",  border: "rgba(249,115,22,0.25)",  color: "#fb923c"  } :
-                    c.status === 'abandoned_checkout' ? { bg: "rgba(239,68,68,0.1)",   border: "rgba(239,68,68,0.25)",   color: "#f87171"  } :
-                    c.status === 'product_view'       ? { bg: "rgba(59,130,246,0.1)",  border: "rgba(59,130,246,0.25)",  color: "#60a5fa"  } :
-                                                        { bg: "rgba(100,116,139,0.1)", border: "rgba(100,116,139,0.25)", color: "#94a3b8"  };
+                    c.status === 'purchased'              ? { bg: "rgba(34,197,94,0.1)",    border: "rgba(34,197,94,0.25)",    color: "#4ade80"  } :
+                    c.status === 'abandoned_cart'         ? { bg: "rgba(249,115,22,0.1)",   border: "rgba(249,115,22,0.25)",   color: "#fb923c"  } :
+                    c.status === 'abandoned_checkout'     ? { bg: "rgba(239,68,68,0.1)",    border: "rgba(239,68,68,0.25)",    color: "#f87171"  } :
+                    c.status === 'product_view_lock'      ? { bg: "rgba(129,140,248,0.1)",  border: "rgba(129,140,248,0.25)",  color: "#818cf8"  } :
+                    c.status === 'product_view'           ? { bg: "rgba(59,130,246,0.1)",   border: "rgba(59,130,246,0.25)",   color: "#60a5fa"  } :
+                    c.status === 'product_recommendation' ? { bg: "rgba(192,132,252,0.1)",  border: "rgba(192,132,252,0.25)",  color: "#c084fc"  } :
+                    c.status === 'followup_complete'      ? { bg: "rgba(245,158,11,0.1)",   border: "rgba(245,158,11,0.25)",   color: "#f59e0b"  } :
+                                                            { bg: "rgba(100,116,139,0.1)",  border: "rgba(100,116,139,0.25)",  color: "#94a3b8"  };
                   return (
                     <tr key={i} className="transition-colors cursor-pointer"
                       style={{ borderBottom: "1px solid rgba(255,255,255,0.03)" }}

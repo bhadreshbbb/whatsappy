@@ -3,13 +3,28 @@ import { getDb } from '../services/database.js';
 
 const router = Router();
 
+const STATUS_RANK = {
+  purchased: 7, followup_complete: 6, product_recommendation: 6,
+  abandoned_checkout: 5, abandoned_cart: 4,
+  product_view_lock: 3, product_view: 2, active: 1,
+};
+
 router.get('/', (req, res, next) => {
   try {
     const db = getDb();
     const { search, page = '1', limit = '50', language } = req.query;
     const channelId = req.headers['x-channel-id'] || 'demo';
 
-    let results = db.website_visitors.filter(v => v.channel_id === channelId && v.phone);
+    // Deduplicate by phone — pick the session with the highest-ranked status
+    const phoneMap = new Map();
+    for (const v of db.website_visitors) {
+      if (v.channel_id !== channelId || !v.phone) continue;
+      const existing = phoneMap.get(v.phone);
+      if (!existing || (STATUS_RANK[v.status] || 0) > (STATUS_RANK[existing.status] || 0)) {
+        phoneMap.set(v.phone, v);
+      }
+    }
+    let results = [...phoneMap.values()];
 
     if (search) {
       const s = String(search).toLowerCase();

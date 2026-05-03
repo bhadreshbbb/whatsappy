@@ -274,8 +274,12 @@ export const analyticsController = {
         const device   = sessions.map(s => s.device_type).find(Boolean) || '';
         const language = sessions.map(s => s.language).find(Boolean) || '';
 
-        // Best status (most advanced in funnel)
-        const STATUS_RANK = { purchased: 6, abandoned_checkout: 5, abandoned_cart: 4, product_view: 3, active: 2, unknown: 1 };
+        // Best status — must match statusMachine.js STATUS_PRIORITY exactly
+        const STATUS_RANK = {
+          purchased: 7, followup_complete: 6, product_recommendation: 6,
+          abandoned_checkout: 5, abandoned_cart: 4,
+          product_view_lock: 3, product_view: 2, active: 1,
+        };
         const status = sessions.reduce((best, s) => {
           return (STATUS_RANK[s.status] || 0) > (STATUS_RANK[best] || 0) ? s.status : best;
         }, 'active');
