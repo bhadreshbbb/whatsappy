@@ -897,7 +897,7 @@ export const campaignsController = {
       const { id } = req.params;
       const cam = db.abandoned_cart_campaigns.find(c => c.id == id);
       const result = db.abandoned_cart_executions
-        .filter(e => e.campaign_id == id)
+        .filter(e => e.campaign_id == id && e.status !== 'archived_reentry')
         .sort((a, b) => new Date(b.sent_at).getTime() - new Date(a.sent_at).getTime())
         .slice(0, 200)
         .map(e => ({
@@ -1083,20 +1083,40 @@ export const campaignsController = {
           lock_revenue:   locks.reduce((s, l) => s + (parseFloat(l.revenue) || 0), 0),
         };
 
-        // Helper: get execution records per phone for this campaign
-        const getExecs = (phone) => {
-          const execs = (db.abandoned_cart_executions || [])
-            .filter(x => String(x.campaign_id) === String(id) && x.phone === phone)
+        // Helper: get execution records per phone for this campaign.
+        // When lockAnchor is provided (locked users), the lock timestamps are the
+        // source of truth — only find an exec within 5 min of the lock's timestamp.
+        // This prevents archived/failed pre-reset records from leaking into the
+        // current-cycle display after re-entry.
+        const getExecs = (phone, lockAnchor = null) => {
+          const allExecs = (db.abandoned_cart_executions || [])
+            .filter(x => String(x.campaign_id) === String(id) && x.phone === phone
+              && x.status !== 'archived_reentry')
             .sort((a, b) => new Date(b.sent_at) - new Date(a.sent_at));
-          const s1 = execs.find(x => (x.stage || 1) === 1) || null;
-          const s2 = execs.find(x => x.stage === 2) || null;
+
+          let s1, s2;
+          if (lockAnchor) {
+            const findNear = (lockTs, stageNum) => {
+              if (!lockTs) return null;
+              const lockMs = new Date(lockTs).getTime();
+              return allExecs
+                .filter(x => (x.stage || 1) === stageNum)
+                .find(x => Math.abs(new Date(x.sent_at).getTime() - lockMs) < 5 * 60 * 1000) || null;
+            };
+            s1 = findNear(lockAnchor.stage_1_sent_at, 1);
+            s2 = findNear(lockAnchor.stage_2_sent_at, 2);
+          } else {
+            s1 = allExecs.find(x => (x.stage || 1) === 1) || null;
+            s2 = allExecs.find(x => x.stage === 2) || null;
+          }
+
           return {
-            stage1_status: s1?.status || null,   // 'sent' | 'failed' | null
-            stage1_error:  s1?.error  || null,
-            stage1_sent_at: s1?.sent_at || null,
-            stage2_status: s2?.status || null,
-            stage2_error:  s2?.error  || null,
-            stage2_sent_at: s2?.sent_at || null,
+            stage1_status:  s1?.status  || null,
+            stage1_error:   s1?.error   || null,
+            stage1_sent_at: lockAnchor ? lockAnchor.stage_1_sent_at : (s1?.sent_at || null),
+            stage2_status:  s2?.status  || null,
+            stage2_error:   s2?.error   || null,
+            stage2_sent_at: lockAnchor ? lockAnchor.stage_2_sent_at : (s2?.sent_at || null),
           };
         };
 
@@ -1144,7 +1164,7 @@ export const campaignsController = {
             String(p.source_campaign_id) === camIdStr
           );
 
-          const execs = getExecs(l.phone);
+          const execs = getExecs(l.phone, l);  // lock-anchored: null lock ts → null status
           return {
             phone: l.phone, name: ct.name || 'Unknown',
             city: ct.city || '', device: ct.device || '',
@@ -1157,8 +1177,8 @@ export const campaignsController = {
             product_price: l.product_price || viewRec?.product_price || '',
             product_image: l.product_image || viewRec?.product_image || '',
             lock_status: l.lock_status, stage: l.stage || 0,
-            locked_at: l.locked_at, stage_1_sent_at: l.stage_1_sent_at || execs.stage1_sent_at,
-            stage_2_sent_at: l.stage_2_sent_at || execs.stage2_sent_at,
+            locked_at: l.locked_at, stage_1_sent_at: l.stage_1_sent_at,
+            stage_2_sent_at: l.stage_2_sent_at,
             revenue: attrPurch ? parseFloat(attrPurch.total_amount || 0) : (purch ? parseFloat(purch.total_amount || 0) : (l.revenue || 0)),
             cart_amount: attrCart?.total_amount || cart?.total_amount || 0,
             followup_count: l.stage || 0,
@@ -1204,7 +1224,7 @@ export const campaignsController = {
           const minUntilNext = (s2DueMs && execs.stage1_status === 'sent' && !execs.stage2_sent_at)
             ? Math.max(0, Math.floor((s2DueMs - now) / 60000))
             : null;
-          const stage1DelayMin = campaign.apv_delay_min || 2;
+          const stage1DelayMin = campaign.apv_delay_min != null ? campaign.apv_delay_min : 2;
           return {
             phone: c.phone, name: c.name || 'Unknown',
             city: c.city || '', device: c.device || '',
