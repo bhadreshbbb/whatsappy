@@ -240,9 +240,9 @@ async function checkLockedUsers() {
     }
 
     if (currStatus === 'product_view') {
-      // Re-entry: user viewed a new product (statusMachine downgraded lock→product_view).
-      // tracking.controller.js handles this inline for immediacy, but this is the
-      // safety net for any case it missed. Reset lock so FLOW 2b starts fresh.
+      // Safety-net re-entry: tracking.controller.js normally handles this immediately
+      // by setting product_view_lock directly. This path only fires when the APV campaign
+      // was inactive at view time so the visitor ended up at product_view instead.
       if (lock.lock_status === 'active' && lock.stage >= 1) {
         const cycleNum = (lock.cycle_count || 0) + 1;
         if (!lock.send_history) lock.send_history = [];
@@ -341,11 +341,12 @@ async function checkLockedUsers() {
     }
   }
 
-  // ── Post-purchase re-entry: if user's funnel_cycle > 1 and has product_view,
-  //    clear stale purchased/cart locks so FLOW 2b creates a fresh lock ──────────
+  // ── Post-purchase re-entry: clear stale purchased/cart locks so FLOW 2b creates a fresh lock.
+  // Include product_view_lock because tracking.controller now sets that status immediately
+  // when an active APV campaign exists, skipping the product_view intermediate step. ────────
   const reenteredVisitors = (db.website_visitors || []).filter(v =>
     v.channel_id === channelId && v.phone &&
-    v.status === 'product_view' && (v.funnel_cycle || 1) > 1
+    (v.status === 'product_view' || v.status === 'product_view_lock') && (v.funnel_cycle || 1) > 1
   );
   for (const vis of reenteredVisitors) {
     const stale = (db.campaign_locks || []).filter(l =>
@@ -840,9 +841,13 @@ async function runAutomation() {
       //          product template, 30-min first message, 24h follow-up, max 2
       //
       // Status is the ONE source of truth for campaign membership:
-      //   product_view      → newly eligible, campaign claims immediately → product_view_lock
-      //   product_view_lock → in campaign, awaiting/between messages
+      //   product_view_lock → user locked in immediately on product-view event
+      //   product_view      → fallback only (APV inactive at view time, then activated)
       //   any other status  → user exited, checkLockedUsers handles cleanup
+      //
+      // tracking.controller.js sets product_view_lock IMMEDIATELY on the product-view
+      // event when an active APV campaign exists. The safety-net claim below covers
+      // the edge case where the campaign was inactive at view time.
       // ────────────────────────────────────────────────────────────────────
       else if (cam.campaign_type === 'abandoned_product_view') {
         const settingsRow = (db.channel_settings || []).find(s => s.channel_id === channelId);
@@ -881,16 +886,17 @@ async function runAutomation() {
           return true;
         });
 
-        // ── Immediately claim any product_view users — lock into campaign ─────────
-        // This blocks other campaigns from targeting them during the delay window.
-        // Status becomes product_view_lock; FLOW 2b then proceeds with timing + send.
+        // ── Safety-net claim: product_view → product_view_lock ───────────────────
+        // Normally tracking.controller.js sets product_view_lock immediately on the
+        // product-view event. This fallback handles edge cases where that path was
+        // skipped (e.g. APV campaign was inactive at view time, then activated later).
         let apvStatusChanged = false;
         for (const vis of eligibleVisitors) {
           if (vis.status === 'product_view') {
             vis.status     = 'product_view_lock';
             vis.updated_at = new Date().toISOString();
             apvStatusChanged = true;
-            console.log(`[APV] ${vis.phone} claimed → product_view_lock`);
+            console.log(`[APV] ${vis.phone} claimed → product_view_lock (fallback)`);
           }
         }
         if (apvStatusChanged) db.save();

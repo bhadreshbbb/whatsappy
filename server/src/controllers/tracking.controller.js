@@ -759,68 +759,131 @@ export const trackingController = {
           console.log(`[Status] product_view blocked for ${v.phone || sessionId} — active cart exists, keeping abandoned_cart`);
         } else {
           const prevStatus = v.status;
-          upgradeStatus(v, 'product_view');
+          const now = new Date().toISOString();
 
-          // ── Immediate APV re-entry ───────────────────────────────────────────
-          // Triggered when:
-          //   product_view_lock → product_view: user viewed a new product while locked
-          //   product_recommendation → product_view: user re-entered after full cycle
-          // Reset the APV lock NOW so the stage-1 timer starts from this moment,
-          // not from when checkLockedUsers next runs (up to 60s later).
-          const wasInAPV = prevStatus === 'product_view_lock' || prevStatus === 'product_recommendation';
-          if (wasInAPV && v.phone) {
-            const apvLock = (db.campaign_locks || []).find(l =>
-              l.phone === v.phone && l.channel_id === cid &&
-              l.campaign_type === 'abandoned_product_view' &&
-              ['active', 'shifted_recommendation'].includes(l.lock_status)
-            );
-            if (apvLock) {
-              const cycleNum = (apvLock.cycle_count || 0) + 1;
-              if (!apvLock.send_history) apvLock.send_history = [];
-              apvLock.send_history.push({
-                cycle:          cycleNum,
-                product_name:   apvLock.product_name   || '',
-                product_url:    apvLock.product_url    || '',
-                stage1_sent_at: apvLock.stage_1_sent_at || null,
-                stage2_sent_at: apvLock.stage_2_sent_at || null,
-                archived_at:    new Date().toISOString(),
-                exit_reason:    prevStatus === 'product_view_lock' ? 'reentry_new_product' : 'reentry_after_completion',
-                reentry_product: product_name || product_url || '',
-              });
-              apvLock.cycle_count = cycleNum;
-              // Clear dedup records so stage 1 can fire for the new cycle
-              db.abandoned_cart_executions = (db.abandoned_cart_executions || []).filter(x =>
-                !(String(x.campaign_id) === String(apvLock.campaign_id) &&
-                  x.phone === v.phone && x.status === 'sent')
+          // If an active APV campaign exists, immediately set product_view_lock on the
+          // main status — no 60-second wait for the automation loop to claim the user.
+          const hasActiveAPV = (db.abandoned_cart_campaigns || []).some(c =>
+            c.channel_id === cid && c.campaign_type === 'abandoned_product_view' && c.is_active
+          );
+
+          if (hasActiveAPV) {
+            // Post-cycle re-entry: increment funnel_cycle so FLOW 2b treats this as fresh
+            if (prevStatus === 'product_recommendation' || prevStatus === 'followup_complete' || prevStatus === 'purchased') {
+              v.funnel_cycle = (v.funnel_cycle || 1) + 1;
+            }
+            v.status     = 'product_view_lock';
+            v.updated_at = now;
+
+            // Re-entry: reset existing lock so all previous message data is cleared and
+            // the stage-1 timer starts from NOW with the new product.
+            const wasInAPV = prevStatus === 'product_view_lock' || prevStatus === 'product_recommendation';
+            if (wasInAPV && v.phone) {
+              const apvLock = (db.campaign_locks || []).find(l =>
+                l.phone === v.phone && l.channel_id === cid &&
+                l.campaign_type === 'abandoned_product_view' &&
+                ['active', 'shifted_recommendation'].includes(l.lock_status)
               );
-              // Reset lock — FLOW 2b will claim the user (status=product_view) and re-lock
-              apvLock.stage           = 0;
-              apvLock.stage_1_sent_at = null;
-              apvLock.stage_2_sent_at = null;
-              apvLock.lock_status     = 'active';
-              apvLock.unlock_reason   = null;
-              apvLock.shifted_at      = null;
-              apvLock.reentry_at      = new Date().toISOString();
-              if (product_url)   apvLock.product_url   = product_url;
-              if (product_name)  apvLock.product_name  = product_name;
-              if (product_image) apvLock.product_image = product_image;
-              if (product_price) apvLock.product_price = product_price;
-              // Reset product_view send flags so FLOW 2b sees this as fresh
-              (db.product_views || []).filter(pv => pv.phone === v.phone && pv.channel_id === cid)
-                .forEach(pv => { pv.whatsapp_sent = 0; pv.followup_count = 0; pv.whatsapp_sent_at = null; });
-              console.log(`[APV Re-entry] ${v.phone} ${prevStatus} → product_view — lock reset, 2-min wait starts from NOW`);
+              if (apvLock) {
+                const cycleNum = (apvLock.cycle_count || 0) + 1;
+                if (!apvLock.send_history) apvLock.send_history = [];
+                apvLock.send_history.push({
+                  cycle:           cycleNum,
+                  product_name:    apvLock.product_name    || '',
+                  product_url:     apvLock.product_url     || '',
+                  stage1_sent_at:  apvLock.stage_1_sent_at || null,
+                  stage2_sent_at:  apvLock.stage_2_sent_at || null,
+                  archived_at:     now,
+                  exit_reason:     prevStatus === 'product_view_lock' ? 'reentry_new_product' : 'reentry_after_completion',
+                  reentry_product: product_name || product_url || '',
+                });
+                apvLock.cycle_count = cycleNum;
+                // Clear dedup records so stage 1 can fire for the new cycle
+                db.abandoned_cart_executions = (db.abandoned_cart_executions || []).filter(x =>
+                  !(String(x.campaign_id) === String(apvLock.campaign_id) &&
+                    x.phone === v.phone && x.status === 'sent')
+                );
+                apvLock.stage           = 0;
+                apvLock.stage_1_sent_at = null;
+                apvLock.stage_2_sent_at = null;
+                apvLock.lock_status     = 'active';
+                apvLock.unlock_reason   = null;
+                apvLock.shifted_at      = null;
+                apvLock.reentry_at      = now;
+                if (product_url)   apvLock.product_url   = product_url;
+                if (product_name)  apvLock.product_name  = product_name;
+                if (product_image) apvLock.product_image = product_image;
+                if (product_price) apvLock.product_price = product_price;
+                // Reset product_view send flags so FLOW 2b treats this as a fresh entry
+                (db.product_views || []).filter(pv => pv.phone === v.phone && pv.channel_id === cid)
+                  .forEach(pv => { pv.whatsapp_sent = 0; pv.followup_count = 0; pv.whatsapp_sent_at = null; });
+                console.log(`[APV Re-entry] ${v.phone} ${prevStatus} → product_view_lock — all data reset, timer starts NOW`);
+              } else {
+                console.log(`[APV] ${v.phone || sessionId} → product_view_lock immediately (from ${prevStatus})`);
+              }
+            } else {
+              console.log(`[APV] ${v.phone || sessionId} → product_view_lock immediately (from ${prevStatus})`);
+            }
+          } else {
+            // No active APV campaign — standard status upgrade
+            upgradeStatus(v, 'product_view');
+
+            // Safety net: if user was in APV when campaign is now paused/deleted, reset lock
+            const wasInAPV = prevStatus === 'product_view_lock' || prevStatus === 'product_recommendation';
+            if (wasInAPV && v.phone) {
+              const apvLock = (db.campaign_locks || []).find(l =>
+                l.phone === v.phone && l.channel_id === cid &&
+                l.campaign_type === 'abandoned_product_view' &&
+                ['active', 'shifted_recommendation'].includes(l.lock_status)
+              );
+              if (apvLock) {
+                const cycleNum = (apvLock.cycle_count || 0) + 1;
+                if (!apvLock.send_history) apvLock.send_history = [];
+                apvLock.send_history.push({
+                  cycle:           cycleNum,
+                  product_name:    apvLock.product_name    || '',
+                  product_url:     apvLock.product_url     || '',
+                  stage1_sent_at:  apvLock.stage_1_sent_at || null,
+                  stage2_sent_at:  apvLock.stage_2_sent_at || null,
+                  archived_at:     new Date().toISOString(),
+                  exit_reason:     'reentry_no_active_apv',
+                  reentry_product: product_name || product_url || '',
+                });
+                apvLock.cycle_count     = cycleNum;
+                db.abandoned_cart_executions = (db.abandoned_cart_executions || []).filter(x =>
+                  !(String(x.campaign_id) === String(apvLock.campaign_id) &&
+                    x.phone === v.phone && x.status === 'sent')
+                );
+                apvLock.stage           = 0;
+                apvLock.stage_1_sent_at = null;
+                apvLock.stage_2_sent_at = null;
+                apvLock.lock_status     = 'active';
+                apvLock.unlock_reason   = null;
+                apvLock.shifted_at      = null;
+                apvLock.reentry_at      = new Date().toISOString();
+                if (product_url)   apvLock.product_url   = product_url;
+                if (product_name)  apvLock.product_name  = product_name;
+                if (product_image) apvLock.product_image = product_image;
+                if (product_price) apvLock.product_price = product_price;
+                (db.product_views || []).filter(pv => pv.phone === v.phone && pv.channel_id === cid)
+                  .forEach(pv => { pv.whatsapp_sent = 0; pv.followup_count = 0; pv.whatsapp_sent_at = null; });
+                console.log(`[APV Re-entry] ${v.phone} ${prevStatus} → product_view — lock reset`);
+              }
             }
           }
         }
       } else {
         // ── CREATE visitor on-the-fly when product event arrives before trackVisitor ──
         const now = new Date().toISOString();
+        const hasActiveAPV = (db.abandoned_cart_campaigns || []).some(c =>
+          c.channel_id === cid && c.campaign_type === 'abandoned_product_view' && c.is_active
+        );
         db.website_visitors.push({
           id:           (db.website_visitors.length || 0) + 1,
           channel_id:   cid,
           session_id:   sessionId,
           phone:        visitor?.phone || null,
-          status:       'product_view',
+          status:       hasActiveAPV ? 'product_view_lock' : 'product_view',
           device_type:  null,
           page_views:   1,
           last_product_name:  product_name  || null,
@@ -831,7 +894,7 @@ export const trackingController = {
           created_at:   now,
           updated_at:   now,
         });
-        console.log(`[Visitor] Auto-created on product view — status=product_view session=${sessionId}`);
+        console.log(`[Visitor] Auto-created on product view — status=${hasActiveAPV ? 'product_view_lock' : 'product_view'} session=${sessionId}`);
       }
 
       db.save();

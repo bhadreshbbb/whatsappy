@@ -50,7 +50,8 @@ export function upgradeStatus(visitor, newStatus) {
   const targetLevel  = STATUS_PRIORITY[newStatus]      || 0;
 
   // ── APV RE-ENTRY: product_view overrides product_view_lock ───────────────
-  // User views a new product while in APV lock → exit campaign, re-enter fresh.
+  // Fallback path: tracking.controller normally sets product_view_lock directly,
+  // but if no APV campaign is active at view time this downgrade still applies.
   if (visitor.status === 'product_view_lock' && newStatus === 'product_view') {
     visitor.status     = 'product_view';
     visitor.updated_at = new Date().toISOString();
