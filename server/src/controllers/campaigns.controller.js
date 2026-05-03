@@ -1197,6 +1197,9 @@ export const campaignsController = {
             attributed_cart_amount: attrCart ? parseFloat(attrCart.total_amount || 0) : 0,
             attributed_purchase: !!attrPurch,  // purchased after clicking
             attributed_revenue: attrPurch ? parseFloat(attrPurch.total_amount || 0) : 0,
+            // Re-entry / multi-cycle analytics
+            cycle_count:  l.cycle_count  || 1,
+            send_history: l.send_history || [],
             ...execs,
           };
         });

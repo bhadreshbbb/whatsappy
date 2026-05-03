@@ -769,17 +769,33 @@ export const trackingController = {
           );
 
           if (hasActiveAPV) {
-            // Post-cycle re-entry: increment funnel_cycle so FLOW 2b treats this as fresh
-            if (prevStatus === 'product_recommendation' || prevStatus === 'followup_complete' || prevStatus === 'purchased') {
+            // Phone-level re-entry check: detect completed APV cycle regardless of which
+            // session is making the request. Handles same-session AND cross-session cases.
+            const phoneCompletedAPV = v.phone
+              ? (db.website_visitors || []).some(other =>
+                  other.phone === v.phone && other.channel_id === cid &&
+                  (other.status === 'product_recommendation' || other.status === 'followup_complete'))
+              : false;
+            // Also check if this phone has a lock that completed (shifted_recommendation with stage=2)
+            const completedLock = v.phone
+              ? (db.campaign_locks || []).find(l =>
+                  l.phone === v.phone && l.channel_id === cid &&
+                  l.campaign_type === 'abandoned_product_view' &&
+                  (l.lock_status === 'shifted_recommendation' || (l.lock_status === 'active' && l.stage >= 2)))
+              : null;
+            const isReentry = prevStatus === 'product_view_lock' || prevStatus === 'product_recommendation'
+              || phoneCompletedAPV || !!completedLock;
+
+            // Post-cycle re-entry: increment funnel_cycle
+            if (prevStatus === 'product_recommendation' || prevStatus === 'followup_complete' ||
+                prevStatus === 'purchased' || phoneCompletedAPV) {
               v.funnel_cycle = (v.funnel_cycle || 1) + 1;
             }
             v.status     = 'product_view_lock';
             v.updated_at = now;
 
-            // Re-entry: reset existing lock so all previous message data is cleared and
-            // the stage-1 timer starts from NOW with the new product.
-            const wasInAPV = prevStatus === 'product_view_lock' || prevStatus === 'product_recommendation';
-            if (wasInAPV && v.phone) {
+            if (isReentry && v.phone) {
+              // Find the active APV lock for this phone (any resettable status)
               const apvLock = (db.campaign_locks || []).find(l =>
                 l.phone === v.phone && l.channel_id === cid &&
                 l.campaign_type === 'abandoned_product_view' &&
@@ -789,17 +805,17 @@ export const trackingController = {
                 const cycleNum = (apvLock.cycle_count || 0) + 1;
                 if (!apvLock.send_history) apvLock.send_history = [];
                 apvLock.send_history.push({
-                  cycle:           cycleNum,
-                  product_name:    apvLock.product_name    || '',
-                  product_url:     apvLock.product_url     || '',
-                  stage1_sent_at:  apvLock.stage_1_sent_at || null,
-                  stage2_sent_at:  apvLock.stage_2_sent_at || null,
-                  archived_at:     now,
-                  exit_reason:     prevStatus === 'product_view_lock' ? 'reentry_new_product' : 'reentry_after_completion',
-                  reentry_product: product_name || product_url || '',
+                  cycle:            cycleNum,
+                  product_name:     apvLock.product_name    || '',
+                  product_url:      apvLock.product_url     || '',
+                  stage1_sent_at:   apvLock.stage_1_sent_at || null,
+                  stage2_sent_at:   apvLock.stage_2_sent_at || null,
+                  archived_at:      now,
+                  exit_reason:      prevStatus === 'product_view_lock' ? 'reentry_new_product' : 'reentry_after_completion',
+                  reentry_product:  product_name || product_url || '',
+                  reentry_from_status: prevStatus,
                 });
-                apvLock.cycle_count = cycleNum;
-                // Archive dedup records — preserves send history while allowing fresh stage-1 send
+                apvLock.cycle_count     = cycleNum;
                 (db.abandoned_cart_executions || []).forEach(x => {
                   if (String(x.campaign_id) === String(apvLock.campaign_id) &&
                       x.phone === v.phone && x.status === 'sent') {
@@ -817,34 +833,37 @@ export const trackingController = {
                 if (product_name)  apvLock.product_name  = product_name;
                 if (product_image) apvLock.product_image = product_image;
                 if (product_price) apvLock.product_price = product_price;
-                // Reset product_view send flags so FLOW 2b treats this as a fresh entry
-                (db.product_views || []).filter(pv => pv.phone === v.phone && pv.channel_id === cid)
-                  .forEach(pv => { pv.whatsapp_sent = 0; pv.followup_count = 0; pv.whatsapp_sent_at = null; });
-                console.log(`[APV Re-entry] ${v.phone} ${prevStatus} → product_view_lock — all data reset, timer starts NOW`);
+                console.log(`[APV Re-entry] ${v.phone} ${prevStatus} → product_view_lock — cycle ${cycleNum}, lock reset, timer starts NOW`);
               } else {
-                console.log(`[APV] ${v.phone || sessionId} → product_view_lock immediately (from ${prevStatus})`);
+                console.log(`[APV] ${v.phone || sessionId} → product_view_lock (re-entry, no lock to reset) from ${prevStatus}`);
               }
-            } else {
-              console.log(`[APV] ${v.phone || sessionId} → product_view_lock immediately (from ${prevStatus})`);
-            }
-            // Cross-session cleanup: other sessions for this phone stuck at product_recommendation
-            // (e.g. user cleared storage and re-identified) — reset them so contacts dedup shows
-            // the current product_view_lock, not the stale completed state.
-            if (v.phone) {
+              // Always reset product_view send flags on re-entry so FLOW 2b treats this as fresh
+              (db.product_views || []).filter(pv => pv.phone === v.phone && pv.channel_id === cid)
+                .forEach(pv => { pv.whatsapp_sent = 0; pv.followup_count = 0; pv.whatsapp_sent_at = null; });
+              // Cross-session cleanup: reset other sessions for this phone stuck at
+              // product_recommendation so contacts dedup shows the new product_view_lock
               (db.website_visitors || []).forEach(other => {
                 if (other !== v && other.phone === v.phone && other.channel_id === cid &&
-                    other.status === 'product_recommendation') {
+                    (other.status === 'product_recommendation' || other.status === 'followup_complete')) {
                   other.status = 'active';
                   other.updated_at = now;
                 }
               });
+            } else {
+              console.log(`[APV] ${v.phone || sessionId} → product_view_lock immediately (from ${prevStatus})`);
             }
           } else {
             // No active APV campaign — standard status upgrade
             upgradeStatus(v, 'product_view');
 
-            // Safety net: if user was in APV when campaign is now paused/deleted, reset lock
-            const wasInAPV = prevStatus === 'product_view_lock' || prevStatus === 'product_recommendation';
+            // Safety net: if user was in APV when campaign is now paused/deleted, reset lock.
+            // Phone-level check handles cross-device: if any session for this phone was at
+            // product_recommendation, reset the lock and clean up other sessions.
+            const phoneWasInAPV = v.phone && (db.website_visitors || []).some(other =>
+              other.phone === v.phone && other.channel_id === cid &&
+              (other.status === 'product_view_lock' || other.status === 'product_recommendation')
+            );
+            const wasInAPV = prevStatus === 'product_view_lock' || prevStatus === 'product_recommendation' || phoneWasInAPV;
             if (wasInAPV && v.phone) {
               const apvLock = (db.campaign_locks || []).find(l =>
                 l.phone === v.phone && l.channel_id === cid &&
@@ -886,6 +905,14 @@ export const trackingController = {
                   .forEach(pv => { pv.whatsapp_sent = 0; pv.followup_count = 0; pv.whatsapp_sent_at = null; });
                 console.log(`[APV Re-entry] ${v.phone} ${prevStatus} → product_view — lock reset`);
               }
+              // Cross-session cleanup: reset other sessions for this phone at product_recommendation
+              (db.website_visitors || []).forEach(other => {
+                if (other !== v && other.phone === v.phone && other.channel_id === cid &&
+                    (other.status === 'product_recommendation' || other.status === 'followup_complete')) {
+                  other.status = 'active';
+                  other.updated_at = new Date().toISOString();
+                }
+              });
             }
           }
         }
