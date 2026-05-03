@@ -798,11 +798,13 @@ export const trackingController = {
                   reentry_product: product_name || product_url || '',
                 });
                 apvLock.cycle_count = cycleNum;
-                // Clear dedup records so stage 1 can fire for the new cycle
-                db.abandoned_cart_executions = (db.abandoned_cart_executions || []).filter(x =>
-                  !(String(x.campaign_id) === String(apvLock.campaign_id) &&
-                    x.phone === v.phone && x.status === 'sent')
-                );
+                // Archive dedup records — preserves send history while allowing fresh stage-1 send
+                (db.abandoned_cart_executions || []).forEach(x => {
+                  if (String(x.campaign_id) === String(apvLock.campaign_id) &&
+                      x.phone === v.phone && x.status === 'sent') {
+                    x.status = 'archived_reentry'; x.archived_at = now;
+                  }
+                });
                 apvLock.stage           = 0;
                 apvLock.stage_1_sent_at = null;
                 apvLock.stage_2_sent_at = null;
@@ -850,10 +852,12 @@ export const trackingController = {
                   reentry_product: product_name || product_url || '',
                 });
                 apvLock.cycle_count     = cycleNum;
-                db.abandoned_cart_executions = (db.abandoned_cart_executions || []).filter(x =>
-                  !(String(x.campaign_id) === String(apvLock.campaign_id) &&
-                    x.phone === v.phone && x.status === 'sent')
-                );
+                (db.abandoned_cart_executions || []).forEach(x => {
+                  if (String(x.campaign_id) === String(apvLock.campaign_id) &&
+                      x.phone === v.phone && x.status === 'sent') {
+                    x.status = 'archived_reentry'; x.archived_at = new Date().toISOString();
+                  }
+                });
                 apvLock.stage           = 0;
                 apvLock.stage_1_sent_at = null;
                 apvLock.stage_2_sent_at = null;

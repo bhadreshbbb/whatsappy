@@ -264,11 +264,14 @@ async function checkLockedUsers() {
         lock.unlock_reason   = null;
         lock.shifted_at      = null;
         lock.reentry_at      = new Date().toISOString();
-        // Clear dedup records so stage 1 can fire again
-        db.abandoned_cart_executions = (db.abandoned_cart_executions || []).filter(x =>
-          !(String(x.campaign_id) === String(lock.campaign_id) &&
-            x.phone === lock.phone && x.status === 'sent')
-        );
+        // Archive dedup records (preserve history — change status so stage 1 can fire fresh)
+        const archNow1 = new Date().toISOString();
+        (db.abandoned_cart_executions || []).forEach(x => {
+          if (String(x.campaign_id) === String(lock.campaign_id) &&
+              x.phone === lock.phone && x.status === 'sent') {
+            x.status = 'archived_reentry'; x.archived_at = archNow1;
+          }
+        });
         // Reset product_view flags
         (db.product_views || []).filter(v => v.phone === lock.phone && v.channel_id === channelId)
           .forEach(v => { v.whatsapp_sent = 0; v.followup_count = 0; v.whatsapp_sent_at = null; });
@@ -294,10 +297,13 @@ async function checkLockedUsers() {
         lock.unlock_reason   = null;
         lock.shifted_at      = null;
         lock.reentry_at      = new Date().toISOString();
-        db.abandoned_cart_executions = (db.abandoned_cart_executions || []).filter(x =>
-          !(String(x.campaign_id) === String(lock.campaign_id) &&
-            x.phone === lock.phone && x.status === 'sent')
-        );
+        const archNow2 = new Date().toISOString();
+        (db.abandoned_cart_executions || []).forEach(x => {
+          if (String(x.campaign_id) === String(lock.campaign_id) &&
+              x.phone === lock.phone && x.status === 'sent') {
+            x.status = 'archived_reentry'; x.archived_at = archNow2;
+          }
+        });
         (db.product_views || []).filter(v => v.phone === lock.phone && v.channel_id === channelId)
           .forEach(v => { v.whatsapp_sent = 0; v.followup_count = 0; v.whatsapp_sent_at = null; });
         changed = true;
@@ -1701,6 +1707,7 @@ async function sendMultiple(db, cam, events, type) {
             console.log(`[Lock] Created lock for ${evt.phone} — stage ${currentStage} — product: "${evt.product_name}"`);
           } else {
             existingLock.stage = currentStage;
+            if (currentStage === 1) existingLock.stage_1_sent_at = nowIso;
             if (currentStage === 2) existingLock.stage_2_sent_at = nowIso;
             console.log(`[Lock] Updated lock for ${evt.phone} → stage ${currentStage}`);
           }
