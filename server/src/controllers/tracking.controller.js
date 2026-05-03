@@ -829,11 +829,24 @@ export const trackingController = {
                 apvLock.unlock_reason   = null;
                 apvLock.shifted_at      = null;
                 apvLock.reentry_at      = now;
-                if (product_url)   apvLock.product_url   = product_url;
-                if (product_name)  apvLock.product_name  = product_name;
-                if (product_image) apvLock.product_image = product_image;
-                if (product_price) apvLock.product_price = product_price;
-                console.log(`[APV Re-entry] ${v.phone} ${prevStatus} → product_view_lock — cycle ${cycleNum}, lock reset, timer starts NOW`);
+                // Update product to the CURRENT view. If URL changes, clear stale name/image
+                // so the audience falls back to the fresh product_view record (which will be
+                // populated by the background scrape). Look for the best available data across
+                // all sessions for this phone+URL before clearing.
+                const newUrl = product_url || apvLock.product_url;
+                const urlChanged = product_url && product_url !== apvLock.product_url;
+                const bestPV = urlChanged
+                  ? (db.product_views || [])
+                      .filter(pv => pv.channel_id === cid && pv.product_url === product_url &&
+                        (pv.phone === v.phone ||
+                         (db.website_visitors.find(vis => vis.session_id === pv.session_id && vis.channel_id === cid))?.phone === v.phone))
+                      .sort((a, b) => ((b.product_name ? 1 : 0) - (a.product_name ? 1 : 0)) || (new Date(b.created_at) - new Date(a.created_at)))[0]
+                  : null;
+                apvLock.product_url   = newUrl;
+                apvLock.product_name  = product_name  || bestPV?.product_name  || (urlChanged ? '' : apvLock.product_name);
+                apvLock.product_image = product_image || bestPV?.product_image  || (urlChanged ? '' : apvLock.product_image);
+                apvLock.product_price = product_price || bestPV?.product_price  || apvLock.product_price;
+                console.log(`[APV Re-entry] ${v.phone} ${prevStatus} → product_view_lock — cycle ${cycleNum}, product: "${apvLock.product_name || apvLock.product_url}", timer starts NOW`);
               } else {
                 console.log(`[APV] ${v.phone || sessionId} → product_view_lock (re-entry, no lock to reset) from ${prevStatus}`);
               }
