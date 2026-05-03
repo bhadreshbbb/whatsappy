@@ -2688,12 +2688,12 @@ export default function Campaigns() {
                         }
                         if (u.stage1_status === 'sent') {
                           // Stage 1 sent, lock creation may have lagged — show stage 2 countdown
-                          if (mUntil === 0) return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(74,222,128,0.12)', color: '#4ade80' }}>🤖 auto-sending 2nd...</span>;
+                          if (mUntil === 0) return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(74,222,128,0.12)', color: '#4ade80' }}>✅ 1st sent · 🟢 2nd sending ≤60s</span>;
                           if (mUntil != null) return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(99,102,241,0.1)', color: '#818cf8' }}>✅ 1st sent · 2nd in {fmtCountdown(mUntil)}</span>;
                           return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(74,222,128,0.15)', color: '#4ade80' }}>✅ 1st sent</span>;
                         }
                         if (u.ready_to_send) {
-                          return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(74,222,128,0.12)', color: '#4ade80' }}>🤖 auto-sending 1st...</span>;
+                          return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(74,222,128,0.12)', color: '#4ade80' }}>🟢 1st msg sending ≤60s</span>;
                         }
                         const waitLeft = mAgo != null ? Math.max(0, (u.apv_delay_min || 2) - mAgo) : null;
                         return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(100,116,139,0.1)', color: '#64748b' }}>
@@ -2704,7 +2704,7 @@ export default function Campaigns() {
                       // ACTIVE — locked in campaign
                       if (u.lock_status === 'active') {
                         if (u.stage === 0) {
-                          if (u.ready_to_send) return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(74,222,128,0.12)', color: '#4ade80' }}>🤖 auto-sending 1st...</span>;
+                          if (u.ready_to_send) return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(74,222,128,0.12)', color: '#4ade80' }}>🟢 1st msg sending ≤60s</span>;
                           const waitLeft = u.minutes_until_stage1 != null ? u.minutes_until_stage1
                             : (mAgo != null ? Math.max(0, (u.apv_delay_min || 2) - mAgo) : null);
                           return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(251,191,36,0.1)', color: '#fbbf24' }}>
@@ -2712,10 +2712,11 @@ export default function Campaigns() {
                           </span>;
                         }
                         if (u.stage === 1) {
-                          if (u.stage2_status === 'failed') return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(239,68,68,0.15)', color: '#f87171' }}>✅ 1st sent · ❌ 2nd failed</span>;
-                          if (mUntil === 0) return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(74,222,128,0.12)', color: '#4ade80' }}>🤖 auto-sending 2nd...</span>;
+                          const s1Label = u.stage1_status === 'failed' ? '❌ 1st failed' : '✅ 1st sent';
+                          if (u.stage2_status === 'failed') return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(239,68,68,0.15)', color: '#f87171' }}>{s1Label} · ❌ 2nd failed</span>;
+                          if (mUntil === 0) return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(74,222,128,0.12)', color: '#4ade80' }}>{s1Label} · 🟢 2nd sending ≤60s</span>;
                           return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(99,102,241,0.1)', color: '#818cf8' }}>
-                            ✅ 1st sent · 2nd in {fmtCountdown(mUntil)}
+                            {s1Label} · 2nd in {fmtCountdown(mUntil)}
                           </span>;
                         }
                         return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(56,189,248,0.1)', color: '#38bdf8' }}>✅ both msgs sent</span>;
@@ -2964,7 +2965,7 @@ export default function Campaigns() {
                                               : u.stage1_status === 'failed'
                                                 ? <span className="text-[9px]" style={{ color: '#f87171' }}>❌ Failed — {u.stage1_error || 'WhatsApp API error'} · Stage 2 still sending after delay</span>
                                                 : u.ready_to_send
-                                                  ? <span className="text-[9px]" style={{ color: '#4ade80' }}>🤖 Automation sending now (every 60s)</span>
+                                                  ? <span className="text-[9px]" style={{ color: '#4ade80' }}>🟢 Sending within 60s (next automation tick)</span>
                                                   : <span className="text-[9px]" style={{ color: '#475569' }}>⏳ Waiting · {u.minutes_until_stage1 != null ? `${fmtCountdown(u.minutes_until_stage1)} until send` : `${u.apv_delay_min ?? 2}m inactivity needed`}{u.minutes_since_activity != null ? ` · viewed ${fmtAgo(u.minutes_since_activity)}` : ''}</span>
                                             }
                                           </div>
@@ -2989,7 +2990,7 @@ export default function Campaigns() {
                                                 : u.stage2_status === 'failed'
                                                   ? <span className="text-[9px]" style={{ color: '#f87171' }}>❌ Failed — {u.stage2_error || 'WhatsApp API error'}</span>
                                                   : u.minutes_until_next_send === 0
-                                                    ? <span className="text-[9px]" style={{ color: '#4ade80' }}>🤖 Automation sending now (every 60s)</span>
+                                                    ? <span className="text-[9px]" style={{ color: '#4ade80' }}>🟢 Sending within 60s (next automation tick)</span>
                                                     : <span className="text-[9px]" style={{ color: '#818cf8' }}>⏳ Scheduled · sends in {fmtCountdown(u.minutes_until_next_send)}{u.stage2_due_at ? ` · ${fmtTs(u.stage2_due_at)}` : ''}</span>
                                               }
                                             </div>
