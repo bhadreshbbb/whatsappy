@@ -1617,6 +1617,7 @@ async function sendMultiple(db, cam, events, type) {
           sendResult = await whatsappService.sendTemplateMessage(evt.phone, sendPayload);
         } catch (sendErr) {
           console.error(`[MetaTemplateSend] FAILED for ${evt.phone} — ${sendErr.message}`);
+          const failedAt = new Date().toISOString();
           db.abandoned_cart_executions.push({
             id: (db.abandoned_cart_executions.length || 0) + 1,
             campaign_id: cam.id, campaign_name: cam.name,
@@ -1624,9 +1625,37 @@ async function sendMultiple(db, cam, events, type) {
             template_id: metaTpl.id, template_name: metaTpl.name,
             stage: currentStage, language: metaLangCode,
             status: 'failed', error: sendErr.message,
-            sent_at: new Date().toISOString(), is_meta_template: true,
+            sent_at: failedAt, is_meta_template: true,
             payload_sent: JSON.stringify(sendPayload),
           });
+          // APV stage 1 failure: advance lock so stage 2 still fires after followup delay,
+          // and the failed exec is visible (matched by stage_1_sent_at timestamp).
+          if (cam.campaign_type === 'abandoned_product_view' && currentStage === 1) {
+            if (!db.campaign_locks) db.campaign_locks = [];
+            const apvLock = db.campaign_locks.find(l =>
+              l.phone === evt.phone && String(l.campaign_id) === String(cam.id)
+            );
+            if (apvLock) {
+              if (apvLock.stage === 0) {
+                apvLock.stage = 1;
+                apvLock.stage_1_sent_at = failedAt;
+                console.log(`[APV] Stage 1 failed → lock advanced to stage 1, stage 2 queued after delay`);
+              }
+            } else {
+              db.campaign_locks.push({
+                id: uuidv4(), channel_id: channelId,
+                phone: evt.phone, campaign_id: cam.id, campaign_type: cam.campaign_type,
+                locked_at: failedAt, reentry_at: null,
+                product_url: evt.product_url || '', product_name: evt.product_name || '',
+                product_price: evt.product_price || '', product_image: evt.product_image || '',
+                stage: 1, stage_1_sent_at: failedAt, stage_2_sent_at: null,
+                lock_status: 'active', revenue: 0,
+                last_status_check: failedAt, last_known_status: 'product_view_lock',
+                unlock_reason: null,
+              });
+              console.log(`[APV] Stage 1 failed → lock created at stage 1, stage 2 queued after delay`);
+            }
+          }
           db.save();
           continue;
         }

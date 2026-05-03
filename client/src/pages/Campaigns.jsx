@@ -2962,7 +2962,7 @@ export default function Campaigns() {
                                             {u.stage1_status === 'sent'
                                               ? <span className="text-[9px]" style={{ color: '#4ade80' }}>✅ Sent · {fmtTs(u.stage1_sent_at || u.stage_1_sent_at)}</span>
                                               : u.stage1_status === 'failed'
-                                                ? <span className="text-[9px]" style={{ color: '#f87171' }}>❌ Failed — {u.stage1_error || 'WhatsApp API error'} · Retry on next tick</span>
+                                                ? <span className="text-[9px]" style={{ color: '#f87171' }}>❌ Failed — {u.stage1_error || 'WhatsApp API error'} · Stage 2 still sending after delay</span>
                                                 : u.ready_to_send
                                                   ? <span className="text-[9px]" style={{ color: '#4ade80' }}>🤖 Automation sending now (every 60s)</span>
                                                   : <span className="text-[9px]" style={{ color: '#475569' }}>⏳ Waiting · {u.minutes_until_stage1 != null ? `${fmtCountdown(u.minutes_until_stage1)} until send` : `${u.apv_delay_min ?? 2}m inactivity needed`}{u.minutes_since_activity != null ? ` · viewed ${fmtAgo(u.minutes_since_activity)}` : ''}</span>
@@ -2970,7 +2970,7 @@ export default function Campaigns() {
                                           </div>
 
                                           {/* User reply after Stage 1 */}
-                                          {(u.stage1_status === 'sent' || u.stage_1_sent_at) && (
+                                          {u.stage1_status === 'sent' && (
                                             <div className="flex items-start gap-2 pl-2" style={{ borderLeft: '2px solid rgba(99,102,241,0.2)' }}>
                                               <span className="text-[9px] w-14 flex-shrink-0" style={{ color: '#475569' }}>user reply</span>
                                               {u.last_response_text
