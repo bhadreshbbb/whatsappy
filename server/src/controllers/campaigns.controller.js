@@ -143,13 +143,43 @@ export const campaignsController = {
 
       // 2. For automation campaigns — reset the whatsapp_sent flags so automation
       //    stops targeting these events (no orphaned state left behind).
-      const type = campaign.campaign_type;
+      const type       = campaign.campaign_type;
+      const channelId  = campaign.channel_id;
+      const now        = new Date().toISOString();
 
       if (type === 'abandoned_product_view' || type === 'product_view') {
-        // Reset product_view records that were sent by this campaign
+        // Release all visitors currently locked by this campaign back to product_view
+        // so they are no longer stuck in a campaign that no longer exists.
+        if (type === 'abandoned_product_view') {
+          const activeLocks = (db.campaign_locks || []).filter(l =>
+            String(l.campaign_id) === String(id) && l.lock_status === 'active'
+          );
+          for (const lock of activeLocks) {
+            const visitor = (db.website_visitors || []).find(v =>
+              v.phone === lock.phone && v.channel_id === channelId && v.status === 'product_view_lock'
+            );
+            if (visitor) {
+              visitor.status     = 'product_view';
+              visitor.updated_at = now;
+              console.log(`[Campaign Delete] ${visitor.phone} → product_view (released from deleted campaign)`);
+            }
+            // Reset product_view send flags for this phone so they can re-enter a new campaign
+            (db.product_views || []).forEach(pv => {
+              if (pv.phone === lock.phone && pv.channel_id === channelId) {
+                pv.whatsapp_sent = 0; pv.followup_count = 0; pv.whatsapp_sent_at = null;
+                delete pv.campaign_id;
+              }
+            });
+          }
+          // Remove all campaign_locks for this campaign
+          db.campaign_locks = (db.campaign_locks || []).filter(l =>
+            String(l.campaign_id) !== String(id)
+          );
+        }
+
+        // Reset product_view records that were sent by this campaign (mid-flight only)
         (db.product_views || []).forEach(v => {
           if (String(v.campaign_id) === String(id) || !v.campaign_id) {
-            // Only reset if followup not complete (i.e. campaign was mid-flight)
             if ((v.followup_count || 0) < 2) {
               v.whatsapp_sent    = 0;
               v.whatsapp_sent_at = null;
@@ -630,9 +660,40 @@ export const campaignsController = {
       if (idx < 0) {
         return res.status(404).json({ error: 'Campaign not found' });
       }
-      db.abandoned_cart_campaigns[idx].is_active = (status === 'running' || status === 'scheduled') ? 1 : 0;
+      const campaign    = db.abandoned_cart_campaigns[idx];
+      const newIsActive = (status === 'running' || status === 'scheduled') ? 1 : 0;
+      campaign.is_active = newIsActive;
+
+      // When pausing an APV campaign: release product_view_lock visitors if no other
+      // active APV campaign exists — otherwise they'd be stuck with no messages sending.
+      if (newIsActive === 0 && campaign.campaign_type === 'abandoned_product_view') {
+        const channelId = campaign.channel_id;
+        const otherActiveAPV = db.abandoned_cart_campaigns.some(c =>
+          String(c.id) !== String(id) &&
+          c.channel_id === channelId &&
+          c.campaign_type === 'abandoned_product_view' &&
+          c.is_active
+        );
+        if (!otherActiveAPV) {
+          const now = new Date().toISOString();
+          const activeLocks = (db.campaign_locks || []).filter(l =>
+            String(l.campaign_id) === String(id) && l.lock_status === 'active'
+          );
+          for (const lock of activeLocks) {
+            const visitor = (db.website_visitors || []).find(v =>
+              v.phone === lock.phone && v.channel_id === channelId && v.status === 'product_view_lock'
+            );
+            if (visitor) {
+              visitor.status     = 'product_view';
+              visitor.updated_at = now;
+              console.log(`[Campaign Pause] ${visitor.phone} → product_view (no other active APV)`);
+            }
+          }
+        }
+      }
+
       db.save();
-      res.json(db.abandoned_cart_campaigns[idx]);
+      res.json(campaign);
     } catch (error) {
       next(error);
     }

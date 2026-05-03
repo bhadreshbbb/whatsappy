@@ -853,10 +853,10 @@ async function runAutomation() {
         const settingsRow = (db.channel_settings || []).find(s => s.channel_id === channelId);
         const channelSettings = settingsRow ? (() => { try { return JSON.parse(settingsRow.settings || '{}'); } catch(_) { return {}; } })() : {};
         const productSlug = channelSettings.product_url_slug || '/products';
-        // Stage 1 delay: from campaign setting (apv_delay_min), fallback to 2 min test default
-        const STAGE1_DELAY_MS = (cam.apv_delay_min || 2) * 60 * 1000;
-        // Stage 2 gap: from campaign setting (apv_followup_min), fallback to 4 min test default
-        const STAGE2_GAP_MIN  = cam.apv_followup_min || 4;
+        // Stage 1 delay: use campaign setting; fall back to 2 min only when unset (null/undefined)
+        const STAGE1_DELAY_MS = (cam.apv_delay_min != null ? cam.apv_delay_min : 2) * 60 * 1000;
+        // Stage 2 gap: same — fallback to 4 min only when unset
+        const STAGE2_GAP_MIN  = cam.apv_followup_min != null ? cam.apv_followup_min : 4;
         const now = Date.now();
 
         // Build MOST RECENT product_view per phone
@@ -943,14 +943,15 @@ async function runAutomation() {
           if (isInitial) {
             // Lock guard: stage 1 already sent
             if (v._lock && v._lock.stage >= 1) return false;
-            // Timer anchor: for re-entered users (lockIsReset), use lock.reentry_at so the
-            // 2-min delay is counted from when re-entry was detected — NOT the old product_view
-            // created_at which is already stale (5+ min ago) and would fire immediately.
-            // For first-time users, use product_view created_at (set once on page load).
+            // Timer anchor:
+            //   Re-entered users  → lock.reentry_at (set when re-entry detected NOW)
+            //   First-time users  → product_view.created_at (set when product was viewed)
+            // We never fall back to visited_at because that refreshes on every page visit
+            // and would give a wrong (later) baseline that makes the message fire too late.
             const lockIsReset = v._lock && v._lock.stage === 0 && !v._lock.stage_1_sent_at;
             const productViewTime = (lockIsReset && v._lock?.reentry_at)
               ? v._lock.reentry_at
-              : (v._viewRec?.created_at || v._visitor?.visited_at || v.created_at);
+              : (v._viewRec?.created_at || v._visitor?.created_at || v.created_at);
             if ((now - new Date(productViewTime).getTime()) < STAGE1_DELAY_MS) return false;
           }
           if (isFollowup) {
