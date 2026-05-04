@@ -39,7 +39,7 @@ export default function Signup() {
       if (!res.ok) { setError(data.error || 'Signup failed'); return; }
 
       localStorage.setItem('authToken',  data.token);
-      localStorage.setItem('channelId',  data.user.channelId);
+      if (data.user.channelId) localStorage.setItem('channelId', data.user.channelId);
       localStorage.setItem('userName',   data.user.name);
       localStorage.setItem('userEmail',  data.user.email);
       navigate('/dashboard', { replace: true });

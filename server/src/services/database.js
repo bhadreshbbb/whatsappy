@@ -141,6 +141,9 @@ async function loadFromMongo() {
 //               leave existing data intact; deleted records cleaned up separately)
 let _saveInProgress = false;
 let _savePending    = false;
+// Set to true only after initDb fully completes. Prevents a save that runs before
+// MongoDB data is loaded from wiping collections (empty in-memory → deleteMany).
+let _dbLoaded = false;
 
 // Returns the field to use as the stable document key for upserts
 function _docKey(table, doc) {
@@ -166,8 +169,9 @@ async function saveToMongo() {
       const col  = mongoDb.collection(table);
 
       if (docs.length === 0) {
-        // Table is intentionally empty — clear it
-        await col.deleteMany({});
+        // Only clear if DB has fully loaded — an empty array before load
+        // means we haven't read MongoDB yet, not that the collection is empty.
+        if (_dbLoaded) await col.deleteMany({});
         continue;
       }
 
@@ -930,8 +934,24 @@ export async function initDb() {
   }
 
   seedDummyData();
+
+  // Migrate: assign channel_id to any user account that doesn't have one.
+  // Happens when accounts were created before channel_id was added to the schema.
+  // Without this, their JWT has channelId=undefined and the dashboard shows 0 visitors.
+  let migrated = 0;
+  if (db.users) {
+    for (const user of db.users) {
+      if (!user.channel_id) {
+        user.channel_id = 'ch_' + Math.random().toString(36).slice(2, 14);
+        migrated++;
+        console.log(`[DB] Migrated: assigned channel_id ${user.channel_id} to user ${user.email}`);
+      }
+    }
+  }
+
+  _dbLoaded = true;  // From now on, saveToMongo() may clear empty collections safely
   saveDb();
-  console.log('Database initialized with dummy data!');
+  console.log(`[DB] Init complete. Users migrated: ${migrated}`);
 }
 
 function seedDummyData() {

@@ -120,18 +120,20 @@ if (fs.existsSync(clientDist)) {
 
 app.use(errorHandler);
 
+// Wait for DB to fully load before accepting requests — prevents race where
+// tracking calls arrive while MongoDB is still loading and trigger a save
+// that wipes all collections (deleteMany on empty in-memory arrays).
 initDb().then(() => {
   startAutomation();
-});
-
-httpServer.listen(PORT, () => {
-  console.log(`\n========================================`);
-  console.log(`  WhatsWay Pro Server running!`);
-  console.log(`========================================`);
-  console.log(`  API:    http://localhost:${PORT}`);
-  console.log(`  Socket: ws://localhost:${PORT}`);
-  console.log(`  Health: http://localhost:${PORT}/health`);
-  console.log(`========================================\n`);
+  httpServer.listen(PORT, () => {
+    console.log(`\n========================================`);
+    console.log(`  WhatsWay Pro Server running!`);
+    console.log(`========================================`);
+    console.log(`  API:    http://localhost:${PORT}`);
+    console.log(`  Socket: ws://localhost:${PORT}`);
+    console.log(`  Health: http://localhost:${PORT}/health`);
+    console.log(`========================================\n`);
+  });
 });
 
 export default app;

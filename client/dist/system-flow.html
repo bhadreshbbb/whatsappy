@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Visual Flow Diagram</title>
+    <script type="module">
+      import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
+      mermaid.initialize({ startOnLoad: true, theme: 'dark' });
+    </script>
+    <style>
+        body {
+            background-color: #0d1424;
+            color: white;
+            font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            margin: 0;
+            padding: 40px;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            border-radius: 24px;
+            padding: 40px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.4);
+        }
+        h1 {
+            text-align: center;
+            color: #4ade80;
+            margin-bottom: 30px;
+            font-size: 2rem;
+            letter-spacing: 1px;
+        }
+        .mermaid {
+            display: flex;
+            justify-content: center;
+        }
+        .note {
+            text-align: center;
+            margin-top: 20px;
+            color: #94a3b8;
+            font-size: 0.9rem;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <h1>🚀 Automation Lifecycle Map</h1>
+        <div class="mermaid">
+        graph TD
+            %% ── 1. The Entry Points (Tracker.js) ──
+            subgraph Frontend ["User Entry Points (Via tracker.js)"]
+                NEW_USER((New User Uses Site))
+                
+                NEW_USER -->|Just Browses| V_HOME[Visits Home/Listing Pages]
+                NEW_USER -->|Clicks Product| V_PROD[Views Specific Product]
+                NEW_USER -->|High Intent| V_CART[Adds items to Cart]
+            end
+
+            %% ── 2. Database Status Allocation ──
+            subgraph Status ["System Allocation & Status"]
+                V_HOME -->|Creates Long-term session| STAT_VIS[Status: Active Visitor]
+                V_PROD --> STAT_PROD[Status: Product Viewer]
+                V_CART --> STAT_CART[Status: Abandoned Cart]
+            end
+
+            %% ── 3. The Automation Engine Routing ──
+            subgraph Engine ["The 4-Stage Automation Engine (Runs every 1 min)"]
+                %% Website Campaign
+                STAT_VIS -->|If no further action| CAM_HOME{Website Visit Campaign}
+                CAM_HOME -->|Nudge back to store| MSG_HOME[💬 WhatsApp: 'Hey, noticed you browsing! Check our new collection.']
+
+                %% Product Campaign
+                STAT_PROD -->|If they didn't add to cart| CAM_PROD{Product View Campaign}
+                CAM_PROD -->|Stage 1: 2 hrs delay| PROD_MSG1[💬 WhatsApp: 'Like the Blue Kurti?']
+                PROD_MSG1 -->|Stage 2: 24 hrs delay| PROD_MSG2[💬 WhatsApp: 'People also bought this']
+
+                %% Cart Campaign
+                STAT_CART -->|If no checkout| CAM_CART{Cart Recovery Campaign}
+                CAM_CART -->|Stage 1: 1 hr delay| CART_MSG1[💬 WhatsApp: 'Cart Waiting + Image + 10% Off']
+                CART_MSG1 -->|Stage 2: 24h delay| CART_MSG2[💬 WhatsApp: 'Last Chance!']
+
+                %% Hot User Promotion
+                CART_MSG2 -.->|Reaches max 4 followups| ST_HOT([Status Upgraded to: HOT USER 🔥])
+                PROD_MSG2 -.->|Reaches max 4 followups| ST_HOT
+            end
+
+            %% ── 4. The Checkout Pivot (Conversion) ──
+            subgraph Conversion ["The Checkout Pivot"]
+                MSG_HOME -.->|User clicks & buys| CHECKOUT(Checkout Completed 💸)
+                PROD_MSG1 -.->|User clicks & buys| CHECKOUT
+                CART_MSG1 -.->|User clicks & buys| CHECKOUT
+                NEW_USER -->|Buys instantly| CHECKOUT
+                
+                CHECKOUT ===>|Instantly triggers Tracker API| STAT_GUARD((STATUS GUARD ACTIVATED))
+                
+                STAT_GUARD -->|1. Immediately deletes/stops any pending Cart/Product reminders| CANCEL_SPAM[🚫 Auto-Cancel all annoying reminders]
+                STAT_GUARD -->|2. Upgrades user profile| STAT_PURCH[Status: Purchased]
+            end
+
+            %% ── 5. The Post-Purchase Cycle ──
+            subgraph PostPurchase ["The Rebirth (Post-Purchase Flow)"]
+                STAT_PURCH -->|Now eligible only for this| CAM_POST{Post-Purchase Campaign}
+                
+                CAM_POST -->|Immediate| THANK_MSG[💬 WhatsApp: 'Thank you for your order! Here is your receipt.']
+                THANK_MSG -->|3 days later (Upsell)| UPSELL_MSG[💬 WhatsApp: 'Since you bought Blue Kurti, you might like these matching earrings.']
+                UPSELL_MSG -->|30 days later| REORDER_MSG[💬 WhatsApp: 'Get 20% off your next purchase!']
+                
+                REORDER_MSG -.->|User clicks and buys again| CHECKOUT
+            end
+
+            %% ── 6. Manual Broadcast Engine (Upsells) ──
+            subgraph BroadcastEngine ["Custom Target Broadcast Engine"]
+                CLIENT((You / Merchant)) -->|Select Target Filter| CAM_CUSTOM{Custom Upsell Campaign}
+                CAM_CUSTOM -->|Target: All Users| DB_VISITORS[(Website Visitors DB)]
+                CAM_CUSTOM -->|Target: Purchasers| DB_PURCHASERS[(Post-Purchase DB)]
+                CAM_CUSTOM -->|Target: Hot Users| DB_HOT[(Hot Users DB)]
+                
+                DB_VISITORS -.->|Filter & Send| DYN_INJECT[Dynamic Graphic & CTA Injection]
+                DB_PURCHASERS -.-> DYN_INJECT
+                DB_HOT -.-> DYN_INJECT
+                
+                DYN_INJECT ===>|Instant WhatsApp Blast| WA_API2[Meta / Twilio API]
+            end
+
+            %% Styling 
+            classDef blue fill:#1e3a8a,stroke:#3b82f6,color:#fff;
+            classDef purple fill:#5b21b6,stroke:#8b5cf6,color:#fff;
+            classDef orange fill:#9a3412,stroke:#f97316,color:#fff;
+            classDef red fill:#991b1b,stroke:#ef4444,color:#fff;
+            classDef green fill:#166534,stroke:#22c55e,color:#fff;
+            classDef gold fill:#854d0e,stroke:#eab308,color:#fff;
+            classDef magenta fill:#be185d,stroke:#f43f5e,color:#fff;
+
+            class V_HOME,STAT_VIS,CAM_HOME blue;
+            class V_PROD,STAT_PROD,CAM_PROD purple;
+            class V_CART,STAT_CART,CAM_CART orange;
+            class CHECKOUT,STAT_GUARD,CANCEL_SPAM red;
+            class STAT_PURCH,CAM_POST,THANK_MSG,UPSELL_MSG,REORDER_MSG green;
+            class ST_HOT gold;
+            class CLIENT,CAM_CUSTOM,DYN_INJECT magenta;
+        </div>
+        <p class="note">Scroll horizontally/vertically to view the whole flow.</p>
+    </div>
+
+</body>
+</html>

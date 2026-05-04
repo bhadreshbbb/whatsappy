@@ -5,7 +5,8 @@ import { useNavigate } from "react-router-dom";
 
 function authFetch(path, opts = {}) {
   const token     = localStorage.getItem('authToken');
-  const channelId = localStorage.getItem('channelId') || 'demo';
+  const _cid      = localStorage.getItem('channelId');
+  const channelId = (_cid && _cid !== 'undefined' && _cid !== 'null') ? _cid : '';
   const BASE      = import.meta.env.VITE_API_URL || '';
   const headers   = { 'Content-Type': 'application/json', 'x-channel-id': channelId, ...opts.headers };
   if (token) headers['Authorization'] = `Bearer ${token}`;
@@ -30,7 +31,8 @@ export default function Settings() {
   const [pwSaving, setPwSaving] = useState(false);
   const [trackerCheck, setTrackerCheck] = useState(null); // null | 'checking' | {ok, count}
 
-  const channelId  = localStorage.getItem('channelId')  || 'demo';
+  const _initCid = localStorage.getItem('channelId');
+  const [channelId, setChannelId] = useState((_initCid && _initCid !== 'undefined' && _initCid !== 'null') ? _initCid : '');
   const userName   = localStorage.getItem('userName')   || '';
   const userEmail  = localStorage.getItem('userEmail')  || '';
 
@@ -40,6 +42,18 @@ export default function Settings() {
   };
 
   useEffect(() => {
+    // Fetch authoritative channelId from server — localStorage may be stale or missing.
+    // If they differ, the tracker snippet would show the wrong channelId and visits would
+    // go to a different channel than what the dashboard queries.
+    authApi.me().then(user => {
+      if (user?.channelId && user.channelId !== localStorage.getItem('channelId')) {
+        localStorage.setItem('channelId', user.channelId);
+        setChannelId(user.channelId);
+        console.log('[Settings] channelId updated from server:', user.channelId);
+      } else if (user?.channelId) {
+        setChannelId(user.channelId);
+      }
+    }).catch(() => {});
     settingsApi.get().then(s => { setSettings(s); setLoading(false); }).catch(() => setLoading(false));
   }, []);
 
@@ -117,7 +131,7 @@ export default function Settings() {
 
   const copySnippet = () => {
     const baseUrl = window.location.origin;
-    const cid = localStorage.getItem('channelId') || 'demo';
+    const cid = channelId || localStorage.getItem('channelId') || '';
     const snippet = `<!-- ── WhatsWay Tracker — paste before </body> on every page ── -->
 <script>
   window.WhatswayConfig = {

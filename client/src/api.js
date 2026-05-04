@@ -17,7 +17,8 @@ async function request(path, opts = {}) {
   }
 
   const token     = localStorage.getItem('authToken');
-  const channelId = localStorage.getItem('channelId') || 'demo';
+  const _cid      = localStorage.getItem('channelId');
+  const channelId = (_cid && _cid !== 'undefined' && _cid !== 'null') ? _cid : '';
 
   const headers = {
     'Content-Type': 'application/json',
