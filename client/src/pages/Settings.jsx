@@ -222,12 +222,14 @@ export default function Settings() {
             <div>
               <label className="label">WhatsApp Phone Number ID</label>
               <input className="input font-mono" placeholder="e.g. 123456789012345"
+                autoComplete="off"
                 value={settings.whatsapp_phone_id || ""}
                 onChange={e => s("whatsapp_phone_id", e.target.value)} />
             </div>
             <div>
               <label className="label">Business Account ID (WABA ID)</label>
               <input className="input font-mono" placeholder="e.g. 987654321098765"
+                autoComplete="off"
                 value={settings.whatsapp_business_id || ""}
                 onChange={e => s("whatsapp_business_id", e.target.value)} />
             </div>
@@ -236,6 +238,7 @@ export default function Settings() {
                 App ID <span className="text-xs ml-1 font-normal" style={{ color: "#475569" }}>(required for template image upload)</span>
               </label>
               <input className="input font-mono" placeholder="e.g. 123456789"
+                autoComplete="off"
                 value={settings.whatsapp_app_id || ""}
                 onChange={e => s("whatsapp_app_id", e.target.value)} />
               <p className="text-xs mt-1" style={{ color: "#334155" }}>Find it at developers.facebook.com → your app → App ID</p>
@@ -245,6 +248,7 @@ export default function Settings() {
               <div className="relative">
                 <input className="input font-mono pr-10" type={showToken ? "text" : "password"}
                   placeholder="EAAxxxxxxx…"
+                  autoComplete="new-password"
                   value={settings.whatsapp_token || ""}
                   onChange={e => s("whatsapp_token", e.target.value)} />
                 <button onClick={() => setShowToken(t => !t)}

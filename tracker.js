@@ -1,6 +1,18 @@
 !function() {
   var config = window.WhatswayConfig || {};
-  var baseUrl = config.baseUrl || '';
+  // Use config.baseUrl if set, otherwise auto-detect from the <script src> tag
+  var baseUrl = config.baseUrl || (function() {
+    try {
+      var scripts = document.querySelectorAll('script[src]');
+      for (var i = scripts.length - 1; i >= 0; i--) {
+        if (scripts[i].src.indexOf('/tracker.js') !== -1) {
+          var u = new URL(scripts[i].src);
+          return u.protocol + '//' + u.host;
+        }
+      }
+    } catch(_) {}
+    return '';
+  })();
 
   // ── Session ──────────────────────────────────────────────────────────────────
   var sessionId = sessionStorage.getItem('ww_session');
@@ -40,7 +52,7 @@
     data.sessionId = sessionId;
     data.type = type;
     data.channelId = config.channelId || 'demo';
-    fetch('https://whatsappy.onrender.com' + '/api/tracking/' + type, {
+    fetch(baseUrl + '/api/tracking/' + type, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
