@@ -783,8 +783,17 @@ export const trackingController = {
                   l.campaign_type === 'abandoned_product_view' &&
                   (l.lock_status === 'shifted_recommendation' || (l.lock_status === 'active' && l.stage >= 2)))
               : null;
+            // Mid-campaign re-entry: phone has active lock at stage 1 (stage 1 sent, stage 2 pending).
+            // A new device/session viewing a product should reset the entire cycle — prevStatus is
+            // 'active' for the new session so the checks above miss this case.
+            const inProgressLock = v.phone
+              ? (db.campaign_locks || []).find(l =>
+                  l.phone === v.phone && l.channel_id === cid &&
+                  l.campaign_type === 'abandoned_product_view' &&
+                  l.lock_status === 'active' && l.stage >= 1)
+              : null;
             const isReentry = prevStatus === 'product_view_lock' || prevStatus === 'product_recommendation'
-              || phoneCompletedAPV || !!completedLock;
+              || phoneCompletedAPV || !!completedLock || !!inProgressLock;
 
             // Post-cycle re-entry: increment funnel_cycle
             if (prevStatus === 'product_recommendation' || prevStatus === 'followup_complete' ||
@@ -811,7 +820,9 @@ export const trackingController = {
                   stage1_sent_at:   apvLock.stage_1_sent_at || null,
                   stage2_sent_at:   apvLock.stage_2_sent_at || null,
                   archived_at:      now,
-                  exit_reason:      prevStatus === 'product_view_lock' ? 'reentry_new_product' : 'reentry_after_completion',
+                  exit_reason:      prevStatus === 'product_view_lock' ? 'reentry_new_product'
+                                    : (inProgressLock && prevStatus !== 'product_view_lock') ? 'reentry_cross_device'
+                                    : 'reentry_after_completion',
                   reentry_product:  product_name || product_url || '',
                   reentry_from_status: prevStatus,
                 });
