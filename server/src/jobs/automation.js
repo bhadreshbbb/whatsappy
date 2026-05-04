@@ -205,7 +205,6 @@ async function applyCardsToAutoProductTemplates(channelId, productConfigCards) {
 // Any status ≠ product_view_lock means the user has left the campaign.
 async function checkLockedUsers() {
   const db = getDb();
-  const channelId = process.env.CHANNEL_ID || 'demo';
   if (!db.campaign_locks?.length) return;
 
   let changed = false;
@@ -214,10 +213,9 @@ async function checkLockedUsers() {
   const locksToDelete = new Set();
 
   for (const lock of db.campaign_locks) {
-    if (lock.channel_id !== channelId) continue;
     if (!['active', 'shifted_recommendation'].includes(lock.lock_status)) continue;
 
-    const visitor = db.website_visitors.find(v => v.phone === lock.phone && v.channel_id === channelId);
+    const visitor = db.website_visitors.find(v => v.phone === lock.phone && v.channel_id === lock.channel_id);
     if (!visitor) continue;
 
     lock.last_status_check = new Date().toISOString();
@@ -273,7 +271,7 @@ async function checkLockedUsers() {
           }
         });
         // Reset product_view flags
-        (db.product_views || []).filter(v => v.phone === lock.phone && v.channel_id === channelId)
+        (db.product_views || []).filter(v => v.phone === lock.phone && v.channel_id === lock.channel_id)
           .forEach(v => { v.whatsapp_sent = 0; v.followup_count = 0; v.whatsapp_sent_at = null; });
         changed = true;
         console.log(`[LockCheck] ${lock.phone} re-entered APV cycle ${cycleNum} — lock reset, FLOW 2b will pick up`);
@@ -304,7 +302,7 @@ async function checkLockedUsers() {
             x.status = 'archived_reentry'; x.archived_at = archNow2;
           }
         });
-        (db.product_views || []).filter(v => v.phone === lock.phone && v.channel_id === channelId)
+        (db.product_views || []).filter(v => v.phone === lock.phone && v.channel_id === lock.channel_id)
           .forEach(v => { v.whatsapp_sent = 0; v.followup_count = 0; v.whatsapp_sent_at = null; });
         changed = true;
         console.log(`[LockCheck] ${lock.phone} re-entered APV after full cycle — lock reset for new cycle ${cycleNum}`);
@@ -316,7 +314,7 @@ async function checkLockedUsers() {
         lock.cart_added_at = new Date().toISOString();
         lock.unlock_reason = 'user_added_to_cart';
         const cartEvt = (db.cart_events || []).find(c =>
-          c.phone === lock.phone && !c.recovered && c.channel_id === channelId
+          c.phone === lock.phone && !c.recovered && c.channel_id === lock.channel_id
         );
         if (cartEvt) lock.cart_amount = parseFloat(cartEvt.total_amount) || 0;
         changed = true;
@@ -351,19 +349,19 @@ async function checkLockedUsers() {
   // Include product_view_lock because tracking.controller now sets that status immediately
   // when an active APV campaign exists, skipping the product_view intermediate step. ────────
   const reenteredVisitors = (db.website_visitors || []).filter(v =>
-    v.channel_id === channelId && v.phone &&
+    v.channel_id && v.phone &&
     (v.status === 'product_view' || v.status === 'product_view_lock') && (v.funnel_cycle || 1) > 1
   );
   for (const vis of reenteredVisitors) {
     const stale = (db.campaign_locks || []).filter(l =>
-      l.phone === vis.phone && l.channel_id === channelId &&
+      l.phone === vis.phone && l.channel_id === vis.channel_id &&
       ['purchased', 'cart_added'].includes(l.lock_status)
     );
     if (stale.length) {
       const staleIds = new Set(stale.map(l => l.id));
       db.campaign_locks = db.campaign_locks.filter(l => !staleIds.has(l.id));
       (db.product_views || []).forEach(v => {
-        if (v.phone === vis.phone && v.channel_id === channelId) {
+        if (v.phone === vis.phone && v.channel_id === vis.channel_id) {
           v.whatsapp_sent = 0; v.followup_count = 0; v.whatsapp_sent_at = null;
         }
       });
@@ -392,12 +390,11 @@ export function startAutomation() {
   const CYCLE_COUNT = 10;
   productDetectionInterval = setInterval(async () => {
     try {
-      const channelId = process.env.CHANNEL_ID || 'demo';
       const db = getDb();
 
-      // ── Step 1: find auto-product templates ──────────────────────────────────
+      // ── Step 1: find auto-product templates across ALL channels ──────────────
       const autoTpls = (db.meta_templates || []).filter(t =>
-        t.channel_id === channelId &&
+        t.channel_id &&
         t.is_carousel &&
         t.auto_product_mode &&
         (t.meta_status === 'APPROVED' || t.meta_status === 'PENDING' || t.meta_status === 'DRAFT')
@@ -421,7 +418,7 @@ export function startAutomation() {
 
           let result;
           try {
-            result = await buildAutoProductCards(channelId, tpl.name, CYCLE_COUNT, currentOffset);
+            result = await buildAutoProductCards(tpl.channel_id, tpl.name, CYCLE_COUNT, currentOffset);
           } catch (err) {
             console.error(`[ProductDetect] buildAutoProductCards failed for "${tpl.name}":`, err.message);
             continue;
@@ -514,8 +511,19 @@ async function refreshAutoProductTemplates(forceRefresh = false) {
 
   const db      = getDb();
   const nowDt   = new Date();
-  const channelId = process.env.CHANNEL_ID || 'demo';
 
+  // Process all channels dynamically — iterate over every channel that has carousel templates
+  const allChannels = [...new Set(
+    (db.meta_templates || [])
+      .filter(t => t.channel_id && t.is_carousel && !t.auto_product_mode)
+      .map(t => t.channel_id)
+  )];
+  if (allChannels.length === 0) return;
+
+  if (!db.gallery_folders) db.gallery_folders = [];
+  if (!db.gallery_images)  db.gallery_images  = [];
+
+  for (const channelId of allChannels) {
   // Only APPROVED/PENDING carousel templates that are NOT auto_product_mode.
   // auto_product_mode templates are exclusively managed by buildAutoProductCards
   // (productDetectionInterval) — this function handles non-auto-product carousels only.
@@ -532,25 +540,22 @@ async function refreshAutoProductTemplates(forceRefresh = false) {
     }
     return true;
   });
-  if (templates.length === 0) return;
+  if (templates.length === 0) continue;
 
   // Get enough hot products for the largest carousel (max card count across all templates)
   const maxCards = Math.max(...templates.map(t => t.carousel_cards?.length || 3), 10);
   const hotProducts = computeHotProducts(db, channelId, maxCards);
   if (hotProducts.length === 0) {
     // No tracker data yet — still advance the next_auto_refresh so we check again in 24h
-    console.log('[AutoProducts] No hot products found — advancing next_auto_refresh and skipping image update');
+    console.log(`[AutoProducts] No hot products for channel ${channelId} — advancing next_auto_refresh`);
     for (const tpl of templates) {
       if (!tpl.product_config) tpl.product_config = {};
       tpl.product_config.next_auto_refresh = new Date(now + TWENTY_FOUR_HOURS_MS).toISOString();
     }
-    db.save();
-    return;
+    continue;
   }
 
-  console.log(`[AutoProducts] 24h refresh — ${hotProducts.length} hot products, ${templates.length} template(s)`);
-  if (!db.gallery_folders) db.gallery_folders = [];
-  if (!db.gallery_images)  db.gallery_images  = [];
+  console.log(`[AutoProducts] 24h refresh channel=${channelId} — ${hotProducts.length} hot products, ${templates.length} template(s)`);
 
   for (const tpl of templates) {
     try {
@@ -726,6 +731,8 @@ async function refreshAutoProductTemplates(forceRefresh = false) {
     }
   }
 
+  } // end for channelId
+
   db.save();
   const refreshLabel = forceRefresh ? '6h (post-detect)' : '24h (scheduled)';
   const nextMs = forceRefresh ? SIX_HOURS_MS : TWENTY_FOUR_HOURS_MS;
@@ -778,11 +785,10 @@ async function runAutomation() {
   await checkLockedUsers().catch(err => console.error('[LockCheck] Error in runAutomation:', err));
 
   const db = getDb();
-  const channelId = process.env.CHANNEL_ID || 'demo';
-
-  const campaigns = (db.abandoned_cart_campaigns || []).filter(c => c.channel_id === channelId && c.is_active);
+  const campaigns = (db.abandoned_cart_campaigns || []).filter(c => c.is_active);
 
   for (const cam of campaigns) {
+    const channelId = cam.channel_id;
     try {
       const delayMs = (cam.delay_hours || 0) * 60 * 60 * 1000;
       const targetTime = new Date(Date.now() - delayMs).toISOString();
@@ -1333,7 +1339,7 @@ function isBlockedByStatus(visitorStatus, campaignType) {
 }
 
 async function sendMultiple(db, cam, events, type) {
-  const channelId = process.env.CHANNEL_ID || 'demo';
+  const channelId = cam.channel_id;
 
   // Deduplicate by phone — same user can appear in multiple sessions/events
   const seenPhones = new Set();
@@ -2076,19 +2082,30 @@ function buildProductList(productsJson) {
 // This ensures templates always have the latest trending products with valid images
 async function autoDetectAndScrapeProducts() {
   const db = getDb();
-  const channelId = process.env.CHANNEL_ID || 'demo';
   const nowDt = new Date();
-  
+
+  // Collect all channels that have any tracked data
+  const allChannels = [...new Set(
+    [...(db.page_views || []), ...(db.product_views || [])]
+      .filter(v => v.channel_id)
+      .map(v => v.channel_id)
+  )];
+  if (allChannels.length === 0) return;
+
   console.log('\n╔════════════════════════════════════════════════════════════════╗');
   console.log('║  AUTO-DETECT TOP PRODUCTS FROM TRAFFIC ANALYTICS              ║');
   console.log('╚════════════════════════════════════════════════════════════════╝\n');
-  
+
+  if (!db.gallery_folders) db.gallery_folders = [];
+  if (!db.gallery_images) db.gallery_images = [];
+
+  for (const channelId of allChannels) {
   // Get top 5 products from analytics (last 7 days)
   const topProducts = computeHotProducts(db, channelId, 5);
-  
+
   if (topProducts.length === 0) {
-    console.log('[ProductDetect] No products found in analytics data yet');
-    return;
+    console.log(`[ProductDetect] No products found for channel ${channelId}`);
+    continue;
   }
   
   console.log(`[ProductDetect] Found ${topProducts.length} trending products:`);
@@ -2244,11 +2261,12 @@ async function autoDetectAndScrapeProducts() {
       console.error(`  ✗ Product processing failed: ${err.message}`);
     }
   }
-  
+
+  } // end for channelId
+
   db.save();
 
   console.log('\n[ProductDetect] Auto-detect complete!');
-  console.log(`  - Products processed: ${topProducts.length}`);
   console.log(`  - Gallery images: ${db.gallery_images.filter(i => i.auto_detected).length}`);
   console.log(`  - Next run: ${new Date(Date.now() + SIX_HOURS_MS).toLocaleString()}`);
 
@@ -2266,23 +2284,31 @@ async function autoDetectAndScrapeProducts() {
 //  3. Ensure campaigns always send the latest trending items
 async function refreshProductRecommendations() {
   const db = getDb();
-  const channelId = process.env.CHANNEL_ID || 'demo';
   const nowDt = new Date();
-  
+
+  // Collect all channels with auto-product templates
+  const allChannels = [...new Set(
+    (db.meta_templates || [])
+      .filter(t => t.channel_id && t.is_carousel && t.auto_product_mode)
+      .map(t => t.channel_id)
+  )];
+  if (allChannels.length === 0) return;
+
   console.log('\n╔════════════════════════════════════════════════════════════════╗');
   console.log('║  26-HOUR PRODUCT RECOMMENDATION REFRESH                       ║');
   console.log('╚════════════════════════════════════════════════════════════════╝\n');
-  
+
+  for (const channelId of allChannels) {
   // Get fresh top products based on last 7 days traffic
   const hotProducts = computeHotProducts(db, channelId, 10);
-  
+
   if (hotProducts.length === 0) {
-    console.log('[ProductRefresh] No products found - skipping refresh');
-    return;
+    console.log(`[ProductRefresh] No products found for channel ${channelId} — skipping`);
+    continue;
   }
-  
-  console.log(`[ProductRefresh] Found ${hotProducts.length} products to recommend`);
-  
+
+  console.log(`[ProductRefresh] channel=${channelId} — ${hotProducts.length} products to recommend`);
+
   // Find all auto-product-mode templates
   const autoTemplates = (db.meta_templates || []).filter(t =>
     t.channel_id === channelId &&
@@ -2290,14 +2316,14 @@ async function refreshProductRecommendations() {
     t.auto_product_mode &&
     (t.meta_status === 'APPROVED' || t.meta_status === 'PENDING')
   );
-  
+
   if (autoTemplates.length === 0) {
-    console.log('[ProductRefresh] No auto-product templates found');
-    return;
+    console.log(`[ProductRefresh] No auto-product templates for channel ${channelId}`);
+    continue;
   }
-  
+
   console.log(`[ProductRefresh] Updating ${autoTemplates.length} template(s)...`);
-  
+
   for (const tpl of autoTemplates) {
     try {
       console.log(`\n  Template: "${tpl.name}"`);
@@ -2356,10 +2382,11 @@ async function refreshProductRecommendations() {
     }
   }
   
+  } // end for channelId
+
   db.save();
-  
+
   console.log('\n[ProductRefresh] Recommendation refresh complete!');
-  console.log(`  - Templates updated: ${autoTemplates.length}`);
   console.log(`  - Next refresh: ${new Date(Date.now() + TWENTY_SIX_HOURS_MS).toLocaleString()}`);
   console.log('╚════════════════════════════════════════════════════════════════╝\n');
 }
