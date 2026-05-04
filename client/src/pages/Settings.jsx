@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
-import { Save, Eye, EyeOff, Copy, CheckCircle, Zap, MessageSquare, Globe, Code, RefreshCw, Settings2, Sparkles, User, Key, LogOut } from "lucide-react";
-import { settingsApi, authApi } from "../api";
+import { Save, Eye, EyeOff, Copy, CheckCircle, Zap, MessageSquare, Globe, Code, RefreshCw, Settings2, Sparkles, User, Key, LogOut, Wifi, WifiOff } from "lucide-react";
+import { settingsApi, authApi, visitorsApi } from "../api";
 import { useNavigate } from "react-router-dom";
 
 function authFetch(path, opts = {}) {
@@ -28,6 +28,7 @@ export default function Settings() {
   const [syncing, setSyncing] = useState(false);
   const [pwForm, setPwForm] = useState({ current: '', newPw: '', confirm: '' });
   const [pwSaving, setPwSaving] = useState(false);
+  const [trackerCheck, setTrackerCheck] = useState(null); // null | 'checking' | {ok, count}
 
   const channelId  = localStorage.getItem('channelId')  || 'demo';
   const userName   = localStorage.getItem('userName')   || '';
@@ -82,6 +83,17 @@ export default function Settings() {
     navigator.clipboard.writeText(channelId);
     setCopiedChannelId(true);
     setTimeout(() => setCopiedChannelId(false), 2000);
+  };
+
+  const verifyTracker = async () => {
+    setTrackerCheck('checking');
+    try {
+      const stats = await visitorsApi.stats();
+      const count = (stats?.total || 0) + (stats?.withPhone || 0);
+      setTrackerCheck({ ok: (stats?.total || 0) > 0, count: stats?.total || 0, withPhone: stats?.withPhone || 0 });
+    } catch {
+      setTrackerCheck({ ok: false, count: 0, withPhone: 0 });
+    }
   };
 
   function logout() {
@@ -351,6 +363,45 @@ export default function Settings() {
               className="absolute top-10 right-3 btn-secondary text-xs py-1.5 px-3 gap-1.5">
               {copiedSnippet ? <><CheckCircle size={12} />Copied!</> : <><Copy size={12} />Copy Full Snippet</>}
             </button>
+          </div>
+
+          {/* Verify tracker connection */}
+          <div className="p-4 rounded-xl space-y-3" style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)" }}>
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-xs font-semibold text-white">Verify Tracker Connection</p>
+                <p className="text-xs mt-0.5" style={{ color: "#64748b" }}>Check if your website is sending data to this dashboard</p>
+              </div>
+              <button onClick={verifyTracker} disabled={trackerCheck === 'checking'}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium transition-all disabled:opacity-60"
+                style={{ background: "rgba(59,130,246,0.12)", border: "1px solid rgba(59,130,246,0.25)", color: "#60a5fa" }}>
+                {trackerCheck === 'checking'
+                  ? <><RefreshCw size={12} className="animate-spin" /> Checking…</>
+                  : <><Wifi size={12} /> Check Now</>}
+              </button>
+            </div>
+
+            {trackerCheck && trackerCheck !== 'checking' && (
+              trackerCheck.ok ? (
+                <div className="flex items-start gap-2 p-3 rounded-lg text-xs" style={{ background: "rgba(34,197,94,0.08)", border: "1px solid rgba(34,197,94,0.2)" }}>
+                  <CheckCircle size={14} className="text-green-400 shrink-0 mt-0.5" />
+                  <div>
+                    <p className="font-semibold text-green-400">Tracker is working correctly!</p>
+                    <p style={{ color: "#86efac" }}>{trackerCheck.count} visitor{trackerCheck.count !== 1 ? 's' : ''} found for your channelId · {trackerCheck.withPhone} with phone</p>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex items-start gap-2 p-3 rounded-lg text-xs" style={{ background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)" }}>
+                  <WifiOff size={14} className="text-red-400 shrink-0 mt-0.5" />
+                  <div>
+                    <p className="font-semibold text-red-400">No data found for your channel</p>
+                    <p className="mt-1" style={{ color: "#fca5a5" }}>Make sure your tracker script has exactly this channelId:</p>
+                    <code className="mt-1 block font-mono text-[11px] font-bold" style={{ color: "#fbbf24" }}>{channelId}</code>
+                    <p className="mt-1.5" style={{ color: "#f87171" }}>If you just added the tracker, visit your website once and check again.</p>
+                  </div>
+                </div>
+              )
+            )}
           </div>
 
           {/* identify() call */}
