@@ -102,9 +102,24 @@ export default function Settings() {
   const verifyTracker = async () => {
     setTrackerCheck('checking');
     try {
-      const stats = await visitorsApi.stats();
-      const count = (stats?.total || 0) + (stats?.withPhone || 0);
-      setTrackerCheck({ ok: (stats?.total || 0) > 0, count: stats?.total || 0, withPhone: stats?.withPhone || 0 });
+      // Use channel-check instead of stats — it tells us exactly what channel_id
+      // the JWT sees vs what's stored in DB, so we can detect channelId mismatches.
+      const BASE = import.meta.env.VITE_API_URL || '';
+      const token = localStorage.getItem('authToken');
+      const r = await fetch(`${BASE}/api/visitors/channel-check`, {
+        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+      }).then(res => res.json());
+
+      setTrackerCheck({
+        ok:            (r.your_visitor_count || 0) > 0,
+        count:         r.your_visitor_count || 0,
+        withPhone:     0,
+        jwtChannelId:  r.your_channel_id || '',
+        demoCount:     r.demo_visitor_count || 0,
+        mismatch:      r.mismatch_warning || null,
+        allChannels:   r.all_channels || [],
+        totalInDb:     r.total_visitors_in_db || 0,
+      });
     } catch {
       setTrackerCheck({ ok: false, count: 0, withPhone: 0 });
     }
@@ -400,25 +415,44 @@ export default function Settings() {
             </div>
 
             {trackerCheck && trackerCheck !== 'checking' && (
-              trackerCheck.ok ? (
-                <div className="flex items-start gap-2 p-3 rounded-lg text-xs" style={{ background: "rgba(34,197,94,0.08)", border: "1px solid rgba(34,197,94,0.2)" }}>
-                  <CheckCircle size={14} className="text-green-400 shrink-0 mt-0.5" />
-                  <div>
-                    <p className="font-semibold text-green-400">Tracker is working correctly!</p>
-                    <p style={{ color: "#86efac" }}>{trackerCheck.count} visitor{trackerCheck.count !== 1 ? 's' : ''} found for your channelId · {trackerCheck.withPhone} with phone</p>
+              <div className="space-y-2">
+                {/* Mismatch warning — highest priority */}
+                {trackerCheck.mismatch && (
+                  <div className="flex items-start gap-2 p-3 rounded-lg text-xs" style={{ background: "rgba(251,191,36,0.08)", border: "1px solid rgba(251,191,36,0.3)" }}>
+                    <WifiOff size={14} style={{ color: "#fbbf24" }} className="shrink-0 mt-0.5" />
+                    <div>
+                      <p className="font-semibold" style={{ color: "#fbbf24" }}>Channel ID mismatch detected!</p>
+                      <p className="mt-1" style={{ color: "#fde68a" }}>{trackerCheck.mismatch}</p>
+                      <p className="mt-2 font-semibold" style={{ color: "#fbbf24" }}>Your correct channelId:</p>
+                      <code className="mt-0.5 block font-mono text-[11px] font-bold" style={{ color: "#86efac" }}>{trackerCheck.jwtChannelId}</code>
+                    </div>
                   </div>
-                </div>
-              ) : (
-                <div className="flex items-start gap-2 p-3 rounded-lg text-xs" style={{ background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)" }}>
-                  <WifiOff size={14} className="text-red-400 shrink-0 mt-0.5" />
-                  <div>
-                    <p className="font-semibold text-red-400">No data found for your channel</p>
-                    <p className="mt-1" style={{ color: "#fca5a5" }}>Make sure your tracker script has exactly this channelId:</p>
-                    <code className="mt-1 block font-mono text-[11px] font-bold" style={{ color: "#fbbf24" }}>{channelId}</code>
-                    <p className="mt-1.5" style={{ color: "#f87171" }}>If you just added the tracker, visit your website once and check again.</p>
+                )}
+
+                {/* Success */}
+                {trackerCheck.ok && (
+                  <div className="flex items-start gap-2 p-3 rounded-lg text-xs" style={{ background: "rgba(34,197,94,0.08)", border: "1px solid rgba(34,197,94,0.2)" }}>
+                    <CheckCircle size={14} className="text-green-400 shrink-0 mt-0.5" />
+                    <div>
+                      <p className="font-semibold text-green-400">Tracker connected!</p>
+                      <p style={{ color: "#86efac" }}>{trackerCheck.count} visitor{trackerCheck.count !== 1 ? 's' : ''} found · channel: <code>{trackerCheck.jwtChannelId}</code></p>
+                    </div>
                   </div>
-                </div>
-              )
+                )}
+
+                {/* No data + no mismatch */}
+                {!trackerCheck.ok && !trackerCheck.mismatch && (
+                  <div className="flex items-start gap-2 p-3 rounded-lg text-xs" style={{ background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)" }}>
+                    <WifiOff size={14} className="text-red-400 shrink-0 mt-0.5" />
+                    <div>
+                      <p className="font-semibold text-red-400">No visitors found yet for your channel</p>
+                      <p className="mt-1" style={{ color: "#fca5a5" }}>Dashboard queries channel: <code className="font-bold" style={{ color: "#fbbf24" }}>{trackerCheck.jwtChannelId || channelId}</code></p>
+                      <p className="mt-1" style={{ color: "#fca5a5" }}>Total visitors in DB (all channels): {trackerCheck.totalInDb}</p>
+                      <p className="mt-1.5" style={{ color: "#f87171" }}>Make sure your tracker script uses exactly this channelId, then visit your website once.</p>
+                    </div>
+                  </div>
+                )}
+              </div>
             )}
           </div>
 
