@@ -58,7 +58,7 @@
   // When the server is sleeping (Render free tier), the first tracking call will
   // time out. We queue it in localStorage and replay it on the next successful
   // call (when the server has warmed up). Max 30 items, 24h TTL per item.
-  var RETRY_KEY = 'ww_retry_' + (config.channelId || 'demo');
+  var RETRY_KEY = 'ww_retry_' + (getConfig().channelId || config.channelId || 'default');
 
   function _saveRetry(type, data) {
     try {
@@ -96,7 +96,7 @@
     data = data || {};
     data.sessionId = sessionId;
     data.type = type;
-    data.channelId = getConfig().channelId || config.channelId || 'demo';
+    data.channelId = getConfig().channelId || config.channelId || '';
     fetch(baseUrl + '/api/tracking/' + type, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

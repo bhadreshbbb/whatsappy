@@ -110,6 +110,42 @@ app.use('/api/ai',             requireAuth, aiRoutes);
 // Serve built React frontend — must be BEFORE errorHandler
 const clientDist = path.join(__dirname, '../../client/dist');
 if (fs.existsSync(clientDist)) {
+
+  // ── Dynamic tracker.js — inject server-side channelId so visits NEVER go to "demo"
+  // Even if the website forgets WhatswayConfig.channelId, the correct channel is used.
+  // Priority: WhatswayConfig.channelId (page) → server-injected channelId (this) → ''
+  const trackerPath = path.join(clientDist, 'tracker.js');
+  app.get('/tracker.js', (req, res) => {
+    try {
+      const db = getDb();
+      // Pick the real channelId: env override first, then first real user in DB
+      let serverChannelId = process.env.DEFAULT_CHANNEL_ID || '';
+      if (!serverChannelId && Array.isArray(db.users)) {
+        const realUser = db.users.find(u => u.channel_id && u.channel_id !== 'demo');
+        if (realUser) serverChannelId = realUser.channel_id;
+      }
+
+      let content = fs.readFileSync(trackerPath, 'utf8');
+      // Replace the 'demo' fallback with the real server-side channelId
+      content = content.replace(
+        /getConfig\(\)\.channelId \|\| config\.channelId \|\| 'demo'/g,
+        `getConfig().channelId || config.channelId || '${serverChannelId}'`
+      );
+
+      res.setHeader('Content-Type', 'application/javascript');
+      res.setHeader('Cache-Control', 'public, max-age=60'); // 1 min cache — stays fresh
+      res.send(content);
+      if (serverChannelId) {
+        console.log(`[Tracker] Served tracker.js with channelId="${serverChannelId}"`);
+      } else {
+        console.warn('[Tracker] WARNING: No channelId found — tracker served without default channel');
+      }
+    } catch (e) {
+      console.error('[Tracker] Error serving tracker.js:', e.message);
+      res.sendFile(trackerPath); // fallback: serve raw file
+    }
+  });
+
   app.use(express.static(clientDist));
   // All non-API routes → serve React app (client-side routing)
   app.get(/^(?!\/api).*$/, (req, res) => {

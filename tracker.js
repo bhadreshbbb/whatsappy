@@ -53,7 +53,7 @@
   }
 
   // ── Retry queue (localStorage) — survives Render cold-start timeouts ─────────
-  var RETRY_KEY = 'ww_retry_' + (config.channelId || 'demo');
+  var RETRY_KEY = 'ww_retry_' + (getConfig().channelId || config.channelId || 'default');
 
   function _saveRetry(type, data) {
     try {
@@ -90,7 +90,7 @@
     data = data || {};
     data.sessionId = sessionId;
     data.type = type;
-    data.channelId = getConfig().channelId || config.channelId || 'demo';
+    data.channelId = getConfig().channelId || config.channelId || '';
     fetch(baseUrl + '/api/tracking/' + type, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
