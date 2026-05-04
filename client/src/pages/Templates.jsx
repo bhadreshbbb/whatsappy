@@ -9,7 +9,15 @@ import {
 
 const BASE        = `/api/meta-templates`;
 const GALLERY_API = `/api/gallery`;
-const CH = () => ({ 'x-channel-id': localStorage.getItem('channelId') || 'demo' });
+const CH = () => {
+  const _cid = localStorage.getItem('channelId');
+  const cid = (_cid && _cid !== 'undefined' && _cid !== 'null') ? _cid : '';
+  const token = localStorage.getItem('authToken');
+  return {
+    'x-channel-id': cid,
+    ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+  };
+};
 
 async function getShopUrl() {
   try {

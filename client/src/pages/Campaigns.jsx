@@ -315,7 +315,12 @@ function CreateModal({ onClose, onCreated }) {
   const matchedContacts = useMemo(() => applyFilters(contacts, audFilters),
     [contacts, fStatus, fCity, fDevice, fAudLang, fScore, fCarts, fPages, fEngage, fRepeat]);
 
-  const CH = () => ({ 'x-channel-id': localStorage.getItem('channelId') || 'demo' });
+  const CH = () => {
+    const _cid = localStorage.getItem('channelId');
+    const cid = (_cid && _cid !== 'undefined' && _cid !== 'null') ? _cid : '';
+    const token = localStorage.getItem('authToken');
+    return { 'x-channel-id': cid, ...(token ? { 'Authorization': `Bearer ${token}` } : {}) };
+  };
   const META_LANG_MAP = { en: 'en_US', hi: 'hi', gu: 'gu', ta: 'ta', te: 'te', mr: 'mr', bn: 'bn', ar: 'ar' };
 
   useEffect(() => {
@@ -1268,7 +1273,9 @@ function CustomCampaignModal({ onClose, onCreated }) {
 
   useEffect(() => {
     templatesApi.list().then(setTemplates).catch(() => {});
-    const chHeaders = { 'x-channel-id': localStorage.getItem('channelId') || 'demo' };
+    const _cid0 = localStorage.getItem('channelId');
+    const _tok0 = localStorage.getItem('authToken');
+    const chHeaders = { 'x-channel-id': (_cid0 && _cid0 !== 'undefined' && _cid0 !== 'null') ? _cid0 : '', ...(_tok0 ? { 'Authorization': `Bearer ${_tok0}` } : {}) };
     fetch('/api/meta-templates', { headers: chHeaders })
       .then(r => r.json()).then(d => setMetaTpls(d.templates || [])).catch(() => {});
     setCtLoading(true);
@@ -1285,7 +1292,9 @@ function CustomCampaignModal({ onClose, onCreated }) {
 
   useEffect(() => {
     if (!metaTemplateId) { setMetaPayloadPreview(null); return; }
-    const chHeaders = { 'x-channel-id': localStorage.getItem('channelId') || 'demo' };
+    const _cid1 = localStorage.getItem('channelId');
+    const _tok1 = localStorage.getItem('authToken');
+    const chHeaders = { 'x-channel-id': (_cid1 && _cid1 !== 'undefined' && _cid1 !== 'null') ? _cid1 : '', ...(_tok1 ? { 'Authorization': `Bearer ${_tok1}` } : {}) };
     fetch(`/api/meta-templates/${metaTemplateId}/send-payload`, { headers: chHeaders })
       .then(r => r.json()).then(setMetaPayloadPreview).catch(() => setMetaPayloadPreview(null));
   }, [metaTemplateId]);
