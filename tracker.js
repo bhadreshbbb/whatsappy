@@ -14,6 +14,11 @@
     return '';
   })();
 
+  // Warn early if channelId is missing — tracking will go to 'demo' and won't show in dashboard
+  if (!config.channelId) {
+    console.warn('[WhatsWay] WhatswayConfig.channelId is not set. Visits will be stored under "demo" and will NOT appear in your dashboard. Copy your channelId from Settings → Install Tracker.');
+  }
+
   // ── Session ──────────────────────────────────────────────────────────────────
   var sessionId = sessionStorage.getItem('ww_session');
   if (!sessionId) {

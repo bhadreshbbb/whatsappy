@@ -142,6 +142,7 @@ export const trackingController = {
       const db = getDb();
       const { channelId, sessionId, url, language, pageViews, pageTitle, screen_res, timezone: tz, shopify_carousel,
               utm_source, utm_medium, utm_campaign, phone: visitorPhone } = req.body;
+      console.log(`[Track/visitor] channelId="${channelId || 'demo'}" session="${(sessionId||'').slice(0,20)}" url="${(url||'').slice(0,60)}"`);
       // Also parse UTM from the page URL itself (covers direct clicks from WhatsApp)
       let _utmSource = utm_source || null, _utmMedium = utm_medium || null, _utmCampaign = utm_campaign || null;
       let _wwCam = null; // ww_cam = WhatsApp campaign ID (last-click attribution)

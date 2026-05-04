@@ -135,27 +135,69 @@ async function loadFromMongo() {
   }
 }
 
-// ── Save with mutex — prevents concurrent deleteMany+insertMany race condition ─
+// ── Save with mutex — upsert-based, never wipes data ─────────────────────────
+// Old approach: deleteMany → insertMany  (DANGEROUS: wipes collection if insertMany fails)
+// New approach: bulkWrite upsert + targeted delete of removed docs (SAFE: partial failures
+//               leave existing data intact; deleted records cleaned up separately)
 let _saveInProgress = false;
 let _savePending    = false;
+
+// Returns the field to use as the stable document key for upserts
+function _docKey(table, doc) {
+  if (table === 'channel_settings') return { channel_id: doc.channel_id };
+  if (table === '_counters')        return { _id: 'counters' };
+  if (doc.id !== undefined)         return { id: doc.id };
+  // Fallback for any doc without id — use full content hash (rare)
+  return null;
+}
 
 async function saveToMongo() {
   if (!mongoDb) return;
   if (_saveInProgress) { _savePending = true; return; }
   _saveInProgress = true;
   try {
-    // Snapshot current state so concurrent mutations don't affect this write
-    const snapshot  = {};
+    // Snapshot so concurrent mutations don't affect this write
+    const snapshot = {};
     for (const t of MONGO_TABLES) snapshot[t] = Array.isArray(db[t]) ? [...db[t]] : [];
     const ctrSnap = { ...db._counters };
 
-    // Sequential writes — safer than parallel deleteMany/insertMany
     for (const table of MONGO_TABLES) {
       const docs = snapshot[table];
       const col  = mongoDb.collection(table);
-      await col.deleteMany({});
-      if (docs.length > 0) await col.insertMany(docs.map(d => ({ ...d })));
+
+      if (docs.length === 0) {
+        // Table is intentionally empty — clear it
+        await col.deleteMany({});
+        continue;
+      }
+
+      // Upsert every document — never deletes first, so a failed write leaves old data intact
+      const ops = [];
+      const currentKeys = [];
+
+      for (const doc of docs) {
+        const key = _docKey(table, doc);
+        if (!key) continue; // skip un-keyed docs
+        currentKeys.push(key);
+        ops.push({ replaceOne: { filter: key, replacement: { ...doc }, upsert: true } });
+      }
+
+      if (ops.length > 0) {
+        await col.bulkWrite(ops, { ordered: false });
+      }
+
+      // Remove documents that were deleted from in-memory (e.g. deleted campaigns)
+      // Build a $nor query: delete any doc whose key is not in currentKeys
+      if (currentKeys.length > 0) {
+        const keyField = Object.keys(currentKeys[0])[0];
+        const keyValues = currentKeys.map(k => k[keyField]).filter(v => v !== undefined);
+        if (keyValues.length > 0) {
+          await col.deleteMany({ [keyField]: { $nin: keyValues } });
+        }
+      }
     }
+
+    // Save counters
     await mongoDb.collection('_counters').replaceOne(
       { _id: 'counters' },
       { _id: 'counters', ...ctrSnap },

@@ -8,6 +8,7 @@ export const visitorsController = {
       const channelId = req.headers['x-channel-id'] || 'demo';
 
       let all = db.website_visitors.filter(v => v.channel_id === channelId);
+      console.log(`[Visitors/list] channelId="${channelId}" total_in_db=${db.website_visitors.length} matching=${all.length}`);
 
       // Deduplicate by phone — keep only the latest session per phone number.
       // Anonymous visitors (no phone) are kept individually.
@@ -62,6 +63,7 @@ export const visitorsController = {
       const channelId = req.headers['x-channel-id'] || 'demo';
 
       const visitors = db.website_visitors.filter(v => v.channel_id === channelId);
+      console.log(`[Visitors/stats] channelId="${channelId}" matching=${visitors.length} total_in_db=${db.website_visitors.length}`);
       const fiveMinAgo = new Date(Date.now() - 5 * 60 * 1000);
 
       const carts = db.cart_events.filter(c => c.channel_id === channelId);
