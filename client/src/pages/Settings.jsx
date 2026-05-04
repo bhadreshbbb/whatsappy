@@ -1,10 +1,19 @@
 import React, { useEffect, useState } from "react";
-import { Save, Eye, EyeOff, Copy, CheckCircle, Zap, MessageSquare, Globe, Code, RefreshCw, Settings2, Sparkles } from "lucide-react";
-import { settingsApi } from "../api";
+import { Save, Eye, EyeOff, Copy, CheckCircle, Zap, MessageSquare, Globe, Code, RefreshCw, Settings2, Sparkles, User, Key, LogOut } from "lucide-react";
+import { settingsApi, authApi } from "../api";
+import { useNavigate } from "react-router-dom";
 
-const CH = () => ({ 'x-channel-id': localStorage.getItem('channelId') || 'demo' });
+function authFetch(path, opts = {}) {
+  const token     = localStorage.getItem('authToken');
+  const channelId = localStorage.getItem('channelId') || 'demo';
+  const BASE      = import.meta.env.VITE_API_URL || '';
+  const headers   = { 'Content-Type': 'application/json', 'x-channel-id': channelId, ...opts.headers };
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+  return fetch(`${BASE}/api${path}`, { ...opts, headers }).then(r => r.json());
+}
 
 export default function Settings() {
+  const navigate = useNavigate();
   const [settings, setSettings] = useState({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -14,8 +23,15 @@ export default function Settings() {
   const [testPhone, setTestPhone] = useState("");
   const [testing, setTesting] = useState(false);
   const [copiedSnippet, setCopiedSnippet] = useState(false);
+  const [copiedChannelId, setCopiedChannelId] = useState(false);
   const [activeTab, setActiveTab] = useState("whatsapp");
   const [syncing, setSyncing] = useState(false);
+  const [pwForm, setPwForm] = useState({ current: '', newPw: '', confirm: '' });
+  const [pwSaving, setPwSaving] = useState(false);
+
+  const channelId  = localStorage.getItem('channelId')  || 'demo';
+  const userName   = localStorage.getItem('userName')   || '';
+  const userEmail  = localStorage.getItem('userEmail')  || '';
 
   const showToast = (msg, type = "success") => {
     setToast({ msg, type });
@@ -41,15 +57,40 @@ export default function Settings() {
     if (!settings.shop_url) return showToast("Enter Shop URL first", "error");
     setSyncing(true);
     try {
-      const r = await fetch('/api/settings/sync-catalog', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...CH() },
-      }).then(res => res.json());
+      const r = await authFetch('/settings/sync-catalog', { method: 'POST', body: JSON.stringify({}) });
       if (r.error) throw new Error(r.error);
       showToast(`✓ ${r.products_in_catalog} products synced from ${settings.shop_url}`);
     } catch (e) { showToast(`Sync failed: ${e.message}`, "error"); }
     finally { setSyncing(false); }
   };
+
+  const changePassword = async () => {
+    if (!pwForm.current || !pwForm.newPw) return showToast("Fill all password fields", "error");
+    if (pwForm.newPw !== pwForm.confirm) return showToast("New passwords do not match", "error");
+    if (pwForm.newPw.length < 6) return showToast("Password must be at least 6 characters", "error");
+    setPwSaving(true);
+    try {
+      const r = await authApi.changePassword({ currentPassword: pwForm.current, newPassword: pwForm.newPw });
+      if (r?.error) throw new Error(r.error);
+      showToast("Password changed successfully!");
+      setPwForm({ current: '', newPw: '', confirm: '' });
+    } catch (e) { showToast(e.message || "Failed", "error"); }
+    finally { setPwSaving(false); }
+  };
+
+  const copyChannelId = () => {
+    navigator.clipboard.writeText(channelId);
+    setCopiedChannelId(true);
+    setTimeout(() => setCopiedChannelId(false), 2000);
+  };
+
+  function logout() {
+    localStorage.removeItem('authToken');
+    localStorage.removeItem('channelId');
+    localStorage.removeItem('userName');
+    localStorage.removeItem('userEmail');
+    navigate('/login', { replace: true });
+  }
 
   const testWA = async () => {
     if (!testPhone) return showToast("Enter a phone number", "error");
@@ -64,10 +105,11 @@ export default function Settings() {
 
   const copySnippet = () => {
     const baseUrl = window.location.origin;
+    const cid = localStorage.getItem('channelId') || 'demo';
     const snippet = `<!-- ── WhatsWay Tracker — paste before </body> on every page ── -->
 <script>
   window.WhatswayConfig = {
-    channelId: "YOUR_CHANNEL_ID",   // copy from this Settings page
+    channelId: "${cid}",
     baseUrl:   "${baseUrl}",
   };
 </script>
@@ -109,6 +151,7 @@ export default function Settings() {
     { id: "general",    icon: Globe,         label: "General",             color: "#a855f7" },
     { id: "campaigns",  icon: Settings2,     label: "Campaign & Template", color: "#06b6d4" },
     { id: "ai",         icon: Sparkles,      label: "AI Settings",         color: "#a78bfa" },
+    { id: "account",    icon: User,          label: "My Account",          color: "#e879f9" },
   ];
 
   if (loading) return (
@@ -298,7 +341,7 @@ export default function Settings() {
               style={{ background: "#0d1422", border: "1px solid rgba(255,255,255,0.08)", borderTop: "none", color: "#94a3b8" }}>
 {`<script>
   window.WhatswayConfig = {
-    channelId: `}<span style={{color:"#fbbf24"}}>"YOUR_CHANNEL_ID"</span>{`,
+    channelId: `}<span style={{color:"#fbbf24"}}>"{channelId}"</span>{`,
     baseUrl:   `}<span style={{color:"#86efac"}}>"{window.location.origin}"</span>{`,
   };
 </script>
@@ -491,6 +534,111 @@ WhatsWay.identify({ phone: `}<span style={{color:"#fbbf24"}}>"+919876543210"</sp
           <button onClick={save} disabled={saving} className="btn-primary w-full justify-center gap-2">
             <Save size={14} />{saving ? "Saving…" : "Save AI Settings"}
           </button>
+        </div>
+      )}
+
+      {/* My Account Tab */}
+      {activeTab === "account" && (
+        <div className="space-y-4">
+
+          {/* Account Info */}
+          <div className="card p-6 space-y-5">
+            <div>
+              <h3 className="text-sm font-semibold text-white mb-1">Your Account</h3>
+              <p className="text-xs" style={{ color: "#64748b" }}>Your merchant profile and login details</p>
+            </div>
+
+            <div className="space-y-3">
+              <div className="flex items-center justify-between p-4 rounded-xl"
+                style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.05)" }}>
+                <div>
+                  <p className="text-xs text-slate-500 mb-0.5">Business / Store Name</p>
+                  <p className="text-sm font-medium text-white">{userName || "—"}</p>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-between p-4 rounded-xl"
+                style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.05)" }}>
+                <div>
+                  <p className="text-xs text-slate-500 mb-0.5">Login Email</p>
+                  <p className="text-sm font-medium text-white">{userEmail || "—"}</p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Channel ID */}
+          <div className="card p-6 space-y-4">
+            <div>
+              <h3 className="text-sm font-semibold text-white mb-1">Your Channel ID</h3>
+              <p className="text-xs" style={{ color: "#64748b" }}>Paste this in your website tracker script — this is how your store's data stays separate from other merchants</p>
+            </div>
+
+            <div className="flex items-center gap-3 p-4 rounded-xl"
+              style={{ background: "rgba(99,102,241,0.08)", border: "1px solid rgba(99,102,241,0.25)" }}>
+              <code className="flex-1 text-sm font-mono font-bold" style={{ color: "#a5b4fc" }}>{channelId}</code>
+              <button onClick={copyChannelId}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all"
+                style={{ background: "rgba(99,102,241,0.15)", border: "1px solid rgba(99,102,241,0.3)", color: "#818cf8" }}>
+                {copiedChannelId ? <><CheckCircle size={12} /> Copied!</> : <><Copy size={12} /> Copy</>}
+              </button>
+            </div>
+
+            <div className="p-3 rounded-xl text-xs" style={{ background: "rgba(251,191,36,0.06)", border: "1px solid rgba(251,191,36,0.2)", color: "#fcd34d" }}>
+              <p className="font-semibold mb-1">How to use in your website:</p>
+              <pre className="font-mono mt-1 text-[11px] leading-relaxed" style={{ color: "#94a3b8" }}>{`<script>
+  window.WhatswayConfig = {
+    channelId: "${channelId}",
+    baseUrl: "https://your-server.com",
+  };
+</script>`}</pre>
+            </div>
+          </div>
+
+          {/* Change Password */}
+          <div className="card p-6 space-y-5">
+            <div>
+              <h3 className="text-sm font-semibold text-white mb-1">Change Password</h3>
+              <p className="text-xs" style={{ color: "#64748b" }}>Update your login password</p>
+            </div>
+
+            <div className="space-y-3">
+              {[
+                { label: "Current Password",  key: "current", placeholder: "Enter current password" },
+                { label: "New Password",       key: "newPw",   placeholder: "Min 6 characters" },
+                { label: "Confirm New Password", key: "confirm", placeholder: "Re-enter new password" },
+              ].map(({ label, key, placeholder }) => (
+                <div key={key}>
+                  <label className="label">{label}</label>
+                  <input type="password" className="input" placeholder={placeholder}
+                    value={pwForm[key]}
+                    onChange={e => setPwForm(p => ({ ...p, [key]: e.target.value }))} />
+                </div>
+              ))}
+            </div>
+
+            <button onClick={changePassword} disabled={pwSaving}
+              className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium transition-all disabled:opacity-60"
+              style={{ background: "rgba(99,102,241,0.15)", border: "1px solid rgba(99,102,241,0.3)", color: "#818cf8" }}>
+              <Key size={14} />{pwSaving ? "Saving…" : "Update Password"}
+            </button>
+          </div>
+
+          {/* Sign Out */}
+          <div className="card p-6">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-white">Sign Out</p>
+                <p className="text-xs mt-0.5" style={{ color: "#64748b" }}>Log out from this dashboard</p>
+              </div>
+              <button onClick={logout}
+                className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium transition-all"
+                style={{ background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.2)", color: "#f87171" }}>
+                <LogOut size={14} /> Sign Out
+              </button>
+            </div>
+          </div>
+
         </div>
       )}
     </div>
