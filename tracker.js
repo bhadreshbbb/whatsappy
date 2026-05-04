@@ -46,6 +46,39 @@
     return 'Other';
   }
 
+  // ── Retry queue (localStorage) — survives Render cold-start timeouts ─────────
+  var RETRY_KEY = 'ww_retry_' + (config.channelId || 'demo');
+
+  function _saveRetry(type, data) {
+    try {
+      var q = JSON.parse(localStorage.getItem(RETRY_KEY) || '[]');
+      q.push({ type: type, data: data, ts: Date.now() });
+      if (q.length > 30) q = q.slice(-30);
+      localStorage.setItem(RETRY_KEY, JSON.stringify(q));
+    } catch(_) {}
+  }
+
+  function _flushRetries() {
+    try {
+      var raw = localStorage.getItem(RETRY_KEY);
+      if (!raw) return;
+      localStorage.removeItem(RETRY_KEY);
+      var q = JSON.parse(raw);
+      var cutoff = Date.now() - 86400000;
+      q.forEach(function(item) {
+        if (item.ts < cutoff) return;
+        fetch(baseUrl + '/api/tracking/' + item.type, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(item.data),
+          keepalive: true,
+        }).catch(function() {
+          _saveRetry(item.type, item.data);
+        });
+      });
+    } catch(_) {}
+  }
+
   // ── Post helper ──────────────────────────────────────────────────────────────
   function track(type, data, onResponse) {
     data = data || {};
@@ -61,7 +94,10 @@
       return r.json();
     }).then(function(resp) {
       if (onResponse) onResponse(resp);
-    }).catch(function() {});
+      _flushRetries();
+    }).catch(function() {
+      _saveRetry(type, data);
+    });
   }
 
   // ── Meta tag helper ──────────────────────────────────────────────────────────
