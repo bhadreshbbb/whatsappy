@@ -96,7 +96,7 @@
     data = data || {};
     data.sessionId = sessionId;
     data.type = type;
-    data.channelId = getConfig().channelId || config.channelId || '';
+    data.channelId = getConfig().channelId || config.channelId || window.__WW_CID__ || '';
     fetch(baseUrl + '/api/tracking/' + type, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

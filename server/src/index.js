@@ -126,11 +126,12 @@ if (fs.existsSync(clientDist)) {
       }
 
       let content = fs.readFileSync(trackerPath, 'utf8');
-      // Replace the 'demo' fallback with the real server-side channelId
-      content = content.replace(
-        /getConfig\(\)\.channelId \|\| config\.channelId \|\| 'demo'/g,
-        `getConfig().channelId || config.channelId || '${serverChannelId}'`
-      );
+      // Inject channelId as a global at the TOP of the file — no regex fragility.
+      // Tracker reads window.__WW_CID__ as the final fallback before empty string.
+      // This means even if WhatswayConfig is missing/broken, correct channel is used.
+      if (serverChannelId) {
+        content = `window.__WW_CID__='${serverChannelId}';\n` + content;
+      }
 
       res.setHeader('Content-Type', 'application/javascript');
       res.setHeader('Cache-Control', 'public, max-age=60'); // 1 min cache — stays fresh
