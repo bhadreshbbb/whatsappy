@@ -1,4 +1,4 @@
-import { getDb } from '../services/database.js';
+﻿import { getDb } from '../services/database.js';
 import { whatsappService } from '../services/whatsapp.service.js';
 import { saveChatMessage } from './chat.controller.js';
 import { buildSendMessagePayload, LANG_MAP, scrapeProductData } from './meta-templates.controller.js';
@@ -19,7 +19,7 @@ export const campaignsController = {
   async getCampaigns(req, res, next) {
     try {
       const db = getDb();
-      const channelId = req.headers['x-channel-id'] || 'demo';
+      const channelId = req.headers['x-channel-id'] || '';
       const result = db.abandoned_cart_campaigns
         .filter(c => c.channel_id === channelId)
         .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
@@ -33,7 +33,7 @@ export const campaignsController = {
     try {
       const db = getDb();
       const { id } = req.params;
-      const channelId = req.headers['x-channel-id'] || 'demo';
+      const channelId = req.headers['x-channel-id'] || '';
       const result = db.abandoned_cart_campaigns.find(c => c.id == id && c.channel_id === channelId);
       if (!result) {
         return res.status(404).json({ error: 'Campaign not found' });
@@ -47,7 +47,7 @@ export const campaignsController = {
   async createCampaign(req, res, next) {
     try {
       const db = getDb();
-      const channelId = req.headers['x-channel-id'] || 'demo';
+      const channelId = req.headers['x-channel-id'] || '';
       const b = req.body;
       // Accept both snake_case (from frontend) and camelCase
       const campaignType    = b.campaign_type    || b.campaignType   || 'abandoned_cart';
@@ -96,7 +96,7 @@ export const campaignsController = {
     try {
       const db = getDb();
       const { id } = req.params;
-      const channelId = req.headers['x-channel-id'] || 'demo';
+      const channelId = req.headers['x-channel-id'] || '';
       const idx = db.abandoned_cart_campaigns.findIndex(c => c.id == id && c.channel_id === channelId);
       if (idx < 0) {
         return res.status(404).json({ error: 'Campaign not found' });
@@ -131,7 +131,7 @@ export const campaignsController = {
     try {
       const db = getDb();
       const { id } = req.params;
-      const channelId = req.headers['x-channel-id'] || 'demo';
+      const channelId = req.headers['x-channel-id'] || '';
       const idx = db.abandoned_cart_campaigns.findIndex(c => String(c.id) === String(id) && c.channel_id === channelId);
       if (idx < 0) return res.status(404).json({ error: 'Campaign not found' });
 
@@ -230,7 +230,7 @@ export const campaignsController = {
     try {
       const db = getDb();
       const { id } = req.params;
-      const channelId = req.headers['x-channel-id'] || 'demo';
+      const channelId = req.headers['x-channel-id'] || '';
       const campaign = db.abandoned_cart_campaigns.find(c => c.id == id && c.channel_id === channelId);
       if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
 
@@ -450,7 +450,7 @@ export const campaignsController = {
       const { phone } = req.body;
       if (!phone) return res.status(400).json({ error: 'phone is required' });
 
-      const channelId = req.headers['x-channel-id'] || 'demo';
+      const channelId = req.headers['x-channel-id'] || '';
       const campaign = db.abandoned_cart_campaigns.find(c => c.id == id && c.channel_id === channelId);
       if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
 
@@ -658,7 +658,7 @@ export const campaignsController = {
       const db = getDb();
       const { id } = req.params;
       const { status } = req.body;
-      const channelId = req.headers['x-channel-id'] || 'demo';
+      const channelId = req.headers['x-channel-id'] || '';
       const idx = db.abandoned_cart_campaigns.findIndex(c => c.id == id && c.channel_id === channelId);
       if (idx < 0) {
         return res.status(404).json({ error: 'Campaign not found' });
@@ -706,7 +706,7 @@ export const campaignsController = {
     try {
       const db = getDb();
       const { id } = req.params;
-      const channelId = req.headers['x-channel-id'] || 'demo';
+      const channelId = req.headers['x-channel-id'] || '';
 
       const campaign = db.abandoned_cart_campaigns.find(c => String(c.id) === String(id) && c.channel_id === channelId);
       if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
@@ -898,7 +898,7 @@ export const campaignsController = {
     try {
       const db = getDb();
       const { id } = req.params;
-      const channelId = req.headers['x-channel-id'] || 'demo';
+      const channelId = req.headers['x-channel-id'] || '';
       const cam = db.abandoned_cart_campaigns.find(c => c.id == id && c.channel_id === channelId);
       if (!cam) return res.status(404).json({ error: 'Campaign not found' });
       const result = db.abandoned_cart_executions
@@ -921,7 +921,7 @@ export const campaignsController = {
     try {
       const db = getDb();
       const { id } = req.params;
-      const channelId = req.headers['x-channel-id'] || 'demo';
+      const channelId = req.headers['x-channel-id'] || '';
       const campaign = db.abandoned_cart_campaigns.find(c => c.id == id && c.channel_id === channelId);
       if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
 

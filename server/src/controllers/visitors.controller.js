@@ -1,11 +1,11 @@
-import { getDb } from '../services/database.js';
+﻿import { getDb } from '../services/database.js';
 
 export const visitorsController = {
   async getVisitors(req, res, next) {
     try {
       const db = getDb();
       const { search, page = '1', limit = '20', status, device, hasPhone } = req.query;
-      const channelId = req.headers['x-channel-id'] || 'demo';
+      const channelId = req.headers['x-channel-id'] || '';
 
       let all = db.website_visitors.filter(v => v.channel_id === channelId);
       console.log(`[Visitors/list] channelId="${channelId}" total_in_db=${db.website_visitors.length} matching=${all.length}`);
@@ -60,7 +60,7 @@ export const visitorsController = {
   async getStats(req, res, next) {
     try {
       const db = getDb();
-      const channelId = req.headers['x-channel-id'] || 'demo';
+      const channelId = req.headers['x-channel-id'] || '';
 
       const visitors = db.website_visitors.filter(v => v.channel_id === channelId);
       console.log(`[Visitors/stats] channelId="${channelId}" matching=${visitors.length} total_in_db=${db.website_visitors.length}`);
@@ -92,7 +92,7 @@ export const visitorsController = {
     try {
       const db = getDb();
       const { id } = req.params;
-      const channelId = req.headers['x-channel-id'] || 'demo';
+      const channelId = req.headers['x-channel-id'] || '';
       const visitor = db.website_visitors.find(v => v.id == id && v.channel_id === channelId);
       if (!visitor) {
         return res.status(404).json({ error: 'Visitor not found' });
@@ -107,7 +107,7 @@ export const visitorsController = {
     try {
       const db = getDb();
       const { id } = req.params;
-      const channelId = req.headers['x-channel-id'] || 'demo';
+      const channelId = req.headers['x-channel-id'] || '';
       const visitor = db.website_visitors.find(v => v.id == id && v.channel_id === channelId);
       if (!visitor) {
         return res.status(404).json({ error: 'Visitor not found' });
@@ -123,7 +123,7 @@ export const visitorsController = {
     try {
       const db = getDb();
       const { id } = req.params;
-      const channelId = req.headers['x-channel-id'] || 'demo';
+      const channelId = req.headers['x-channel-id'] || '';
       // Primary lookup by id; fallback by phone query param (for Repeat tab)
       let visitor = db.website_visitors.find(v => v.id == id && v.channel_id === channelId);
       if (!visitor && req.query.phone) {

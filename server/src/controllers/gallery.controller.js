@@ -1,4 +1,4 @@
-import { getDb } from '../services/database.js';
+﻿import { getDb } from '../services/database.js';
 import { v4 as uuidv4 } from 'uuid';
 import { whatsappService } from '../services/whatsapp.service.js';
 
@@ -21,7 +21,7 @@ function getCredentials(channelId) {
 export async function previewImage(req, res) {
   try {
     const db = getDb();
-    const channelId = req.headers['x-channel-id'] || 'demo';
+    const channelId = req.headers['x-channel-id'] || '';
     const { id } = req.params;
 
     const img = (db.gallery_images || []).find(i => i.id === id && i.channel_id === channelId);
@@ -86,7 +86,7 @@ export async function previewImage(req, res) {
 
 export function getFolders(req, res) {
   const db = getDb();
-  const channelId = req.headers['x-channel-id'] || 'demo';
+  const channelId = req.headers['x-channel-id'] || '';
   const folders = (db.gallery_folders || [])
     .filter(f => f.channel_id === channelId)
     .map(f => ({
@@ -99,7 +99,7 @@ export function getFolders(req, res) {
 
 export function createFolder(req, res) {
   const db = getDb();
-  const channelId = req.headers['x-channel-id'] || 'demo';
+  const channelId = req.headers['x-channel-id'] || '';
   const { name } = req.body;
   if (!name?.trim()) return res.status(400).json({ error: 'Folder name is required' });
 
@@ -121,7 +121,7 @@ export function createFolder(req, res) {
 
 export function deleteFolder(req, res) {
   const db = getDb();
-  const channelId = req.headers['x-channel-id'] || 'demo';
+  const channelId = req.headers['x-channel-id'] || '';
   const { id } = req.params;
 
   const idx = (db.gallery_folders || []).findIndex(f => f.id === id && f.channel_id === channelId);
@@ -138,7 +138,7 @@ export function deleteFolder(req, res) {
 
 export function getImages(req, res) {
   const db = getDb();
-  const channelId = req.headers['x-channel-id'] || 'demo';
+  const channelId = req.headers['x-channel-id'] || '';
   const { folderId } = req.params;
 
   const folder = (db.gallery_folders || []).find(f => f.id === folderId && f.channel_id === channelId);
@@ -153,7 +153,7 @@ export function getImages(req, res) {
 export async function uploadImage(req, res) {
   try {
     const db = getDb();
-    const channelId = req.headers['x-channel-id'] || 'demo';
+    const channelId = req.headers['x-channel-id'] || '';
     const { folderId } = req.params;
 
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
@@ -199,7 +199,7 @@ export async function uploadImage(req, res) {
 
 export function deleteImage(req, res) {
   const db = getDb();
-  const channelId = req.headers['x-channel-id'] || 'demo';
+  const channelId = req.headers['x-channel-id'] || '';
   const { id } = req.params;
 
   const idx = (db.gallery_images || []).findIndex(img => img.id === id && img.channel_id === channelId);
@@ -246,7 +246,7 @@ export async function proxyImage(req, res) {
 export async function importImageFromUrl(req, res) {
   try {
     const db = getDb();
-    const channelId = req.headers['x-channel-id'] || 'demo';
+    const channelId = req.headers['x-channel-id'] || '';
     const { image_url, folder_id } = req.body;
 
     if (!image_url) return res.status(400).json({ error: 'image_url is required' });

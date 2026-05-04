@@ -1,4 +1,4 @@
-import { getDb } from '../services/database.js';
+﻿import { getDb } from '../services/database.js';
 import { v4 as uuidv4 } from 'uuid';
 import { whatsappService } from '../services/whatsapp.service.js';
 import https from 'https';
@@ -840,7 +840,7 @@ export async function buildAutoProductCards(channelId, cleanName, count = 4, off
 // Only products that pass ALL three checks (title, price, main image) are returned.
 export async function autoDetectProducts(req, res) {
   try {
-    const channelId = req.headers['x-channel-id'] || 'demo';
+    const channelId = req.headers['x-channel-id'] || '';
     const { count = 4, template_name = '' } = req.body;
     const cleanName = (template_name || 'auto_products').toLowerCase().replace(/[^a-z0-9_]/g, '_');
 
@@ -868,7 +868,7 @@ export async function autoDetectProducts(req, res) {
 export async function previewPayload(req, res) {
   try {
     const db = getDb();
-    const channelId = req.headers['x-channel-id'] || 'demo';
+    const channelId = req.headers['x-channel-id'] || '';
     const { name, category, language, body, footer, buttons, header_type, header_text,
       is_carousel, carousel_cards, variable_labels,
       header_image_url, header_image_id, example_values } = req.body;
@@ -1234,7 +1234,7 @@ export function buildSendMessagePayload(tpl, productConfig, recipientPhone = '{{
 export async function getSendPayload(req, res) {
   try {
     const db = getDb();
-    const channelId = req.headers['x-channel-id'] || 'demo';
+    const channelId = req.headers['x-channel-id'] || '';
     const { id } = req.params;
     const tpl = (db.meta_templates || []).find(t => t.id === id && t.channel_id === channelId);
     if (!tpl) return res.status(404).json({ error: 'Template not found' });
@@ -1334,7 +1334,7 @@ export async function getSendPayload(req, res) {
 // ── List all meta templates ────────────────────────────────────────────────────
 export async function listTemplates(req, res) {
   const db = getDb();
-  const channelId = req.headers['x-channel-id'] || 'demo';
+  const channelId = req.headers['x-channel-id'] || '';
   const templates = (db.meta_templates || [])
     .filter(t => t.channel_id === channelId)
     .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
@@ -1384,7 +1384,7 @@ export async function listTemplates(req, res) {
 export async function createTemplate(req, res) {
   try {
     const db = getDb();
-    const channelId = req.headers['x-channel-id'] || 'demo';
+    const channelId = req.headers['x-channel-id'] || '';
     const { name, category, language, header_type, header_text, header_image_url, body, footer, buttons, variable_labels, example_values, is_carousel, carousel_cards, auto_product_mode } = req.body;
 
     // Carousel body (intro text) is optional; standard templates require body
@@ -1667,7 +1667,7 @@ export async function createTemplate(req, res) {
 export async function refreshStatus(req, res) {
   try {
     const db = getDb();
-    const channelId = req.headers['x-channel-id'] || 'demo';
+    const channelId = req.headers['x-channel-id'] || '';
     const { id } = req.params;
 
     const tpl = (db.meta_templates || []).find(t => t.id === id && t.channel_id === channelId);
@@ -1815,7 +1815,7 @@ export async function autoRefreshPendingStatuses() {
 // ── Save product config (image, vars mapping, etc.) ───────────────────────────
 export function saveProductConfig(req, res) {
   const db = getDb();
-  const channelId = req.headers['x-channel-id'] || 'demo';
+  const channelId = req.headers['x-channel-id'] || '';
   const { id } = req.params;
 
   const tpl = (db.meta_templates || []).find(t => t.id === id && t.channel_id === channelId);
@@ -1830,7 +1830,7 @@ export function saveProductConfig(req, res) {
 export function getHotProducts(req, res) {
   try {
     const db = getDb();
-    const channelId = req.headers['x-channel-id'] || 'demo';
+    const channelId = req.headers['x-channel-id'] || '';
     const limit = Math.min(parseInt(req.query.limit) || 10, 20);
     const days = parseInt(req.query.days) || 30;
     const since = new Date(Date.now() - days * 24 * 3600 * 1000).toISOString();
@@ -1908,7 +1908,7 @@ export function getHotProducts(req, res) {
 export async function refreshAutoProducts(req, res) {
   try {
     const db = getDb();
-    const channelId = req.headers['x-channel-id'] || 'demo';
+    const channelId = req.headers['x-channel-id'] || '';
     const { id } = req.params;
     const nowDt = new Date();
 
@@ -2280,7 +2280,7 @@ function fetchHtml(url) {
 export async function deleteTemplate(req, res) {
   try {
     const db = getDb();
-    const channelId = req.headers['x-channel-id'] || 'demo';
+    const channelId = req.headers['x-channel-id'] || '';
     const { id } = req.params;
 
     const idx = (db.meta_templates || []).findIndex(t => t.id === id && t.channel_id === channelId);

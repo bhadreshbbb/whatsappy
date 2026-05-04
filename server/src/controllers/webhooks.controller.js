@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Webhooks Controller
  * Handles:
  *  1. Shopify Order webhook  → POST /api/webhooks/shopify/order
@@ -162,7 +162,7 @@ export const webhooksController = {
     try {
       const db   = getDb();
       const body = req.body;
-      const channelId = req.headers['x-channel-id'] || 'demo';
+      const channelId = req.headers['x-channel-id'] || '';
 
       // ── Extract fields from Shopify order payload ─────────────────────────────
       const shopifyOrderId = String(body.id || body.order_id || '');
@@ -309,7 +309,7 @@ export const webhooksController = {
   async customOrder(req, res) {
     try {
       const db        = getDb();
-      const channelId = req.headers['x-channel-id'] || 'demo';
+      const channelId = req.headers['x-channel-id'] || '';
       const {
         phone: rawPhone, name, order_number, order_id,
         products, total_amount, currency = 'INR',
@@ -677,7 +677,7 @@ export const webhooksController = {
   async getOrderResponses(req, res) {
     try {
       const db        = getDb();
-      const channelId = req.headers['x-channel-id'] || 'demo';
+      const channelId = req.headers['x-channel-id'] || '';
       const { campaignId } = req.params;
 
       const allResponses = (db.order_responses || [])
@@ -735,7 +735,7 @@ export const webhooksController = {
   async getPendingOrders(req, res) {
     try {
       const db        = getDb();
-      const channelId = req.headers['x-channel-id'] || 'demo';
+      const channelId = req.headers['x-channel-id'] || '';
 
       const orders = (db.orders || [])
         .filter(o => o.channel_id === channelId && o.is_cod && o.phone)
@@ -749,7 +749,7 @@ export const webhooksController = {
   async testCodOrder(req, res) {
     try {
       const db        = getDb();
-      const channelId = req.headers['x-channel-id'] || 'demo';
+      const channelId = req.headers['x-channel-id'] || '';
       const { phone: rawPhone, name, order_number, products, total_amount, payment_method = 'Cash on Delivery' } = req.body;
 
       const phone = normalizePhone(rawPhone);
@@ -864,7 +864,7 @@ export const webhooksController = {
   async testProductView(req, res) {
     try {
       const db        = getDb();
-      const channelId = req.headers['x-channel-id'] || 'demo';
+      const channelId = req.headers['x-channel-id'] || '';
       const { phone: rawPhone, product_name, product_url, product_image, product_price } = req.body;
 
       const phone = normalizePhone(rawPhone);

@@ -1,4 +1,4 @@
-import { getDb } from '../services/database.js';
+﻿import { getDb } from '../services/database.js';
 import { whatsappService } from '../services/whatsapp.service.js';
 
 let _io = null;
@@ -79,7 +79,7 @@ export const chatController = {
   async getConversations(req, res, next) {
     try {
       const db = getDb();
-      const channelId = req.headers['x-channel-id'] || 'demo';
+      const channelId = req.headers['x-channel-id'] || '';
       const { filter, search } = req.query;
 
       // Seed conversations from existing visitors who have phone numbers
@@ -129,7 +129,7 @@ export const chatController = {
   async getMessages(req, res, next) {
     try {
       const db = getDb();
-      const channelId = req.headers['x-channel-id'] || 'demo';
+      const channelId = req.headers['x-channel-id'] || '';
       const { phone } = req.params;
 
       const msgs = db.chat_messages
@@ -157,7 +157,7 @@ export const chatController = {
   async sendMessage(req, res, next) {
     try {
       const db = getDb();
-      const channelId = req.headers['x-channel-id'] || 'demo';
+      const channelId = req.headers['x-channel-id'] || '';
       const { phone } = req.params;
       const { text, media_url } = req.body;
 
@@ -205,7 +205,7 @@ export const chatController = {
   async markSeen(req, res, next) {
     try {
       const db = getDb();
-      const channelId = req.headers['x-channel-id'] || 'demo';
+      const channelId = req.headers['x-channel-id'] || '';
       const { phone } = req.params;
 
       db.chat_messages.forEach(m => {
@@ -321,7 +321,7 @@ export const chatController = {
   async simulateIncoming(req, res, next) {
     try {
       const db = getDb();
-      const channelId = req.headers['x-channel-id'] || 'demo';
+      const channelId = req.headers['x-channel-id'] || '';
       const { phone, text, name } = req.body;
       if (!phone || !text) return res.status(400).json({ error: 'phone and text required' });
 

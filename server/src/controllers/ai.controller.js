@@ -1,4 +1,4 @@
-/**
+﻿/**
  * AI Controller
  * - POST /api/ai/generate-template  → Claude API writes WhatsApp template body
  * - GET  /api/ai/insights           → Smart insights from existing campaign data
@@ -165,7 +165,7 @@ export const aiController = {
   async getInsights(req, res) {
     try {
       const db        = getDb();
-      const channelId = req.headers['x-channel-id'] || 'demo';
+      const channelId = req.headers['x-channel-id'] || '';
       const insights  = computeInsights(db, channelId);
       res.json({ success: true, ...insights });
     } catch (err) {
@@ -177,7 +177,7 @@ export const aiController = {
   async getIntentScore(req, res) {
     try {
       const db        = getDb();
-      const channelId = req.headers['x-channel-id'] || 'demo';
+      const channelId = req.headers['x-channel-id'] || '';
       const phone     = req.params.phone;
       const score     = buyerIntentScore(db, channelId, phone);
       res.json({ phone, intent_score: score });
@@ -190,7 +190,7 @@ export const aiController = {
   async generateTemplate(req, res) {
     try {
       const db        = getDb();
-      const channelId = req.headers['x-channel-id'] || 'demo';
+      const channelId = req.headers['x-channel-id'] || '';
       const apiKey    = getApiKey(db, channelId);
 
       const {

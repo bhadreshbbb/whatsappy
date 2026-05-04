@@ -1,4 +1,4 @@
-import { Router } from 'express';
+﻿import { Router } from 'express';
 import { getDb } from '../services/database.js';
 
 const router = Router();
@@ -6,7 +6,7 @@ const router = Router();
 router.get('/', (req, res, next) => {
   try {
     const db = getDb();
-    const channelId = req.headers['x-channel-id'] || 'demo';
+    const channelId = req.headers['x-channel-id'] || '';
     const { status } = req.query;
 
     let results = db.cart_events.filter(c => c.channel_id === channelId);

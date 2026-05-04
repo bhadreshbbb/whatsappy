@@ -1,4 +1,4 @@
-import { getDb } from '../services/database.js';
+﻿import { getDb } from '../services/database.js';
 import { getLanguageFromGeo } from '../utils/geoLanguage.js';
 
 export const analyticsController = {
@@ -6,7 +6,7 @@ export const analyticsController = {
   async getDashboard(req, res, next) {
     try {
       const db = getDb();
-      const channelId = req.headers['x-channel-id'] || 'demo';
+      const channelId = req.headers['x-channel-id'] || '';
       const visitors  = db.website_visitors.filter(v => v.channel_id === channelId);
       const carts     = db.cart_events.filter(c => c.channel_id === channelId);
       const campaigns = db.abandoned_cart_campaigns.filter(c => c.channel_id === channelId);
@@ -53,7 +53,7 @@ export const analyticsController = {
   async getAnalytics(req, res, next) {
     try {
       const db        = getDb();
-      const channelId = req.headers['x-channel-id'] || 'demo';
+      const channelId = req.headers['x-channel-id'] || '';
       const days      = parseInt(req.query.period) || 7;
       const since     = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
 
@@ -135,7 +135,7 @@ export const analyticsController = {
   async getPageAnalytics(req, res, next) {
     try {
       const db        = getDb();
-      const channelId = req.headers['x-channel-id'] || 'demo';
+      const channelId = req.headers['x-channel-id'] || '';
       const days      = parseInt(req.query.days) || 30;
       const since     = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
 
@@ -193,7 +193,7 @@ export const analyticsController = {
   async getCityAnalytics(req, res, next) {
     try {
       const db        = getDb();
-      const channelId = req.headers['x-channel-id'] || 'demo';
+      const channelId = req.headers['x-channel-id'] || '';
       const days      = parseInt(req.query.days) || 30;
       const since     = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
 
@@ -234,7 +234,7 @@ export const analyticsController = {
   async getContactPower(req, res, next) {
     try {
       const db        = getDb();
-      const channelId = req.headers['x-channel-id'] || 'demo';
+      const channelId = req.headers['x-channel-id'] || '';
       const days      = parseInt(req.query.days) || 30;
       const since     = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
       const limit     = Math.min(parseInt(req.query.limit) || 50, 5000);
@@ -352,7 +352,7 @@ export const analyticsController = {
   async getDeviceBreakdown(req, res, next) {
     try {
       const db        = getDb();
-      const channelId = req.headers['x-channel-id'] || 'demo';
+      const channelId = req.headers['x-channel-id'] || '';
       const days      = parseInt(req.query.days) || 30;
       const since     = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
 
@@ -389,7 +389,7 @@ export const analyticsController = {
   async getEngagementStats(req, res, next) {
     try {
       const db        = getDb();
-      const channelId = req.headers['x-channel-id'] || 'demo';
+      const channelId = req.headers['x-channel-id'] || '';
       const days      = parseInt(req.query.days) || 7;
       const since     = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
 
@@ -446,7 +446,7 @@ export const analyticsController = {
   async getTopLanguage(req, res, next) {
     try {
       const db        = getDb();
-      const channelId = req.headers['x-channel-id'] || 'demo';
+      const channelId = req.headers['x-channel-id'] || '';
       const visitors  = db.website_visitors.filter(v => v.channel_id === channelId);
       const counts    = {};
       for (const v of visitors) {
@@ -464,7 +464,7 @@ export const analyticsController = {
   async getBrandIntel(req, res, next) {
     try {
       const db        = getDb();
-      const channelId = req.headers['x-channel-id'] || 'demo';
+      const channelId = req.headers['x-channel-id'] || '';
       const days      = parseInt(req.query.days) || 30;
       const since     = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
 
@@ -766,7 +766,7 @@ export const analyticsController = {
   async getRepeatVisitors(req, res, next) {
     try {
       const db = getDb();
-      const channelId = req.headers['x-channel-id'] || 'demo';
+      const channelId = req.headers['x-channel-id'] || '';
       const visitors  = db.website_visitors.filter(v => v.channel_id === channelId && v.phone);
       const purchases = db.purchase_history  .filter(p => p.channel_id === channelId);
 

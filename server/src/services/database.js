@@ -615,11 +615,11 @@ function executeQuery(sql, params, mode) {
     }
     
     if (lowerSql.includes('from abandoned_cart_campaigns')) {
-      return db.abandoned_cart_campaigns.filter(c => c.channel_id === (params[0] || 'demo')).sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+      return db.abandoned_cart_campaigns.filter(c => c.channel_id === (params[0] || '')).sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
     }
     
     if (lowerSql.includes('from message_templates')) {
-      let results = db.message_templates.filter(t => t.channel_id === (params[0] || 'demo'));
+      let results = db.message_templates.filter(t => t.channel_id === (params[0] || ''));
       results.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
       return results;
     }
@@ -935,6 +935,8 @@ export async function initDb() {
 }
 
 function seedDummyData() {
+  // Never seed fake data if there are real user accounts in the system
+  if (db.users && db.users.length > 0) return;
   if (db.website_visitors.length > 0) return;
   
   const cities = [

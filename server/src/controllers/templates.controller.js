@@ -1,11 +1,11 @@
-import { getDb } from '../services/database.js';
+﻿import { getDb } from '../services/database.js';
 
 export const templatesController = {
   async getTemplates(req, res, next) {
     try {
       const db = getDb();
       const { category, language } = req.query;
-      let results = db.message_templates.filter(t => t.channel_id === (req.headers['x-channel-id'] || 'demo'));
+      let results = db.message_templates.filter(t => t.channel_id === (req.headers['x-channel-id'] || ''));
       
       if (category) results = results.filter(t => t.category === category);
       if (language) results = results.filter(t => t.language === language);
@@ -46,7 +46,7 @@ export const templatesController = {
 
       const newTemplate = {
         id,
-        channel_id: req.headers['x-channel-id'] || 'demo',
+        channel_id: req.headers['x-channel-id'] || '',
         name,
         category: category || 'custom',
         language: language || 'en',

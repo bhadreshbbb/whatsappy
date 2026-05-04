@@ -1,4 +1,4 @@
-import { Router } from 'express';
+﻿import { Router } from 'express';
 import { getDb } from '../services/database.js';
 
 const router = Router();
@@ -39,7 +39,7 @@ async function triggerCatalogSeed(shopUrl, channelId) {
 router.get('/', (req, res, next) => {
   try {
     const db = getDb();
-    const channelId = req.headers['x-channel-id'] || 'demo';
+    const channelId = req.headers['x-channel-id'] || '';
     const settings = db.channel_settings.find(s => s.channel_id === channelId);
     res.json(settings ? JSON.parse(settings.settings || '{}') : {});
   } catch (error) {
@@ -50,7 +50,7 @@ router.get('/', (req, res, next) => {
 router.post('/', (req, res, next) => {
   try {
     const db = getDb();
-    const channelId = req.headers['x-channel-id'] || 'demo';
+    const channelId = req.headers['x-channel-id'] || '';
     const newSettings = req.body;
 
     // Detect shop_url change to trigger live catalog seed
@@ -82,7 +82,7 @@ router.post('/', (req, res, next) => {
 router.post('/sync-catalog', async (req, res, next) => {
   try {
     const db = getDb();
-    const channelId = req.headers['x-channel-id'] || 'demo';
+    const channelId = req.headers['x-channel-id'] || '';
     const row = db.channel_settings.find(s => s.channel_id === channelId);
     const s = JSON.parse(row?.settings || '{}');
     const shopUrl = s.shop_url || process.env.SHOP_URL;
