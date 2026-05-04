@@ -24,7 +24,7 @@ async function triggerCatalogSeed(shopUrl, channelId) {
       const price = p.variants?.[0]?.price ? `₹${p.variants[0].price}` : '';
       const image = p.images?.[0]?.src || '';
       if (!p.title || !image) continue;
-      const ei = db.product_catalog.findIndex(c => c.url === url);
+      const ei = db.product_catalog.findIndex(c => c.url === url && c.channel_id === channelId);
       const entry = { channel_id: channelId, name: p.title, url, price, image, handle: p.handle, _seeded_at: seededAt };
       if (ei >= 0) { db.product_catalog[ei] = { ...db.product_catalog[ei], ...entry }; updated++; }
       else { db.product_catalog.push(entry); added++; }

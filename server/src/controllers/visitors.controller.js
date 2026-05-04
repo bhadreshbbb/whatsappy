@@ -90,7 +90,8 @@ export const visitorsController = {
     try {
       const db = getDb();
       const { id } = req.params;
-      const visitor = db.website_visitors.find(v => v.id == id);
+      const channelId = req.headers['x-channel-id'] || 'demo';
+      const visitor = db.website_visitors.find(v => v.id == id && v.channel_id === channelId);
       if (!visitor) {
         return res.status(404).json({ error: 'Visitor not found' });
       }
@@ -104,11 +105,12 @@ export const visitorsController = {
     try {
       const db = getDb();
       const { id } = req.params;
-      const visitor = db.website_visitors.find(v => v.id == id);
+      const channelId = req.headers['x-channel-id'] || 'demo';
+      const visitor = db.website_visitors.find(v => v.id == id && v.channel_id === channelId);
       if (!visitor) {
         return res.status(404).json({ error: 'Visitor not found' });
       }
-      const carts = db.cart_events.filter(c => c.session_id === visitor.session_id);
+      const carts = db.cart_events.filter(c => c.session_id === visitor.session_id && c.channel_id === channelId);
       res.json(carts);
     } catch (error) {
       next(error);
@@ -121,7 +123,7 @@ export const visitorsController = {
       const { id } = req.params;
       const channelId = req.headers['x-channel-id'] || 'demo';
       // Primary lookup by id; fallback by phone query param (for Repeat tab)
-      let visitor = db.website_visitors.find(v => v.id == id);
+      let visitor = db.website_visitors.find(v => v.id == id && v.channel_id === channelId);
       if (!visitor && req.query.phone) {
         visitor = db.website_visitors
           .filter(v => v.channel_id === channelId && v.phone === req.query.phone)

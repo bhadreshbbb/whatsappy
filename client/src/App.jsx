@@ -14,6 +14,19 @@ import Analytics  from "./pages/Analytics";
 import Settings   from "./pages/Settings";
 import Chat       from "./pages/Chat";
 import Gallery    from "./pages/Gallery";
+import Login      from "./pages/Login";
+import Signup     from "./pages/Signup";
+
+function isAuthenticated() {
+  return !!localStorage.getItem('authToken');
+}
+
+function ProtectedRoute({ children }) {
+  if (!isAuthenticated()) {
+    return <Navigate to="/login" replace />;
+  }
+  return children;
+}
 
 // ── Credential error keywords to intercept globally ──────────────────────────
 const CRED_PATTERNS = [
@@ -172,6 +185,7 @@ function AppLayout({ sidebarOpen, setSidebarOpen, credError, setCredError }) {
             <Route path="/settings"    element={<PageWrapper><Settings/></PageWrapper>} />
             <Route path="/chat"        element={<Chat/>} />
             <Route path="/gallery"     element={<PageWrapper><Gallery/></PageWrapper>} />
+            <Route path="*"            element={<Navigate to="/dashboard" replace />} />
           </Routes>
         </main>
       </div>
@@ -229,12 +243,23 @@ export default function App() {
 
   return (
     <BrowserRouter>
-      <AppLayout
-        sidebarOpen={sidebarOpen}
-        setSidebarOpen={setSidebarOpen}
-        credError={credError}
-        setCredError={setCredError}
-      />
+      <Routes>
+        {/* Public auth routes */}
+        <Route path="/login"  element={isAuthenticated() ? <Navigate to="/dashboard" replace /> : <Login />} />
+        <Route path="/signup" element={isAuthenticated() ? <Navigate to="/dashboard" replace /> : <Signup />} />
+
+        {/* All other routes are protected */}
+        <Route path="*" element={
+          <ProtectedRoute>
+            <AppLayout
+              sidebarOpen={sidebarOpen}
+              setSidebarOpen={setSidebarOpen}
+              credError={credError}
+              setCredError={setCredError}
+            />
+          </ProtectedRoute>
+        } />
+      </Routes>
     </BrowserRouter>
   );
 }

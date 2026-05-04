@@ -21,6 +21,8 @@ import { galleryRoutes } from './routes/gallery.routes.js';
 import { metaTemplatesRoutes } from './routes/meta-templates.routes.js';
 import { webhooksRoutes }      from './routes/webhooks.routes.js';
 import { aiRoutes }            from './routes/ai.routes.js';
+import { authRoutes }          from './routes/auth.routes.js';
+import { requireAuth }         from './middleware/auth.middleware.js';
 import { initDb } from './services/database.js';
 import { startAutomation } from './jobs/automation.js';
 import { errorHandler } from './middleware/errorHandler.js';
@@ -48,7 +50,7 @@ io.on('connection', (socket) => {
   // Track online status
   socket.on('user_online', ({ phone }) => {
     const db = getDb();
-    const conv = db.chat_conversations.find(c => c.phone === phone);
+    const conv = db.chat_conversations.find(c => c.phone === phone && c.channel_id === channelId);
     if (conv) {
       conv.is_online = true;
       db.save();
@@ -85,21 +87,25 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
-app.use('/api/tracking',   trackingRoutes);
-app.use('/api/visitors',   visitorsRoutes);
-app.use('/api/campaigns',  campaignsRoutes);
-app.use('/api/templates',  templatesRoutes);
-app.use('/api/analytics',  analyticsRoutes);
-app.use('/api/cart-events',cartEventsRoutes);
-app.use('/api/settings',   settingsRoutes);
-app.use('/api/whatsapp',   whatsappRoutes);
-app.use('/api/contacts',   contactsRoutes);
-app.use('/api/products',   productsRoutes);
-app.use('/api/chat',       chatRoutes);
-app.use('/api/gallery',         galleryRoutes);
-app.use('/api/meta-templates',  metaTemplatesRoutes);
-app.use('/api/webhooks',        webhooksRoutes);
-app.use('/api/ai',              aiRoutes);
+// Public routes — no auth required
+app.use('/api/auth',     authRoutes);
+app.use('/api/tracking', trackingRoutes);   // pixel — called by website visitors
+app.use('/api/webhooks', webhooksRoutes);   // Meta/Shopify webhook callbacks
+
+// Protected routes — JWT required
+app.use('/api/visitors',       requireAuth, visitorsRoutes);
+app.use('/api/campaigns',      requireAuth, campaignsRoutes);
+app.use('/api/templates',      requireAuth, templatesRoutes);
+app.use('/api/analytics',      requireAuth, analyticsRoutes);
+app.use('/api/cart-events',    requireAuth, cartEventsRoutes);
+app.use('/api/settings',       requireAuth, settingsRoutes);
+app.use('/api/whatsapp',       requireAuth, whatsappRoutes);
+app.use('/api/contacts',       requireAuth, contactsRoutes);
+app.use('/api/products',       requireAuth, productsRoutes);
+app.use('/api/chat',           requireAuth, chatRoutes);
+app.use('/api/gallery',        requireAuth, galleryRoutes);
+app.use('/api/meta-templates', requireAuth, metaTemplatesRoutes);
+app.use('/api/ai',             requireAuth, aiRoutes);
 
 // Serve built React frontend — must be BEFORE errorHandler
 const clientDist = path.join(__dirname, '../../client/dist');

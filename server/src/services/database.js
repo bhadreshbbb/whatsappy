@@ -22,7 +22,7 @@ const MONGO_TABLES = [
   'abandoned_cart_campaigns', 'abandoned_cart_executions', 'user_sessions',
   'channel_settings', 'product_catalog', 'chat_conversations', 'chat_messages',
   'gallery_folders', 'gallery_images', 'meta_templates', 'orders', 'order_responses',
-  'campaign_locks',
+  'campaign_locks', 'users',
 ];
 
 async function initMongo() {
@@ -191,6 +191,7 @@ let db = {
   orders: [],             // Shopify orders (COD + online) received via webhook
   order_responses: [],    // User replies to order confirmation messages
   campaign_locks: [],     // Per-user campaign locks with activity tracking
+  users: [],              // Merchant accounts for auth
   _counters: {}
 };
 
@@ -210,6 +211,7 @@ function loadDb() {
       if (!db.orders) db.orders = [];
       if (!db.order_responses) db.order_responses = [];
       if (!db.campaign_locks) db.campaign_locks = [];
+      if (!db.users) db.users = [];
       if (!db._counters) db._counters = {};
     } catch (e) {
       console.error('Error loading DB:', e);
@@ -270,6 +272,7 @@ export function getDb() {
     orders: db.orders,
     order_responses: db.order_responses,
     campaign_locks: db.campaign_locks,
+    users: db.users,
     prepare: (sql) => ({
       get: (...params) => executeQuery(sql, params, 'get'),
       all: (...params) => executeQuery(sql, params, 'all'),

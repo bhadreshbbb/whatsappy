@@ -3,19 +3,45 @@ import { mockRequest } from './mockData.js';
 const BASE      = import.meta.env.VITE_API_URL || '';
 const MOCK_MODE = import.meta.env.VITE_MOCK_API === 'true';
 
+function logout() {
+  localStorage.removeItem('authToken');
+  localStorage.removeItem('channelId');
+  localStorage.removeItem('userName');
+  localStorage.removeItem('userEmail');
+  window.location.href = '/login';
+}
+
 async function request(path, opts = {}) {
   if (MOCK_MODE) {
     return mockRequest(path, opts);
   }
-  return fetch(`${BASE}/api${path}`, {
-    headers: {
-      'Content-Type': 'application/json',
-      'x-channel-id': localStorage.getItem('channelId') || 'demo',
-      ...opts.headers,
-    },
-    ...opts,
-  }).then(r => r.json());
+
+  const token     = localStorage.getItem('authToken');
+  const channelId = localStorage.getItem('channelId') || 'demo';
+
+  const headers = {
+    'Content-Type': 'application/json',
+    'x-channel-id': channelId,
+    ...opts.headers,
+  };
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+
+  const res = await fetch(`${BASE}/api${path}`, { headers, ...opts });
+
+  if (res.status === 401) {
+    logout();
+    return;
+  }
+
+  return res.json();
 }
+
+export const authApi = {
+  login:          (data) => request('/auth/login',           { method: 'POST', body: JSON.stringify(data) }),
+  signup:         (data) => request('/auth/signup',          { method: 'POST', body: JSON.stringify(data) }),
+  me:             ()     => request('/auth/me'),
+  changePassword: (data) => request('/auth/change-password', { method: 'POST', body: JSON.stringify(data) }),
+};
 
 export const visitorsApi = {
   list:        (params = {}) => request('/visitors?' + new URLSearchParams(params).toString()),

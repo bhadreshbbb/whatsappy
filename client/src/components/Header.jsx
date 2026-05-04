@@ -1,6 +1,6 @@
-import React, { useEffect, useState } from "react";
-import { useLocation, NavLink } from "react-router-dom";
-import { Menu, Bell, Activity, ShoppingCart, MessageSquare, Users } from "lucide-react";
+import React, { useEffect, useState, useRef } from "react";
+import { useLocation, NavLink, useNavigate } from "react-router-dom";
+import { Menu, Bell, Activity, ShoppingCart, MessageSquare, Users, LogOut, User } from "lucide-react";
 import { visitorsApi } from "../api";
 
 const PAGE_META = {
@@ -28,6 +28,56 @@ function Chip({ icon: Icon, label, value, color }) {
       style={{ background: cfg.bg, border: `1px solid ${cfg.border}`, color: cfg.text }}>
       {Icon && <Icon size={11}/>}
       <span>{label && <span className="opacity-60 mr-1">{label}</span>}{value}</span>
+    </div>
+  );
+}
+
+function UserMenu() {
+  const navigate  = useNavigate();
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+  const name  = localStorage.getItem('userName') || 'Account';
+  const email = localStorage.getItem('userEmail') || '';
+  const initials = name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
+
+  useEffect(() => {
+    function onOutside(e) { if (ref.current && !ref.current.contains(e.target)) setOpen(false); }
+    document.addEventListener('mousedown', onOutside);
+    return () => document.removeEventListener('mousedown', onOutside);
+  }, []);
+
+  function logout() {
+    localStorage.removeItem('authToken');
+    localStorage.removeItem('channelId');
+    localStorage.removeItem('userName');
+    localStorage.removeItem('userEmail');
+    navigate('/login', { replace: true });
+  }
+
+  return (
+    <div className="relative" ref={ref}>
+      <button onClick={() => setOpen(o => !o)}
+        className="flex items-center gap-2 px-2 py-1 rounded-xl transition-all hover:bg-white/5">
+        <div className="w-7 h-7 rounded-full flex items-center justify-center text-[11px] font-bold text-white"
+          style={{ background: 'linear-gradient(135deg, #6366f1, #8b5cf6)' }}>
+          {initials}
+        </div>
+        <span className="hidden md:block text-xs font-medium text-slate-300 max-w-[100px] truncate">{name}</span>
+      </button>
+
+      {open && (
+        <div className="absolute right-0 top-full mt-2 w-52 rounded-xl shadow-2xl z-50 py-1 overflow-hidden"
+          style={{ background: '#0f1a2e', border: '1px solid rgba(255,255,255,0.1)' }}>
+          <div className="px-3 py-2 border-b border-white/5">
+            <p className="text-xs font-semibold text-white truncate">{name}</p>
+            <p className="text-[10px] text-slate-500 truncate">{email}</p>
+          </div>
+          <button onClick={logout}
+            className="w-full flex items-center gap-2 px-3 py-2.5 text-xs text-red-400 hover:bg-red-500/10 transition-colors">
+            <LogOut size={13} /> Sign Out
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -84,15 +134,8 @@ export default function Header({ onMenuToggle }) {
         </div>
       )}
 
-      {/* Notification bell */}
-      <button
-        className="relative w-8 h-8 flex items-center justify-center rounded-lg transition-all duration-150"
-        style={{ color: '#64748b' }}
-        onMouseEnter={e=>{ e.currentTarget.style.color='#e2e8f0'; e.currentTarget.style.background='rgba(255,255,255,0.05)'; }}
-        onMouseLeave={e=>{ e.currentTarget.style.color='#64748b'; e.currentTarget.style.background='transparent'; }}>
-        <Bell size={17}/>
-        {notifs > 0 && <span className="notif-dot"/>}
-      </button>
+      {/* User menu with logout */}
+      <UserMenu />
     </header>
   );
 }

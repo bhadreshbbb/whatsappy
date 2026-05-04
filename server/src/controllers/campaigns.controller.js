@@ -33,7 +33,8 @@ export const campaignsController = {
     try {
       const db = getDb();
       const { id } = req.params;
-      const result = db.abandoned_cart_campaigns.find(c => c.id == id);
+      const channelId = req.headers['x-channel-id'] || 'demo';
+      const result = db.abandoned_cart_campaigns.find(c => c.id == id && c.channel_id === channelId);
       if (!result) {
         return res.status(404).json({ error: 'Campaign not found' });
       }
@@ -95,7 +96,8 @@ export const campaignsController = {
     try {
       const db = getDb();
       const { id } = req.params;
-      const idx = db.abandoned_cart_campaigns.findIndex(c => c.id == id);
+      const channelId = req.headers['x-channel-id'] || 'demo';
+      const idx = db.abandoned_cart_campaigns.findIndex(c => c.id == id && c.channel_id === channelId);
       if (idx < 0) {
         return res.status(404).json({ error: 'Campaign not found' });
       }
@@ -129,7 +131,8 @@ export const campaignsController = {
     try {
       const db = getDb();
       const { id } = req.params;
-      const idx = db.abandoned_cart_campaigns.findIndex(c => String(c.id) === String(id));
+      const channelId = req.headers['x-channel-id'] || 'demo';
+      const idx = db.abandoned_cart_campaigns.findIndex(c => String(c.id) === String(id) && c.channel_id === channelId);
       if (idx < 0) return res.status(404).json({ error: 'Campaign not found' });
 
       const campaign = db.abandoned_cart_campaigns[idx];
@@ -229,7 +232,7 @@ export const campaignsController = {
       const db = getDb();
       const { id } = req.params;
       const channelId = req.headers['x-channel-id'] || 'demo';
-      const campaign = db.abandoned_cart_campaigns.find(c => c.id == id);
+      const campaign = db.abandoned_cart_campaigns.find(c => c.id == id && c.channel_id === channelId);
       if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
 
       // ── Build target audience ──────────────────────────────────────────────
@@ -449,7 +452,7 @@ export const campaignsController = {
       if (!phone) return res.status(400).json({ error: 'phone is required' });
 
       const channelId = req.headers['x-channel-id'] || 'demo';
-      const campaign = db.abandoned_cart_campaigns.find(c => c.id == id);
+      const campaign = db.abandoned_cart_campaigns.find(c => c.id == id && c.channel_id === channelId);
       if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
 
       const metaTpl = campaign.meta_template_id
@@ -656,7 +659,8 @@ export const campaignsController = {
       const db = getDb();
       const { id } = req.params;
       const { status } = req.body;
-      const idx = db.abandoned_cart_campaigns.findIndex(c => c.id == id);
+      const channelId = req.headers['x-channel-id'] || 'demo';
+      const idx = db.abandoned_cart_campaigns.findIndex(c => c.id == id && c.channel_id === channelId);
       if (idx < 0) {
         return res.status(404).json({ error: 'Campaign not found' });
       }
@@ -705,7 +709,7 @@ export const campaignsController = {
       const { id } = req.params;
       const channelId = req.headers['x-channel-id'] || 'demo';
 
-      const campaign = db.abandoned_cart_campaigns.find(c => String(c.id) === String(id));
+      const campaign = db.abandoned_cart_campaigns.find(c => String(c.id) === String(id) && c.channel_id === channelId);
       if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
 
       // ── All locks for this campaign ───────────────────────────────────────────
@@ -895,7 +899,9 @@ export const campaignsController = {
     try {
       const db = getDb();
       const { id } = req.params;
-      const cam = db.abandoned_cart_campaigns.find(c => c.id == id);
+      const channelId = req.headers['x-channel-id'] || 'demo';
+      const cam = db.abandoned_cart_campaigns.find(c => c.id == id && c.channel_id === channelId);
+      if (!cam) return res.status(404).json({ error: 'Campaign not found' });
       const result = db.abandoned_cart_executions
         .filter(e => e.campaign_id == id && e.status !== 'archived_reentry')
         .sort((a, b) => new Date(b.sent_at).getTime() - new Date(a.sent_at).getTime())
@@ -917,7 +923,7 @@ export const campaignsController = {
       const db = getDb();
       const { id } = req.params;
       const channelId = req.headers['x-channel-id'] || 'demo';
-      const campaign = db.abandoned_cart_campaigns.find(c => c.id == id);
+      const campaign = db.abandoned_cart_campaigns.find(c => c.id == id && c.channel_id === channelId);
       if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
 
       const settingsRow = (db.channel_settings || []).find(s => s.channel_id === channelId);
