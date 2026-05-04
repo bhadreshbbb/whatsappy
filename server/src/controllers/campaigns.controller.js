@@ -146,9 +146,8 @@ export const campaignsController = {
 
       // 2. For automation campaigns — reset the whatsapp_sent flags so automation
       //    stops targeting these events (no orphaned state left behind).
-      const type       = campaign.campaign_type;
-      const channelId  = campaign.channel_id;
-      const now        = new Date().toISOString();
+      const type = campaign.campaign_type;
+      const now  = new Date().toISOString();
 
       if (type === 'abandoned_product_view' || type === 'product_view') {
         // Release all visitors currently locked by this campaign back to product_view
