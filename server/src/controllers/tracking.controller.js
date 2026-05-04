@@ -415,6 +415,52 @@ export const trackingController = {
               const targetStatus = hasRecentView ? 'product_view' : 'active';
               downgradeStatus(db.website_visitors[vIdx], targetStatus);
               console.log(`[Cart] Cleared for ${phone || sessionId} → status downgraded to ${targetStatus}`);
+
+              // APV timer restart: when cart is emptied the full delay must restart from NOW.
+              // Without this, the timer continues from the original view time — so if 2 of 3
+              // mins already elapsed before cart-add, only 1 min would remain after cart-clear.
+              const hasActiveAPVCamp = phone && (db.abandoned_cart_campaigns || []).some(c =>
+                c.channel_id === cid && c.campaign_type === 'abandoned_product_view' && c.is_active
+              );
+              if (hasActiveAPVCamp) {
+                // Reset product_view timestamps → FLOW 2b timer anchor becomes NOW
+                (db.product_views || []).filter(pv => pv.channel_id === cid && pv.phone === phone)
+                  .forEach(pv => {
+                    pv.created_at       = nowClear;
+                    pv.whatsapp_sent    = 0;
+                    pv.followup_count   = 0;
+                    pv.whatsapp_sent_at = null;
+                  });
+                // Reset APV lock so stage 1 fires fresh (handles cart_added AND mid-stage active locks)
+                const apvLock = (db.campaign_locks || []).find(l =>
+                  l.phone === phone && l.channel_id === cid &&
+                  l.campaign_type === 'abandoned_product_view' &&
+                  ['active', 'cart_added'].includes(l.lock_status)
+                );
+                if (apvLock) {
+                  if (!apvLock.send_history) apvLock.send_history = [];
+                  apvLock.send_history.push({
+                    cycle:          apvLock.cycle_count || 1,
+                    stage1_sent_at: apvLock.stage_1_sent_at || null,
+                    stage2_sent_at: apvLock.stage_2_sent_at || null,
+                    archived_at:    nowClear,
+                    exit_reason:    'cart_cleared_reentry',
+                  });
+                  (db.abandoned_cart_executions || []).forEach(x => {
+                    if (String(x.campaign_id) === String(apvLock.campaign_id) &&
+                        x.phone === phone && x.status === 'sent') {
+                      x.status = 'archived_reentry'; x.archived_at = nowClear;
+                    }
+                  });
+                  apvLock.stage           = 0;
+                  apvLock.stage_1_sent_at = null;
+                  apvLock.stage_2_sent_at = null;
+                  apvLock.lock_status     = 'active';
+                  apvLock.unlock_reason   = null;
+                  apvLock.reentry_at      = nowClear;
+                  console.log(`[APV] ${phone} cart cleared — lock reset, full APV delay restarting from NOW`);
+                }
+              }
             }
           }
           db.save();
