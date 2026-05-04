@@ -1,5 +1,8 @@
 !function() {
-  var config = window.WhatswayConfig || {};
+  // Read config lazily so it works even when WhatswayConfig is defined after tracker.js loads
+  // (e.g. tag managers, async script loading, wrong order in template)
+  function getConfig() { return window.WhatswayConfig || {}; }
+  var config = getConfig();
   // Use config.baseUrl if set, otherwise auto-detect from the <script src> tag
   var baseUrl = config.baseUrl || (function() {
     try {
@@ -93,7 +96,7 @@
     data = data || {};
     data.sessionId = sessionId;
     data.type = type;
-    data.channelId = config.channelId || 'demo';
+    data.channelId = getConfig().channelId || config.channelId || 'demo';
     fetch(baseUrl + '/api/tracking/' + type, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

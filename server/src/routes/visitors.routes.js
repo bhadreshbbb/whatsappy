@@ -47,6 +47,43 @@ router.get('/channel-check', (req, res) => {
   }
 });
 
+// Migrate all "demo" channel data → real channel from JWT.
+// One-time fix for users who installed tracker without channelId (defaulted to "demo").
+router.post('/migrate-from-demo', (req, res) => {
+  try {
+    const db      = getDb();
+    const realCid = req.headers['x-channel-id'] || '';
+    if (!realCid) return res.status(400).json({ error: 'No channelId in JWT' });
+
+    const TABLES = [
+      'website_visitors', 'cart_events', 'purchase_history',
+      'page_views', 'product_views', 'searches', 'custom_events',
+      'abandoned_cart_campaigns', 'abandoned_cart_executions',
+      'campaign_locks', 'product_catalog', 'channel_settings',
+    ];
+
+    const counts = {};
+    for (const table of TABLES) {
+      if (!Array.isArray(db[table])) continue;
+      let n = 0;
+      for (const doc of db[table]) {
+        if (doc.channel_id === 'demo') {
+          doc.channel_id = realCid;
+          n++;
+        }
+      }
+      if (n > 0) counts[table] = n;
+    }
+
+    db.save();
+    const total = Object.values(counts).reduce((s, v) => s + v, 0);
+    console.log(`[Migrate] demo → ${realCid}: ${total} records across`, counts);
+    res.json({ success: true, migrated: total, by_table: counts, to_channel: realCid });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 router.get('/:id', visitorsController.getVisitor);
 router.get('/:id/carts', visitorsController.getVisitorCarts);
 router.get('/:id/activity', visitorsController.getVisitorActivity);

@@ -93,10 +93,37 @@ export default function Settings() {
     finally { setPwSaving(false); }
   };
 
+  const [migrating, setMigrating] = useState(false);
+  const [migrateResult, setMigrateResult] = useState(null);
+
   const copyChannelId = () => {
     navigator.clipboard.writeText(channelId);
     setCopiedChannelId(true);
     setTimeout(() => setCopiedChannelId(false), 2000);
+  };
+
+  const migrateFromDemo = async () => {
+    setMigrating(true);
+    setMigrateResult(null);
+    try {
+      const BASE  = import.meta.env.VITE_API_URL || '';
+      const token = localStorage.getItem('authToken');
+      const r = await fetch(`${BASE}/api/visitors/migrate-from-demo`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+      }).then(res => res.json());
+      setMigrateResult(r);
+      if (r.success) {
+        setTrackerCheck(null); // reset so user re-checks
+        showToast(`Migrated ${r.migrated} records to your channel!`);
+      } else {
+        showToast(r.error || 'Migration failed', 'error');
+      }
+    } catch (e) {
+      showToast('Migration failed', 'error');
+    } finally {
+      setMigrating(false);
+    }
   };
 
   const verifyTracker = async () => {
@@ -418,14 +445,29 @@ export default function Settings() {
               <div className="space-y-2">
                 {/* Mismatch warning — highest priority */}
                 {trackerCheck.mismatch && (
-                  <div className="flex items-start gap-2 p-3 rounded-lg text-xs" style={{ background: "rgba(251,191,36,0.08)", border: "1px solid rgba(251,191,36,0.3)" }}>
-                    <WifiOff size={14} style={{ color: "#fbbf24" }} className="shrink-0 mt-0.5" />
-                    <div>
-                      <p className="font-semibold" style={{ color: "#fbbf24" }}>Channel ID mismatch detected!</p>
-                      <p className="mt-1" style={{ color: "#fde68a" }}>{trackerCheck.mismatch}</p>
-                      <p className="mt-2 font-semibold" style={{ color: "#fbbf24" }}>Your correct channelId:</p>
-                      <code className="mt-0.5 block font-mono text-[11px] font-bold" style={{ color: "#86efac" }}>{trackerCheck.jwtChannelId}</code>
+                  <div className="p-3 rounded-lg text-xs space-y-2" style={{ background: "rgba(251,191,36,0.08)", border: "1px solid rgba(251,191,36,0.3)" }}>
+                    <div className="flex items-start gap-2">
+                      <WifiOff size={14} style={{ color: "#fbbf24" }} className="shrink-0 mt-0.5" />
+                      <div>
+                        <p className="font-semibold" style={{ color: "#fbbf24" }}>Channel ID mismatch detected!</p>
+                        <p className="mt-1" style={{ color: "#fde68a" }}>{trackerCheck.demoCount} old visitors stored under "demo". Click below to move them to your channel instantly.</p>
+                        <p className="mt-2 font-semibold" style={{ color: "#fbbf24" }}>Your channel: <code style={{ color: "#86efac" }}>{trackerCheck.jwtChannelId}</code></p>
+                      </div>
                     </div>
+                    <button
+                      onClick={migrateFromDemo}
+                      disabled={migrating}
+                      className="w-full flex items-center justify-center gap-2 py-2 rounded-lg text-xs font-semibold transition-all disabled:opacity-60"
+                      style={{ background: "rgba(251,191,36,0.2)", border: "1px solid rgba(251,191,36,0.4)", color: "#fbbf24" }}>
+                      {migrating
+                        ? <><RefreshCw size={12} className="animate-spin" /> Migrating…</>
+                        : <>Move {trackerCheck.demoCount} visitors to my channel</>}
+                    </button>
+                    {migrateResult?.success && (
+                      <p className="text-center" style={{ color: "#86efac" }}>
+                        Done! {migrateResult.migrated} records moved. Click "Check Now" to verify.
+                      </p>
+                    )}
                   </div>
                 )}
 

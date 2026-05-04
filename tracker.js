@@ -1,5 +1,6 @@
 !function() {
-  var config = window.WhatswayConfig || {};
+  function getConfig() { return window.WhatswayConfig || {}; }
+  var config = getConfig();
   // Use config.baseUrl if set, otherwise auto-detect from the <script src> tag
   var baseUrl = config.baseUrl || (function() {
     try {
@@ -89,7 +90,7 @@
     data = data || {};
     data.sessionId = sessionId;
     data.type = type;
-    data.channelId = config.channelId || 'demo';
+    data.channelId = getConfig().channelId || config.channelId || 'demo';
     fetch(baseUrl + '/api/tracking/' + type, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
