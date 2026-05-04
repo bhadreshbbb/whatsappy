@@ -1958,7 +1958,12 @@ export default function Campaigns() {
   const [analyticsModal, setAnalyticsModal] = useState(null); // { campaign, data } | null
   const [analyticsModalLoading, setAnalyticsModalLoading] = useState(false);
 
-  const CH = () => ({ 'x-channel-id': localStorage.getItem('channelId') || 'demo' });
+  const CH = () => {
+    const _cid = localStorage.getItem('channelId');
+    const cid = (_cid && _cid !== 'undefined' && _cid !== 'null') ? _cid : '';
+    const token = localStorage.getItem('authToken');
+    return { 'x-channel-id': cid, ...(token ? { 'Authorization': `Bearer ${token}` } : {}) };
+  };
 
   // Auto-refresh open audience panels every 20 seconds for near-real-time analytics
   useEffect(() => {

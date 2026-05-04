@@ -5,8 +5,14 @@ import {
 } from 'lucide-react';
 
 const API = (path) => `/api/gallery${path}`;
-const CHANNEL = () => localStorage.getItem('channelId') || 'demo';
-const headers = () => ({ 'x-channel-id': CHANNEL() });
+const CHANNEL = () => {
+  const _cid = localStorage.getItem('channelId');
+  return (_cid && _cid !== 'undefined' && _cid !== 'null') ? _cid : '';
+};
+const headers = () => {
+  const token = localStorage.getItem('authToken');
+  return { 'x-channel-id': CHANNEL(), ...(token ? { 'Authorization': `Bearer ${token}` } : {}) };
+};
 
 async function apiFetch(path, opts = {}) {
   const res = await fetch(API(path), {

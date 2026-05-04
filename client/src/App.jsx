@@ -141,7 +141,8 @@ function AppLayout({ sidebarOpen, setSidebarOpen, credError, setCredError }) {
   const notifTimer = React.useRef(null);
 
   React.useEffect(() => {
-    const CHANNEL_ID = localStorage.getItem('channelId') || 'demo';
+    const _cid = localStorage.getItem('channelId');
+    const CHANNEL_ID = (_cid && _cid !== 'undefined' && _cid !== 'null') ? _cid : '';
     const BASE = import.meta.env.VITE_API_URL || '';
     const s = io(BASE || 'http://localhost:3005', {
       query: { channelId: CHANNEL_ID },

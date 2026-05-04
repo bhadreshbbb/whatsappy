@@ -8,14 +8,17 @@ import {
 } from "lucide-react";
 
 const BASE = import.meta.env.VITE_API_URL || '';
-const CHANNEL_ID = localStorage.getItem('channelId') || 'demo';
+const getChannelId = () => {
+  const _cid = localStorage.getItem('channelId');
+  return (_cid && _cid !== 'undefined' && _cid !== 'null') ? _cid : '';
+};
 
 // ─── Socket singleton ─────────────────────────────────────────────────────────
 let socket = null;
 function getSocket() {
   if (!socket) {
     socket = io(BASE || 'http://localhost:3005', {
-      query: { channelId: CHANNEL_ID },
+      query: { channelId: getChannelId() },
       transports: ['websocket', 'polling'],
     });
   }
@@ -24,8 +27,14 @@ function getSocket() {
 
 // ─── API helpers ──────────────────────────────────────────────────────────────
 async function api(path, opts = {}) {
+  const token = localStorage.getItem('authToken');
   const r = await fetch(`${BASE}/api/chat${path}`, {
-    headers: { 'Content-Type': 'application/json', 'x-channel-id': CHANNEL_ID, ...opts.headers },
+    headers: {
+      'Content-Type': 'application/json',
+      'x-channel-id': getChannelId(),
+      ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+      ...opts.headers,
+    },
     ...opts,
   });
   return r.json();

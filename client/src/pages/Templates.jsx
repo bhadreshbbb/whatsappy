@@ -420,7 +420,7 @@ export default function Templates() {
     try {
       const res  = await fetch('/api/ai/generate-template', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-channel-id': localStorage.getItem('channelId') || 'demo' },
+        headers: { 'Content-Type': 'application/json', ...CH() },
         body: JSON.stringify(aiForm),
       });
       const data = await res.json();

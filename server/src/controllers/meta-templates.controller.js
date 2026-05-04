@@ -1737,16 +1737,25 @@ export async function refreshStatus(req, res) {
 // Handles: PENDING → APPROVED, PENDING → REJECTED, missing meta_template_id.
 export async function autoRefreshPendingStatuses() {
   const db = getDb();
-  const channelId = process.env.CHANNEL_ID || 'demo';
+
+  // Collect all unique channels that have pending templates
+  const allChannels = [...new Set(
+    (db.meta_templates || [])
+      .filter(t => t.channel_id && (t.meta_status === 'PENDING' || t.meta_status === 'DRAFT' || t.meta_status === 'IN_APPEAL'))
+      .map(t => t.channel_id)
+  )];
+  if (allChannels.length === 0) return;
+
+  for (const channelId of allChannels) {
   const creds = getCreds(channelId);
-  if (!creds) return;
+  if (!creds) continue;
 
   // Only bother if we have at least one non-APPROVED template with a submitted ID
   const localTemplates = (db.meta_templates || []).filter(t => t.channel_id === channelId);
   const needsCheck = localTemplates.filter(t =>
     t.meta_status === 'PENDING' || t.meta_status === 'DRAFT' || t.meta_status === 'IN_APPEAL'
   );
-  if (needsCheck.length === 0) return;
+  if (needsCheck.length === 0) continue;
 
   console.log(`[MetaTemplates] Bulk status sync — checking ${needsCheck.length} template(s) via WABA list…`);
 
@@ -1810,6 +1819,7 @@ export async function autoRefreshPendingStatuses() {
   } else {
     console.log(`[MetaTemplates] Bulk sync done — no status changes`);
   }
+  } // end for channelId
 }
 
 // ── Save product config (image, vars mapping, etc.) ───────────────────────────

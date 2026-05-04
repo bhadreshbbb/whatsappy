@@ -241,8 +241,24 @@ export const chatController = {
   async webhookReceive(req, res, next) {
     try {
       const db = getDb();
-      const channelId = process.env.CHANNEL_ID || 'demo';
       const body = req.body;
+
+      // Identify channel from WABA ID in webhook payload
+      const wabaId = body.entry?.[0]?.id;
+      let channelId = '';
+      if (wabaId) {
+        const row = db.channel_settings.find(r => {
+          try { return JSON.parse(r.settings || '{}').whatsapp_business_id === wabaId; } catch { return false; }
+        });
+        if (row) channelId = row.channel_id;
+      }
+      if (!channelId) {
+        // Fallback: first channel that has WhatsApp credentials configured
+        const row = db.channel_settings.find(r => {
+          try { const s = JSON.parse(r.settings || '{}'); return s.whatsapp_business_id; } catch { return false; }
+        });
+        channelId = row?.channel_id || '';
+      }
 
       // Always ACK immediately (Meta requires 200 within 5s)
       res.sendStatus(200);
