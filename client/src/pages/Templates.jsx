@@ -903,7 +903,7 @@ function CreateView({ form, setForm, error, setError, loading, onSubmit, onBack,
           body: JSON.stringify({ image_url: url }),
         }).then(r => r.json());
         if (!d.error && d.image) {
-          updatedCards[i] = { ...updatedCards[i], image_id: d.image.id, header_media_id: d.image.media_id || '' };
+          updatedCards[i] = { ...updatedCards[i], image_id: d.image.id, header_media_id: d.image.file_handle || d.image.media_id || '' };
         }
       } catch (_) {}
       done++;
@@ -1592,8 +1592,9 @@ function CarouselCardEditor({ card, idx, totalCards, galleries, galleryImages, p
       }).then(r => r.json());
       if (d.error) throw new Error(d.error);
       // Set gallery image_id and header_media_id on the card
+      // Prefer file_handle (resumable upload) over media_id — server uses whichever is set
       onUpdateCard('image_id', d.image.id);
-      onUpdateCard('header_media_id', d.image.media_id || '');
+      onUpdateCard('header_media_id', d.image.file_handle || d.image.media_id || '');
     } catch (e) {
       setCaptureErr(e.message);
     } finally {

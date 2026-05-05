@@ -17,7 +17,7 @@ import { whatsappRoutes } from './routes/whatsapp.routes.js';
 import { contactsRoutes } from './routes/contacts.routes.js';
 import { productsRoutes } from './routes/products.routes.js';
 import { chatRoutes } from './routes/chat.routes.js';
-import { galleryRoutes } from './routes/gallery.routes.js';
+import { galleryRoutes, galleryPublicRoutes } from './routes/gallery.routes.js';
 import { metaTemplatesRoutes } from './routes/meta-templates.routes.js';
 import { webhooksRoutes }      from './routes/webhooks.routes.js';
 import { aiRoutes }            from './routes/ai.routes.js';
@@ -89,8 +89,9 @@ app.get('/health', (req, res) => {
 
 // Public routes — no auth required
 app.use('/api/auth',     authRoutes);
-app.use('/api/tracking', trackingRoutes);   // pixel — called by website visitors
-app.use('/api/webhooks', webhooksRoutes);   // Meta/Shopify webhook callbacks
+app.use('/api/tracking', trackingRoutes);          // pixel — called by website visitors
+app.use('/api/webhooks', webhooksRoutes);          // Meta/Shopify webhook callbacks
+app.use('/api/gallery',  galleryPublicRoutes);     // proxy + preview — used as <img src>, can't send JWT
 
 // Protected routes — JWT required
 app.use('/api/visitors',       requireAuth, visitorsRoutes);
