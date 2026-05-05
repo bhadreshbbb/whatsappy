@@ -10,8 +10,9 @@
 
 import { getDb } from './database.js';
 
-function getCredentials() {
-  // Check env first, then fall back to channel settings in DB
+// channelId is optional — when provided, reads that channel's settings instead of [0]
+function getCredentials(channelId = null) {
+  // Env vars take precedence only when BOTH token + phoneId are set
   const token   = process.env.WHATSAPP_TOKEN;
   const phoneId = process.env.WHATSAPP_PHONE_ID;
   const appId   = process.env.WHATSAPP_APP_ID;
@@ -19,7 +20,10 @@ function getCredentials() {
 
   try {
     const db = getDb();
-    const row = db.channel_settings[0];
+    // Use the specific channel when known; fall back to first row as last resort
+    const row = channelId
+      ? (db.channel_settings.find(s => s.channel_id === channelId) || db.channel_settings[0])
+      : db.channel_settings[0];
     const s = JSON.parse(row?.settings || '{}');
     if (s?.whatsapp_token && s?.whatsapp_phone_id) {
       return { token: s.whatsapp_token, phoneId: s.whatsapp_phone_id, appId: s.whatsapp_app_id || null };
@@ -156,8 +160,8 @@ export const whatsappService = {
     return { messageId: `tpl_${Date.now()}` };
   },
 
-  async uploadMedia(buffer, filename, mimeType) {
-    const creds = getCredentials();
+  async uploadMedia(buffer, filename, mimeType, channelId = null) {
+    const creds = getCredentials(channelId);
     if (!creds) throw new Error('WhatsApp credentials not configured.');
 
     const form = new FormData();
@@ -186,8 +190,8 @@ export const whatsappService = {
    * Step 1: POST /{APP_ID}/uploads  → upload session id
    * Step 2: POST /{sessionId}       → file handle "h"
    */
-  async uploadMediaResumable(buffer, filename, mimeType) {
-    const creds = getCredentials();
+  async uploadMediaResumable(buffer, filename, mimeType, channelId = null) {
+    const creds = getCredentials(channelId);
     if (!creds) throw new Error('WhatsApp credentials not configured.');
     if (!creds.appId) throw new Error('App ID not configured. Add it in Settings → WhatsApp → App ID.');
 

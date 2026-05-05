@@ -384,8 +384,8 @@ async function autoUploadTemplateImages(channelId, carouselCards, templateName =
         if (imageUrl.startsWith('http')) {
           try {
             const { buffer, mimeType } = await whatsappService.downloadImage(imageUrl);
-            const fileHandle = await whatsappService.uploadMediaResumable(buffer, `gallery_card${i + 1}_${Date.now()}.jpg`, mimeType);
-            const mediaId    = galleryImg.media_id || await whatsappService.uploadMedia(buffer, `gallery_card${i + 1}.jpg`, mimeType);
+            const fileHandle = await whatsappService.uploadMediaResumable(buffer, `gallery_card${i + 1}_${Date.now()}.jpg`, mimeType, channelId);
+            const mediaId    = galleryImg.media_id || await whatsappService.uploadMedia(buffer, `gallery_card${i + 1}.jpg`, mimeType, channelId);
             // Persist file_handle back to gallery so future creates don't need to re-upload
             galleryImg.file_handle = fileHandle;
             if (!galleryImg.media_id) galleryImg.media_id = mediaId;
@@ -419,11 +419,11 @@ async function autoUploadTemplateImages(channelId, carouselCards, templateName =
         const { buffer, mimeType } = await whatsappService.downloadImage(imageUrl);
 
         // Upload 1: resumable → file_handle for template creation example
-        const fileHandle = await whatsappService.uploadMediaResumable(buffer, `auto_card${i + 1}_${Date.now()}.jpg`, mimeType);
+        const fileHandle = await whatsappService.uploadMediaResumable(buffer, `auto_card${i + 1}_${Date.now()}.jpg`, mimeType, channelId);
         console.log(`[AutoUpload] Card ${i + 1}: resumable upload → file_handle=${fileHandle}`);
 
         // Upload 2: regular → media_id for message send payload
-        const mediaId = await whatsappService.uploadMedia(buffer, `auto_card${i + 1}.jpg`, mimeType);
+        const mediaId = await whatsappService.uploadMedia(buffer, `auto_card${i + 1}.jpg`, mimeType, channelId);
         console.log(`[AutoUpload] Card ${i + 1}: regular upload → media_id=${mediaId}`);
 
         // Save to gallery — folder named after template, image record named by media_id
@@ -732,7 +732,7 @@ export async function buildAutoProductCards(channelId, cleanName, count = 4, off
       if (!fileHandle) {
         try {
           const { buffer, mimeType } = await whatsappService.downloadImage(imageUrl);
-          fileHandle = await whatsappService.uploadMediaResumable(buffer, filename, mimeType);
+          fileHandle = await whatsappService.uploadMediaResumable(buffer, filename, mimeType, channelId);
           globalCached.file_handle = fileHandle;
           if (folderRecord) folderRecord.file_handle = fileHandle;
         } catch (_) { /* non-fatal */ }
@@ -742,9 +742,9 @@ export async function buildAutoProductCards(channelId, cleanName, count = 4, off
       try {
         const { buffer, mimeType } = await whatsappService.downloadImage(imageUrl);
 
-        mediaId = await whatsappService.uploadMedia(buffer, filename, mimeType);
+        mediaId = await whatsappService.uploadMedia(buffer, filename, mimeType, channelId);
         try {
-          fileHandle = await whatsappService.uploadMediaResumable(buffer, filename, mimeType);
+          fileHandle = await whatsappService.uploadMediaResumable(buffer, filename, mimeType, channelId);
         } catch (e) {
           console.warn(`[AutoCards] Card ${cardNum}: resumable upload failed (non-fatal) — ${e.message}`);
         }
@@ -908,9 +908,9 @@ export async function previewPayload(req, res) {
           if (creds) {
             const { buffer, mimeType } = await whatsappService.downloadImage(imgUrl);
             const filename = `${cleanName}_prev_${Date.now()}.jpg`;
-            resolvedFileHandle = await whatsappService.uploadMediaResumable(buffer, filename, mimeType);
+            resolvedFileHandle = await whatsappService.uploadMediaResumable(buffer, filename, mimeType, channelId);
             if (!resolvedMediaId) {
-              try { resolvedMediaId = await whatsappService.uploadMedia(buffer, filename, mimeType); } catch (_) {}
+              try { resolvedMediaId = await whatsappService.uploadMedia(buffer, filename, mimeType, channelId); } catch (_) {}
             }
             // Cache in gallery so next preview/creation reuses it
             if (!db.gallery_folders) db.gallery_folders = [];
@@ -1540,18 +1540,20 @@ export async function createTemplate(req, res) {
 
               // uploadMediaResumable → file_handle (REQUIRED for template creation header example)
               let fileHandle = '';
+              let resumableErr = '';
               try {
-                fileHandle = await whatsappService.uploadMediaResumable(buffer, filename, mimeType);
+                fileHandle = await whatsappService.uploadMediaResumable(buffer, filename, mimeType, channelId);
                 tpl.header_file_handle = fileHandle;
                 console.log(`[MetaTemplates] Resumable upload → file_handle: ${fileHandle}`);
               } catch (fhErr) {
-                console.error(`[MetaTemplates] Resumable upload failed — header_handle will be missing: ${fhErr.message}`);
+                resumableErr = fhErr.message;
+                console.error(`[MetaTemplates] Resumable upload failed: ${fhErr.message}`);
               }
 
               // uploadMedia → media_id (used in /messages send payload)
               let mediaId = '';
               try {
-                mediaId = await whatsappService.uploadMedia(buffer, filename, mimeType);
+                mediaId = await whatsappService.uploadMedia(buffer, filename, mimeType, channelId);
                 tpl.header_image_id = mediaId;
                 console.log(`[MetaTemplates] Media upload → media_id: ${mediaId}`);
               } catch (mErr) {
@@ -1586,15 +1588,17 @@ export async function createTemplate(req, res) {
           }
 
           if (!tpl.header_file_handle) {
-            // Meta REQUIRES example.header_handle for IMAGE headers — abort before submitting
-            // to avoid SUBMIT_ERROR 2388043. Common cause: App ID missing in Settings.
+            // Meta REQUIRES example.header_handle for IMAGE headers — abort before submitting.
             db.meta_templates = (db.meta_templates || []).filter(t => t.id !== tpl.id);
             db.save();
+            const detail = resumableErr
+              ? `Meta API error: ${resumableErr}`
+              : 'Resumable upload returned no file_handle.';
             return res.status(400).json({
-              error: 'Header image upload failed — Meta requires a file_handle for IMAGE header templates. ' +
-                     'Check: (1) Facebook App ID is set in Settings → WhatsApp → App ID, ' +
-                     '(2) the image URL is publicly accessible, ' +
-                     '(3) your Access Token has the whatsapp_business_messaging permission.',
+              error: `Header image upload failed — ${detail} ` +
+                     'Fix: (1) Confirm Facebook App ID is saved in Settings → WhatsApp → App ID, ' +
+                     '(2) the image URL is publicly accessible from the internet, ' +
+                     '(3) your Access Token has whatsapp_business_messaging permission.',
             });
           }
         }
@@ -1984,7 +1988,7 @@ export async function refreshAutoProducts(req, res) {
             try {
               const { buffer, mimeType } = await whatsappService.downloadImage(newImageUrl);
               // uploadMedia() → numeric media_id used as { "image": { "id": media_id } } in send payload
-              const mediaId = await whatsappService.uploadMedia(buffer, `${folderName}_card${i + 1}.jpg`, mimeType);
+              const mediaId = await whatsappService.uploadMedia(buffer, `${folderName}_card${i + 1}.jpg`, mimeType, channelId);
               const imgRecord = {
                 id: uuidv4(), folder_id: folder.id, channel_id: channelId,
                 filename: mediaId,          // named by media_id

@@ -168,11 +168,11 @@ export async function uploadImage(req, res) {
     let fileHandle = null;
     let mediaId = null;
     try {
-      fileHandle = await whatsappService.uploadMediaResumable(buffer, originalname, mimetype);
+      fileHandle = await whatsappService.uploadMediaResumable(buffer, originalname, mimetype, channelId);
       console.log(`[Gallery] Resumable upload → file_handle: ${fileHandle}`);
     } catch (resumableErr) {
       console.warn(`[Gallery] Resumable upload failed (${resumableErr.message}), falling back to /media upload`);
-      mediaId = await whatsappService.uploadMedia(buffer, originalname, mimetype);
+      mediaId = await whatsappService.uploadMedia(buffer, originalname, mimetype, channelId);
       console.log(`[Gallery] /media upload → media_id: ${mediaId}`);
     }
 
@@ -281,11 +281,11 @@ export async function importImageFromUrl(req, res) {
     let fileHandle = null;
     let mediaId = null;
     try {
-      fileHandle = await whatsappService.uploadMediaResumable(buffer, filename, mimeType);
+      fileHandle = await whatsappService.uploadMediaResumable(buffer, filename, mimeType, channelId);
       console.log(`[Gallery] Import resumable upload → file_handle: ${fileHandle}`);
     } catch (resumableErr) {
       console.warn(`[Gallery] Resumable upload failed (${resumableErr.message}), falling back to /media upload`);
-      mediaId = await whatsappService.uploadMedia(buffer, filename, mimeType);
+      mediaId = await whatsappService.uploadMedia(buffer, filename, mimeType, channelId);
       console.log(`[Gallery] Import /media upload → media_id: ${mediaId}`);
     }
 
