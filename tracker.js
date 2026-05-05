@@ -489,6 +489,37 @@
     return null;
   }
 
+  // ── Helper: parse Shopify cart state from change/update/clear response ──────
+  // Response format: { items: [...], total_price: 1999, item_count: 2 }
+  function _parseShopifyCartState(data) {
+    if (!data || !Array.isArray(data.items)) return null;
+    var items = data.items.map(function(item) {
+      return {
+        name:  item.title || item.product_title || '',
+        price: item.price ? (item.price / 100).toFixed(0) : String(item.final_price || 0),
+        image: (item.featured_image && item.featured_image.url) ? item.featured_image.url : (item.image || ''),
+        url:   item.url || '',
+      };
+    });
+    return { items: items, totalAmount: data.total_price ? data.total_price / 100 : 0 };
+  }
+
+  function _fireCartUpdateEvent(data) {
+    var state = _parseShopifyCartState(data);
+    if (!state) return;
+    var first = state.items[0] || {};
+    track('cart', {
+      cartId:        'cart_' + Date.now(),
+      products:      state.items,
+      totalAmount:   state.totalAmount,
+      product_name:  first.name  || '',
+      product_image: first.image || '',
+      product_url:   first.url   || window.location.href,
+      product_price: first.price || '',
+      cart_url:      window.location.href,
+    });
+  }
+
   // ── Strategy 1: Intercept fetch() ────────────────────────────────────────────
   // Only fires on HTTP 200 — failed adds (out of stock, etc.) are ignored.
   (function() {
@@ -497,8 +528,9 @@
       var url    = (typeof input === 'string') ? input : (input && input.url ? input.url : String(input));
       var method = ((init && init.method) || 'GET').toUpperCase();
 
-      var isShopifyAdd = /\/cart\/add(\.js)?(\?|$)/i.test(url) && method === 'POST';
-      var isWCAdd      = /wc-ajax=add_to_cart/i.test(url);
+      var isShopifyAdd    = /\/cart\/add(\.js)?(\?|$)/i.test(url) && method === 'POST';
+      var isShopifyChange = /\/cart\/(change|update|clear)(\.js)?(\?|$)/i.test(url) && method === 'POST';
+      var isWCAdd         = /wc-ajax=add_to_cart/i.test(url);
 
       if (isShopifyAdd || isWCAdd) {
         return _orig.apply(this, arguments).then(function(resp) {
@@ -511,6 +543,16 @@
             });
           }
           // If resp.ok is false (e.g. 422 out-of-stock) we do NOT track.
+          return resp;
+        });
+      }
+      if (isShopifyChange) {
+        return _orig.apply(this, arguments).then(function(resp) {
+          if (resp && resp.ok) {
+            resp.clone().json().then(function(data) {
+              _fireCartUpdateEvent(data);
+            }).catch(function() {});
+          }
           return resp;
         });
       }
@@ -532,8 +574,9 @@
 
     XMLHttpRequest.prototype.send = function(body) {
       var xhr = this;
-      var isShopifyAdd = /\/cart\/add(\.js)?(\?|$)/i.test(xhr._wwUrl) && xhr._wwMethod === 'POST';
-      var isWCAdd      = /wc-ajax=add_to_cart/i.test(xhr._wwUrl);
+      var isShopifyAdd    = /\/cart\/add(\.js)?(\?|$)/i.test(xhr._wwUrl) && xhr._wwMethod === 'POST';
+      var isShopifyChange = /\/cart\/(change|update|clear)(\.js)?(\?|$)/i.test(xhr._wwUrl) && xhr._wwMethod === 'POST';
+      var isWCAdd         = /wc-ajax=add_to_cart/i.test(xhr._wwUrl);
 
       if (isShopifyAdd || isWCAdd) {
         xhr.addEventListener('load', function() {
@@ -546,6 +589,16 @@
             }
           }
           // status 4xx/5xx (out-of-stock, validation error) → do NOT track
+        });
+      }
+      if (isShopifyChange) {
+        xhr.addEventListener('load', function() {
+          if (xhr.status >= 200 && xhr.status < 300) {
+            try {
+              var data = JSON.parse(xhr.responseText);
+              _fireCartUpdateEvent(data);
+            } catch(_) {}
+          }
         });
       }
       _origSend.apply(this, arguments);
