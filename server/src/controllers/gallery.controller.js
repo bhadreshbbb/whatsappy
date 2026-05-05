@@ -24,7 +24,11 @@ export async function previewImage(req, res) {
     const channelId = req.headers['x-channel-id'] || '';
     const { id } = req.params;
 
-    const img = (db.gallery_images || []).find(i => i.id === id && i.channel_id === channelId);
+    // When served via public route as <img src>, channelId header is not sent.
+    // Look up by id alone in that case — UUID is unguessable so security is maintained.
+    const img = channelId
+      ? (db.gallery_images || []).find(i => i.id === id && i.channel_id === channelId)
+      : (db.gallery_images || []).find(i => i.id === id);
     if (!img) return res.status(404).json({ error: 'Image not found' });
 
     // ── Helper: proxy the original source URL as fallback ─────────────────────

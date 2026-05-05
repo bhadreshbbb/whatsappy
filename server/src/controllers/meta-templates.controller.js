@@ -1645,9 +1645,14 @@ export async function createTemplate(req, res) {
         tpl.submitted_at = new Date().toISOString();
         console.log(`[MetaTemplates] Submitted "${cleanName}" → id: ${metaData.id}`);
       } else {
-        tpl.meta_status = 'SUBMIT_ERROR';
-        tpl.meta_error = JSON.stringify(metaData?.error || metaData);
-        console.error(`[MetaTemplates] Submit error:`, metaData?.error);
+        // Meta rejected — do NOT save to DB (template does not exist at Meta's side)
+        const metaErr = metaData?.error || metaData;
+        const userMsg  = metaErr.error_user_msg || metaErr.message || 'Unknown error';
+        console.error(`[MetaTemplates] Submit error (not saved):`, metaErr);
+        return res.status(400).json({
+          error: `Meta rejected the template: ${userMsg}`,
+          meta_error: metaErr,
+        });
       }
     } else {
       tpl.meta_status = 'NO_CREDENTIALS';
