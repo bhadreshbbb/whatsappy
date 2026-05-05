@@ -153,6 +153,22 @@ export const trackingController = {
         _utmCampaign = _utmCampaign || _u.searchParams.get('utm_campaign') || null;
         _wwCam       = _u.searchParams.get('ww_cam') || null;
       } catch (_) {}
+      // Server-side decode of ww_src → phone (base64url, injected by _tagUrl in automation.js)
+      // Works in incognito / any browser — no localStorage needed.
+      let _wwSrcPhone = null;
+      try {
+        const _wu = new URL(url || '');
+        const _wwSrc = _wu.searchParams.get('ww_src');
+        if (_wwSrc) {
+          const b64 = _wwSrc.replace(/-/g, '+').replace(/_/g, '/');
+          const padded = b64 + '='.repeat((4 - b64.length % 4) % 4);
+          const decoded = Buffer.from(padded, 'base64').toString('utf8');
+          if (/^\d{7,15}$/.test(decoded)) {
+            _wwSrcPhone = decoded;
+            console.log(`[Campaign] ww_src decoded → phone=${_wwSrcPhone}`);
+          }
+        }
+      } catch (_) {}
       // Device type: use client-sent value, fall back to server-side UA detection
       const _clientDevice = req.body.deviceType;
       const _ua = (req.headers['user-agent'] || '').toLowerCase();
@@ -228,13 +244,15 @@ export const trackingController = {
       // ── Cross-browser recognition: phone sent from localStorage ──────────────
       // If client sends a previously stored phone, enrich the new session from
       // their existing profile so they appear as the same known user immediately.
-      if (visitorPhone && visitorIdx >= 0 && !db.website_visitors[visitorIdx].phone) {
+      // Use phone from client localStorage OR server-decoded ww_src (campaign link click)
+      const _phoneToLink = visitorPhone || _wwSrcPhone;
+      if (_phoneToLink && visitorIdx >= 0 && !db.website_visitors[visitorIdx].phone) {
         const cid = channelId || 'demo';
-        db.website_visitors[visitorIdx].phone = visitorPhone;
+        db.website_visitors[visitorIdx].phone = _phoneToLink;
 
         // Find all previous sessions for this phone, sorted most-recent first
         const prevSessions = db.website_visitors
-          .filter(v => v.channel_id === cid && v.phone === visitorPhone && v.session_id !== sessionId)
+          .filter(v => v.channel_id === cid && v.phone === _phoneToLink && v.session_id !== sessionId)
           .sort((a, b) => new Date(b.visited_at || b.created_at) - new Date(a.visited_at || a.created_at));
 
         if (prevSessions.length > 0) {
@@ -259,13 +277,13 @@ export const trackingController = {
         }
 
         // Sync best status (abandoned_cart, purchased, etc.) to this new session
-        _syncBestStatus(db, cid, visitorIdx, visitorPhone);
+        _syncBestStatus(db, cid, visitorIdx, _phoneToLink);
 
         // Backfill phone on any events already recorded for this session
-        db.cart_events.forEach(c  => { if (c.session_id  === sessionId && !c.phone)  c.phone = visitorPhone; });
-        db.product_views.forEach(v => { if (v.session_id === sessionId && !v.phone)  v.phone = visitorPhone; });
-        (db.page_views || []).forEach(p => { if (p.session_id === sessionId && !p.phone) p.phone = visitorPhone; });
-        console.log(`[CrossBrowser] Recognized ${visitorPhone} — enriched new session from ${prevSessions.length} previous session(s)`);
+        db.cart_events.forEach(c  => { if (c.session_id  === sessionId && !c.phone)  c.phone = _phoneToLink; });
+        db.product_views.forEach(v => { if (v.session_id === sessionId && !v.phone)  v.phone = _phoneToLink; });
+        (db.page_views || []).forEach(p => { if (p.session_id === sessionId && !p.phone) p.phone = _phoneToLink; });
+        console.log(`[CrossBrowser] Recognized ${_phoneToLink} — enriched new session from ${prevSessions.length} previous session(s)`);
       }
 
       // If visitor already has a phone, keep is_repeat / visit_count consistent
@@ -299,6 +317,26 @@ export const trackingController = {
       }
 
       db.save();
+
+      // ── Campaign click marking: ww_cam present → mark execution clicked immediately ──
+      // This is the most reliable path: happens server-side on every page visit from campaign link.
+      if (_wwCam) {
+        const _knownPhone = _wwSrcPhone
+          || (visitorIdx >= 0 ? db.website_visitors[visitorIdx]?.phone : null)
+          || visitorPhone;
+        if (_knownPhone) {
+          const execs = (db.abandoned_cart_executions || []).filter(e =>
+            String(e.campaign_id) === String(_wwCam) && e.phone === _knownPhone
+          ).sort((a, b) => new Date(b.sent_at) - new Date(a.sent_at));
+          if (execs.length > 0 && !execs[0].clicked) {
+            execs[0].clicked    = 1;
+            execs[0].clicked_at = new Date().toISOString();
+            db.save();
+            console.log(`[Campaign] ✓ Click recorded — campaign=${_wwCam} phone=${_knownPhone}`);
+          }
+        }
+      }
+
       // Return full geo debug payload so browser console can show everything
       const ipSource = _cfIp ? 'cf-connecting-ip' : _fwdIp ? 'x-forwarded-for' : _realIp ? 'x-real-ip' : _reqIp ? 'req.ip' : 'socket';
       res.json({
@@ -1306,13 +1344,16 @@ export const trackingController = {
         // Resolve phone from session → visitor record
         const visitor = (db.website_visitors || []).find(v => v.channel_id === cid && v.session_id === sessionId);
         const phone = visitor?.phone || null;
-        // Find most recent execution for this campaign + phone (or fallback: any unclicked for campaign)
-        const execs = (db.abandoned_cart_executions || []).filter(e =>
-          String(e.campaign_id) === String(campaignId) && (phone ? e.phone === phone : true)
-        ).sort((a, b) => new Date(b.sent_at) - new Date(a.sent_at));
-        if (execs.length > 0 && !execs[0].clicked) {
-          execs[0].clicked = 1;
-          execs[0].clicked_at = new Date().toISOString();
+        // Only mark clicked when we know the phone — prevents wrong-user attribution
+        if (phone) {
+          const execs = (db.abandoned_cart_executions || []).filter(e =>
+            String(e.campaign_id) === String(campaignId) && e.phone === phone
+          ).sort((a, b) => new Date(b.sent_at) - new Date(a.sent_at));
+          if (execs.length > 0 && !execs[0].clicked) {
+            execs[0].clicked = 1;
+            execs[0].clicked_at = new Date().toISOString();
+            console.log(`[Campaign] trackClick ✓ campaign=${campaignId} phone=${phone}`);
+          }
         }
       }
 

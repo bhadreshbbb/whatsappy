@@ -1958,7 +1958,10 @@ function _tagUrl(url, phone, campaignId = null) {
   const tag = Buffer.from(String(phone)).toString('base64')
     .replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
   let out = url + (url.includes('?') ? '&' : '?') + 'ww_src=' + tag;
-  if (campaignId) out += '&ww_cam=' + encodeURIComponent(campaignId);
+  if (campaignId) {
+    out += '&ww_cam=' + encodeURIComponent(campaignId);
+    out += '&utm_source=whatsapp&utm_medium=campaign&utm_campaign=' + encodeURIComponent(campaignId);
+  }
   return out;
 }
 
