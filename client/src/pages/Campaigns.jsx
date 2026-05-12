@@ -3033,9 +3033,11 @@ export default function Campaigns() {
                                                 ? <span className="text-[9px]" style={{ color: '#f87171' }}>
                                                     ❌ Failed{(u.stage1_retry_count||0) >= 3 ? ' (max retries — fix credentials)' : ` · retry ${u.stage1_retry_count||0}/3`} — {(u.stage1_error||'WhatsApp API error').replace('Meta API error 401: ','').slice(0,80)}
                                                   </span>
-                                                : u.ready_to_send
-                                                  ? <span className="text-[9px]" style={{ color: '#4ade80' }}>🟢 Sending within 60s…</span>
-                                                  : <span className="text-[9px]" style={{ color: '#475569' }}>⏳ {u.minutes_until_stage1 != null ? `${fmtCountdown(u.minutes_until_stage1)} until send` : `${u.apv_delay_min ?? 2}m delay needed`}{u.minutes_since_activity != null ? ` · viewed ${fmtAgo(u.minutes_since_activity)}` : ''}</span>
+                                                : (u.ready_to_send || secsUntil(u.stage1_due_at) <= 0)
+                                                  ? <span className="text-[9px]" style={{ color: '#4ade80' }}>⚡ {fmtSecs(secsUntil(u.stage1_due_at))}</span>
+                                                  : secsUntil(u.stage1_due_at) != null
+                                                    ? <span className="text-[9px]" style={{ color: '#fbbf24' }}>⏳ {fmtSecs(secsUntil(u.stage1_due_at))} until send</span>
+                                                    : <span className="text-[9px]" style={{ color: '#475569' }}>⏳ {u.minutes_until_stage1 != null ? `${fmtCountdown(u.minutes_until_stage1)} until send` : `${u.apv_delay_min ?? 2}m delay needed`}{u.minutes_since_activity != null ? ` · viewed ${fmtAgo(u.minutes_since_activity)}` : ''}</span>
                                             }
                                           </div>
 
@@ -3058,9 +3060,11 @@ export default function Campaigns() {
                                                 ? <span className="text-[9px]" style={{ color: '#4ade80' }}>✅ Sent · {fmtTs(u.stage2_sent_at || u.stage_2_sent_at)}</span>
                                                 : u.stage2_status === 'failed'
                                                   ? <span className="text-[9px]" style={{ color: '#f87171' }}>❌ Failed — {u.stage2_error || 'WhatsApp API error'}</span>
-                                                  : u.minutes_until_next_send === 0
-                                                    ? <span className="text-[9px]" style={{ color: '#4ade80' }}>🟢 Sending within 60s (next automation tick)</span>
-                                                    : <span className="text-[9px]" style={{ color: '#818cf8' }}>⏳ Scheduled · sends in {fmtCountdown(u.minutes_until_next_send)}{u.stage2_due_at ? ` · ${fmtTs(u.stage2_due_at)}` : ''}</span>
+                                                  : (secsUntil(u.stage2_due_at) != null && secsUntil(u.stage2_due_at) <= 0)
+                                                    ? <span className="text-[9px]" style={{ color: '#4ade80' }}>⚡ sending now</span>
+                                                    : secsUntil(u.stage2_due_at) != null
+                                                      ? <span className="text-[9px]" style={{ color: '#818cf8' }}>⏳ {fmtSecs(secsUntil(u.stage2_due_at))} until send</span>
+                                                      : <span className="text-[9px]" style={{ color: '#818cf8' }}>⏳ Scheduled · sends in {fmtCountdown(u.minutes_until_next_send)}{u.stage2_due_at ? ` · ${fmtTs(u.stage2_due_at)}` : ''}</span>
                                               }
                                             </div>
                                           )}

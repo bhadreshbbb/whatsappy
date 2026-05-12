@@ -1541,15 +1541,20 @@ async function sendMultiple(db, cam, events, type, credChannelId) {
       );
       if (failedExec) {
         const retries = failedExec.retry_count || 0;
-        // 401 = auth error — no point retrying, fix credentials first
         const isAuthError = (failedExec.error || '').includes('401');
-        if (retries >= 3 || isAuthError) {
-          console.log(`[Retry] Skipping ${evt.phone} stage ${currentStage} — ${isAuthError ? '401 auth error (fix credentials)' : 'max retries reached'}`);
+        const ageMs = failedExec.sent_at ? Date.now() - new Date(failedExec.sent_at).getTime() : 0;
+        // 401 errors: allow retry after 10 minutes (credentials may have been fixed)
+        if (retries >= 3 && !(isAuthError && ageMs > 10 * 60 * 1000)) {
+          console.log(`[Retry] Skipping ${evt.phone} stage ${currentStage} — max retries (${retries}) reached`);
           continue;
         }
-        _retryCount = retries + 1;
+        if (isAuthError && ageMs <= 10 * 60 * 1000) {
+          console.log(`[Retry] Skipping ${evt.phone} stage ${currentStage} — 401 auth error, retry after 10m (${Math.round(ageMs/60000)}m ago)`);
+          continue;
+        }
+        _retryCount = isAuthError ? 0 : retries + 1; // reset count on auth-error retry (fresh start)
         db.abandoned_cart_executions.splice(db.abandoned_cart_executions.indexOf(failedExec), 1);
-        console.log(`[Retry] Attempt ${_retryCount}/3 for stage ${currentStage} of ${cam.name} → ${evt.phone}`);
+        console.log(`[Retry] Attempt ${_retryCount} for stage ${currentStage} of ${cam.name} → ${evt.phone}`);
       }
 
       // ── TEMPLATE SELECTION (4-stage array & infinite loop support) ──
