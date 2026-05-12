@@ -1191,11 +1191,15 @@ export const campaignsController = {
           let s1, s2;
           if (lockAnchor) {
             const findNear = (lockTs, stageNum) => {
-              if (!lockTs) return null;
-              const lockMs = new Date(lockTs).getTime();
-              return allExecs
-                .filter(x => (x.stage || 1) === stageNum)
-                .find(x => Math.abs(new Date(x.sent_at).getTime() - lockMs) < 5 * 60 * 1000) || null;
+              const stageExecs = allExecs.filter(x => (x.stage || 1) === stageNum);
+              // If lock timestamp exists, match within 5 min window
+              if (lockTs) {
+                const lockMs = new Date(lockTs).getTime();
+                const near = stageExecs.find(x => Math.abs(new Date(x.sent_at).getTime() - lockMs) < 5 * 60 * 1000);
+                if (near) return near;
+              }
+              // No lock timestamp yet (stage not sent) — return any failed/pending exec so UI shows it
+              return stageExecs.find(x => x.status === 'failed') || stageExecs[0] || null;
             };
             s1 = findNear(lockAnchor.stage_1_sent_at, 1);
             s2 = findNear(lockAnchor.stage_2_sent_at, 2);
