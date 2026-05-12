@@ -1042,8 +1042,17 @@ async function runAutomation() {
           return passesAudienceFilters(db, channelId, v.phone, cam);
         }).slice(0, 10);
 
+        console.log(`[APV] "${cam.name}" tick — eligibleVisitors=${eligibleVisitors.length} views=${views.length} channelId=${channelId}`);
         if (views.length > 0) {
           console.log(`[AbandonedProductView] Campaign "${cam.name}" — ${views.length} eligible product_view(s) queued`);
+        } else if (eligibleVisitors.length > 0) {
+          for (const v of eligibleVisitors.slice(0, 3)) {
+            const lock = (db.campaign_locks || []).find(l => l.phone === v.phone && String(l.campaign_id) === String(cam.id));
+            const lockAnchor = lock ? (lock.reentry_at || lock.locked_at) : null;
+            const productViewTime = lockAnchor || latestViewByPhoneAPV[v.phone]?.created_at || v.visited_at;
+            const msSince = productViewTime ? (now - new Date(productViewTime).getTime()) : null;
+            console.log(`[APV] ${v.phone} SKIPPED — lock.stage=${lock?.stage ?? 'none'} msSince=${msSince != null ? Math.round(msSince/1000)+'s' : 'null'} delayMs=${STAGE1_DELAY_MS} url=${latestViewByPhoneAPV[v.phone]?.product_url?.slice(0,60)}`);
+          }
         }
         await sendMultiple(db, cam, views, 'view');
       }
@@ -1671,7 +1680,28 @@ async function sendMultiple(db, cam, events, type) {
         }
 
         // Build the exact /messages payload with language override + UTM tracking
-        const sendPayload = buildSendMessagePayload(metaTpl, perUserProductConfig, evt.phone, metaLangCode, cam.id);
+        let sendPayload;
+        try {
+          sendPayload = buildSendMessagePayload(metaTpl, perUserProductConfig, evt.phone, metaLangCode, cam.id);
+        } catch (buildErr) {
+          console.error(`[APV] buildSendMessagePayload failed for ${evt.phone}: ${buildErr.message}`);
+          const failedAt = new Date().toISOString();
+          db.abandoned_cart_executions.push({
+            id: (db.abandoned_cart_executions.length || 0) + 1,
+            campaign_id: cam.id, campaign_name: cam.name,
+            phone: evt.phone, name: evt.name || '',
+            template_id: metaTpl.id, template_name: metaTpl.name,
+            stage: currentStage, language: metaLangCode,
+            status: 'failed', error: `Payload build failed: ${buildErr.message}`,
+            retry_count: _retryCount, sent_at: failedAt, is_meta_template: true,
+          });
+          if (cam.campaign_type === 'abandoned_product_view' && currentStage === 1) {
+            const apvLock = (db.campaign_locks || []).find(l => l.phone === evt.phone && String(l.campaign_id) === String(cam.id));
+            if (apvLock && apvLock.stage === 0) { apvLock.stage = 1; apvLock.stage_1_sent_at = failedAt; }
+          }
+          db.save();
+          continue;
+        }
 
         // ── FULL MESSAGE PAYLOAD LOG ─────────────────────────────────────────
         const pc = perUserProductConfig || metaTpl.product_config;
@@ -2057,7 +2087,40 @@ async function sendMultiple(db, cam, events, type) {
       cam.last_run_at = new Date().toISOString();
       console.log(`[Automation] ${cam.name} stage-${currentStage} → ${evt.phone}`);
 
-    } catch (e) { console.error(`[Automation] Send error for ${evt.phone}:`, e); }
+    } catch (e) {
+      console.error(`[Automation] Send error for ${evt.phone}:`, e);
+      // Safety net: create a failed exec so the UI clears "🟢 sending ≤60s" and shows ❌
+      try {
+        const fallbackStage = (type === 'upsell' || type === 'broadcast')
+          ? (evt.upsell_count || 0) + 1
+          : (evt.followup_count || 0) + 1;
+        const alreadyHasExec = (db.abandoned_cart_executions || []).some(x =>
+          String(x.campaign_id) === String(cam.id) && x.phone === evt.phone && (x.stage || 1) === fallbackStage
+        );
+        if (!alreadyHasExec) {
+          const failedAt = new Date().toISOString();
+          db.abandoned_cart_executions.push({
+            id: (db.abandoned_cart_executions.length || 0) + 1,
+            campaign_id: cam.id, campaign_name: cam.name,
+            phone: evt.phone, name: evt.name || '',
+            stage: fallbackStage,
+            status: 'failed', error: e.message || 'Unexpected error in automation',
+            sent_at: failedAt,
+          });
+          // APV: advance lock to stage 1 so the green badge clears
+          if (cam.campaign_type === 'abandoned_product_view' && fallbackStage === 1) {
+            const apvLock = (db.campaign_locks || []).find(l =>
+              l.phone === evt.phone && String(l.campaign_id) === String(cam.id)
+            );
+            if (apvLock && apvLock.stage === 0) {
+              apvLock.stage = 1;
+              apvLock.stage_1_sent_at = failedAt;
+            }
+          }
+          db.save();
+        }
+      } catch (_) {}
+    }
   }
 }
 

@@ -1294,7 +1294,7 @@ export const campaignsController = {
             stage1_due_at: stage1DueMs ? new Date(stage1DueMs).toISOString() : null,
             minutes_until_stage1: minUntilStage1,
             apv_delay_min: stage1DelayMin,
-            ready_to_send: (minUntilNext === 0 || minUntilStage1 === 0) && (execs.stage1_retry_count || 0) < 3, is_locked: true,
+            ready_to_send: (minUntilNext === 0 || minUntilStage1 === 0) && execs.stage1_status !== 'sent' && execs.stage1_status !== 'failed' && (execs.stage1_retry_count || 0) < 3, is_locked: true,
             responded: inboundMsgs.length > 0,
             response_count: inboundMsgs.length,
             last_response_text: lastReply?.text || null,
