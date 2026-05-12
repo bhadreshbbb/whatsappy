@@ -535,7 +535,7 @@ export const campaignsController = {
           } else {
             try {
               const { buffer, mimeType } = await whatsappService.downloadImage(productImage);
-              productMediaId = await whatsappService.uploadMedia(buffer, `test_${Date.now()}.jpg`, mimeType);
+              productMediaId = await whatsappService.uploadMedia(buffer, `test_${Date.now()}.jpg`, mimeType, channelId);
               // Cache it
               if (!db.gallery_folders) db.gallery_folders = [];
               if (!db.gallery_images)  db.gallery_images  = [];
@@ -636,7 +636,7 @@ export const campaignsController = {
       console.log(`[TestSend] Payload  :\n${JSON.stringify(sendPayload, null, 2)}`);
 
       try {
-        const apiResult = await whatsappService.sendTemplateMessage(phone, sendPayload);
+        const apiResult = await whatsappService.sendTemplateMessage(phone, sendPayload, channelId);
         result.wamid    = apiResult.messageId || null;
         result.success  = !!result.wamid;
         console.log(`[TestSend] ✓ wamid: ${result.wamid}`);
