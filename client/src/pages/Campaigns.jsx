@@ -293,13 +293,6 @@ function CreateModal({ onClose, onCreated }) {
   const [translatedTpl, setTranslatedTpl] = useState(null);
   const [validationErr, setValidationErr] = useState("");
 
-  // ── Live per-second ticker for countdown badges ───────────────────────────
-  const [tickNow, setTickNow] = useState(Date.now());
-  useEffect(() => {
-    const t = setInterval(() => setTickNow(Date.now()), 1000);
-    return () => clearInterval(t);
-  }, []);
-
   // ── Audience filters (same as Custom campaign) ────────────────────────────
   const [showFilters, setShowFilters] = useState(false);
   const [contacts, setContacts]       = useState([]);
@@ -1966,6 +1959,13 @@ export default function Campaigns() {
   const [insightsLoading, setInsightsLoading]   = useState(false);
   const [analyticsModal, setAnalyticsModal] = useState(null); // { campaign, data } | null
   const [analyticsModalLoading, setAnalyticsModalLoading] = useState(false);
+
+  // Live per-second ticker — drives countdown badges in APV audience panel
+  const [tickNow, setTickNow] = useState(Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setTickNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, []);
 
   const CH = () => {
     const _cid = localStorage.getItem('channelId');
