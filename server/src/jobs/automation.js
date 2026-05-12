@@ -846,7 +846,7 @@ async function runAutomation() {
           return passesAudienceFilters(db, channelId, v.phone, cam);
         }).slice(0, 5);
 
-        await sendMultiple(db, cam, visitors, 'visit');
+        await sendMultiple(db, cam, visitors, 'visit', channelId);
       }
 
       // ────────────────────────────────────────────────────────────────────
@@ -877,7 +877,7 @@ async function runAutomation() {
           return passesAudienceFilters(db, channelId, v.phone, cam);
         }).slice(0, 5);
 
-        await sendMultiple(db, cam, views, 'view');
+        await sendMultiple(db, cam, views, 'view', channelId);
       }
 
       // ────────────────────────────────────────────────────────────────────
@@ -904,12 +904,13 @@ async function runAutomation() {
         const now = Date.now();
 
         // Build MOST RECENT product_view per phone
-        // APV timer is based on latest view so the message is about the product they last looked at
+        // Accept views from ANY non-demo channel — channel_id mismatch (multi-login legacy)
+        // must not prevent sending to users whose views were recorded under a different channel.
         const latestViewByPhoneAPV = {};
         for (const v of (db.product_views || [])) {
-          if (v.channel_id !== channelId) continue;
+          if (!v.channel_id || v.channel_id === 'demo') continue; // skip demo only
           const phone = v.phone
-            || (db.website_visitors.find(vis => vis.session_id === v.session_id && vis.channel_id === channelId))?.phone;
+            || (db.website_visitors.find(vis => vis.session_id === v.session_id))?.phone;
           if (!phone) continue;
           const vp = phone !== v.phone ? { ...v, phone } : v;
           const cur = latestViewByPhoneAPV[phone];
@@ -919,9 +920,11 @@ async function runAutomation() {
         }
 
         // Pick up product_view AND product_view_lock visitors (both are in or entering the campaign)
+        // Accept visitors from ANY non-demo channel — credentials come from getPrimaryChannelId,
+        // but visitor records might have been created under a different channel_id (multi-login issue).
         const MAX_VIEW_AGE_MS = 7 * 24 * 60 * 60 * 1000;
         const eligibleVisitors = (db.website_visitors || []).filter(vis => {
-          if (vis.channel_id !== channelId || !vis.phone) return false;
+          if (!vis.channel_id || vis.channel_id === 'demo' || !vis.phone) return false;
           if (vis.status !== 'product_view' && vis.status !== 'product_view_lock') return false;
           // Age check: uses product_view record timestamp, not visited_at
           const latestPV = latestViewByPhoneAPV[vis.phone];
@@ -1054,7 +1057,7 @@ async function runAutomation() {
             console.log(`[APV] ${v.phone} SKIPPED — lock.stage=${lock?.stage ?? 'none'} msSince=${msSince != null ? Math.round(msSince/1000)+'s' : 'null'} delayMs=${STAGE1_DELAY_MS} url=${latestViewByPhoneAPV[v.phone]?.product_url?.slice(0,60)}`);
           }
         }
-        await sendMultiple(db, cam, views, 'view');
+        await sendMultiple(db, cam, views, 'view', channelId);
       }
 
       // ────────────────────────────────────────────────────────────────────
@@ -1081,7 +1084,7 @@ async function runAutomation() {
           return passesAudienceFilters(db, channelId, c.phone, cam);
         }).slice(0, 5);
 
-        await sendMultiple(db, cam, carts, 'cart');
+        await sendMultiple(db, cam, carts, 'cart', channelId);
       }
 
       // ────────────────────────────────────────────────────────────────────
@@ -1106,7 +1109,7 @@ async function runAutomation() {
           return passesAudienceFilters(db, channelId, v.phone, cam);
         }).slice(0, 5);
 
-        await sendMultiple(db, cam, targets, 'upsell');
+        await sendMultiple(db, cam, targets, 'upsell', channelId);
       }
 
       // ────────────────────────────────────────────────────────────────────
@@ -1119,7 +1122,7 @@ async function runAutomation() {
           return passesAudienceFilters(db, channelId, v.phone, cam);
         }).slice(0, 5);
 
-        await sendMultiple(db, cam, customers, 'customer');
+        await sendMultiple(db, cam, customers, 'customer', channelId);
       }
 
       // ────────────────────────────────────────────────────────────────────
@@ -1147,7 +1150,7 @@ async function runAutomation() {
           return isInitial || isFollowup;
         }).slice(0, 5);
 
-        await sendMultiple(db, cam, targets, 'broadcast');
+        await sendMultiple(db, cam, targets, 'broadcast', channelId);
       }
 
       // ── Order Confirmation: COD orders that haven't been confirmed yet ──────────
@@ -1296,7 +1299,7 @@ async function runAutomation() {
           return logic === 'AND' ? results.every(Boolean) : results.some(Boolean);
         }).slice(0, 5);
 
-        await sendMultiple(db, cam, targets, 'broadcast');
+        await sendMultiple(db, cam, targets, 'broadcast', channelId);
       }
 
       // ── Custom campaign: audience filtered via rules, sends meta template if linked ──
@@ -1322,7 +1325,7 @@ async function runAutomation() {
           return logic === 'AND' ? results.every(Boolean) : results.some(Boolean);
         }).slice(0, 5);
 
-        await sendMultiple(db, cam, targets, 'broadcast');
+        await sendMultiple(db, cam, targets, 'broadcast', channelId);
       }
 
     } catch (err) { console.error(`[Automation] Cam ${cam.id} error:`, err); }
@@ -1355,7 +1358,9 @@ function passesAudienceFilters(db, channelId, phone, cam) {
   let rules;
   try { rules = JSON.parse(cam.filters).rules || []; } catch { return true; }
   if (rules.length === 0) return true;
-  const visitor = db.website_visitors.find(v => v.phone === phone && v.channel_id === channelId);
+  // Try exact channel match first, then any non-demo channel — handles channel_id mismatch
+  const visitor = db.website_visitors.find(v => v.phone === phone && v.channel_id === channelId)
+    || db.website_visitors.find(v => v.phone === phone && v.channel_id && v.channel_id !== 'demo');
   if (!visitor) return true;  // no visitor record → include (can't filter without data)
   return rules.every(rule => applyRule(visitor, rule));
 }
@@ -1400,8 +1405,11 @@ function isBlockedByStatus(visitorStatus, campaignType) {
   return !allowed.includes(campaignType);
 }
 
-async function sendMultiple(db, cam, events, type) {
-  const channelId = cam.channel_id;
+async function sendMultiple(db, cam, events, type, credChannelId) {
+  // credChannelId = channel with WhatsApp credentials (from getPrimaryChannelId)
+  // cam.channel_id = campaign's original channel (used for data queries)
+  // For credential lookups we always prefer credChannelId; getCredentials has non-demo fallback anyway.
+  const channelId = credChannelId || cam.channel_id;
 
   // Deduplicate by phone — same user can appear in multiple sessions/events
   const seenPhones = new Set();
