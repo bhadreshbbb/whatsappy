@@ -1516,9 +1516,19 @@ async function sendMultiple(db, cam, events, type, credChannelId) {
 
       const liveStatus = visitor?.status;
 
-      if (liveStatus && isBlockedByStatus(liveStatus, cam.campaign_type)) {
-        console.log(`[Status Guard] Skipped "${cam.name}" for ${evt.phone} — user is now "${liveStatus}", campaign needs different status`);
-        // Do NOT mark as sent — the correct campaign will pick them up automatically
+      // APV events from apvQuickCheck carry evt._lock — the lock is the source of truth.
+      // Skip status guard so visitors whose status changed to 'cart'/'active'/etc still get the message.
+      // Only hard-block is purchased (converted) or opted-out (already handled above).
+      const isApvFromLock = cam.campaign_type === 'abandoned_product_view' && !!evt._lock;
+
+      if (!isApvFromLock && liveStatus && isBlockedByStatus(liveStatus, cam.campaign_type)) {
+        console.log(`[Status Guard] Skipped "${cam.name}" for ${evt.phone} — status="${liveStatus}"`);
+        continue;
+      }
+
+      // For APV from lock: block only if already purchased (no point sending)
+      if (isApvFromLock && (liveStatus === 'purchased' || liveStatus === 'followup_complete')) {
+        console.log(`[APV Lock] Skipping ${evt.phone} — already converted (status="${liveStatus}")`);
         continue;
       }
 

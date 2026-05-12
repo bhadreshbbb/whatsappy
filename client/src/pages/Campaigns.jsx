@@ -2792,11 +2792,11 @@ export default function Campaigns() {
                           return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(239,68,68,0.15)', color: '#f87171' }}>❌ {retries >= 3 ? 'Max retries' : `Retry ${retries}/3`} — {errMsg}</span>;
                         }
                         if (u.stage1_status === 'sent') {
-                          if (s2Secs != null && s2Secs <= 0) return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(74,222,128,0.12)', color: '#4ade80' }}>✅ 1st sent · ⚡ 2nd sending</span>;
+                          if (s2Secs != null && s2Secs <= 0) return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(99,102,241,0.12)', color: '#818cf8' }}>✅ 1st sent · ⏳ 2nd queued ≤15s</span>;
                           if (s2Secs != null) return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(99,102,241,0.1)', color: '#818cf8' }}>✅ 1st sent · 2nd in {fmtSecs(s2Secs)}</span>;
                           return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(74,222,128,0.15)', color: '#4ade80' }}>✅ 1st sent</span>;
                         }
-                        if (u.ready_to_send) return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(74,222,128,0.12)', color: '#4ade80' }}>⚡ Sending now…</span>;
+                        if (s1Secs != null && s1Secs <= 0) return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(99,102,241,0.12)', color: '#818cf8' }}>⏳ Queued · fires in ≤15s</span>;
                         return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(100,116,139,0.1)', color: '#64748b' }}>
                           ⏳ 1st msg in {s1Secs != null ? fmtSecs(s1Secs) : '…'}
                         </span>;
@@ -2815,8 +2815,9 @@ export default function Campaigns() {
                               ❌ {errMsg} {retries >= 3 ? '· fix token in Settings' : retryIn != null ? `· retry in ${retryIn}s` : `· retry ${retries}/3`}
                             </span>;
                           }
-                          // Only show "Sending now" when live socket fires — not purely from countdown
-                          if (s1Secs != null && s1Secs <= 0 && u.stage1_status !== 'failed') return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(74,222,128,0.12)', color: '#4ade80' }}>⚡ Sending…</span>;
+                          // Countdown expired → show "Queued" (apvQuickCheck fires in ≤15s)
+                          // "Sending now" ONLY from live socket — not from countdown reaching 0
+                          if (s1Secs != null && s1Secs <= 0) return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(99,102,241,0.12)', color: '#818cf8' }}>⏳ Queued · fires in ≤15s</span>;
                           return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(251,191,36,0.1)', color: '#fbbf24' }}>
                             ⏳ 1st msg in {s1Secs != null ? fmtSecs(s1Secs) : (u.minutes_until_stage1 != null ? fmtCountdown(u.minutes_until_stage1) : '…')}
                           </span>;
@@ -2824,7 +2825,7 @@ export default function Campaigns() {
                         if (u.stage === 1) {
                           const s1Label = u.stage1_status === 'failed' ? '❌ 1st failed' : '✅ 1st sent';
                           if (u.stage2_status === 'failed') return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(239,68,68,0.15)', color: '#f87171' }}>{s1Label} · ❌ 2nd failed</span>;
-                          if (s2Secs != null && s2Secs <= 0) return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(74,222,128,0.12)', color: '#4ade80' }}>{s1Label} · ⚡ 2nd sending</span>;
+                          if (s2Secs != null && s2Secs <= 0) return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(99,102,241,0.12)', color: '#818cf8' }}>{s1Label} · ⏳ 2nd queued ≤15s</span>;
                           if (s2Secs != null) return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(99,102,241,0.1)', color: '#818cf8' }}>{s1Label} · 2nd in {fmtSecs(s2Secs)}</span>;
                           return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(99,102,241,0.1)', color: '#818cf8' }}>
                             {s1Label} · 2nd in {fmtCountdown(mUntil)}
