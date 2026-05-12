@@ -397,7 +397,6 @@ async function checkLockedUsers() {
  */
 async function apvQuickCheck() {
   const db = getDb();
-  const channelId = getPrimaryChannelId(db);
   const now = Date.now();
 
   const apvCampaigns = (db.abandoned_cart_campaigns || []).filter(c =>
@@ -406,6 +405,10 @@ async function apvQuickCheck() {
   if (apvCampaigns.length === 0) return;
 
   for (const cam of apvCampaigns) {
+    // Use the campaign's own channelId for credentials — same as sendTestMessage does.
+    // getPrimaryChannelId could return a different channel with wrong/stale credentials.
+    const channelId = (cam.channel_id && cam.channel_id !== 'demo' && cam.channel_id !== '')
+      ? cam.channel_id : getPrimaryChannelId(db);
     const STAGE1_DELAY_MS = (cam.apv_delay_min  != null ? cam.apv_delay_min  : 2) * 60 * 1000;
     const STAGE2_GAP_MS   = (cam.apv_followup_min != null ? cam.apv_followup_min : 4) * 60 * 1000;
 
