@@ -908,7 +908,28 @@ async function runAutomation() {
             vis.status     = 'product_view_lock';
             vis.updated_at = new Date().toISOString();
             apvStatusChanged = true;
-            console.log(`[APV] ${vis.phone} claimed → product_view_lock (fallback)`);
+            // Create pending lock so delay timer starts from NOW (campaign entry), not old viewRec.created_at
+            const nowEntry = new Date().toISOString();
+            const viewRec  = latestViewByPhoneAPV[vis.phone];
+            if (!db.campaign_locks) db.campaign_locks = [];
+            const alreadyLocked = db.campaign_locks.find(l =>
+              l.phone === vis.phone && String(l.campaign_id) === String(cam.id)
+            );
+            if (!alreadyLocked) {
+              db.campaign_locks.push({
+                id: uuidv4(), channel_id: channelId,
+                phone: vis.phone, campaign_id: cam.id, campaign_type: cam.campaign_type,
+                locked_at: nowEntry, reentry_at: null,
+                product_url:   viewRec?.product_url   || vis.last_product_url   || '',
+                product_name:  viewRec?.product_name  || vis.last_product_name  || '',
+                product_price: viewRec?.product_price || vis.last_product_price || '',
+                product_image: viewRec?.product_image || vis.last_product_image || '',
+                stage: 0, stage_1_sent_at: null, stage_2_sent_at: null,
+                lock_status: 'active', revenue: 0,
+                last_status_check: nowEntry, last_known_status: 'product_view_lock', unlock_reason: null,
+              });
+            }
+            console.log(`[APV] ${vis.phone} claimed → product_view_lock + entry lock created (delay starts NOW)`);
           }
         }
         if (apvStatusChanged) db.save();
@@ -960,10 +981,10 @@ async function runAutomation() {
             //   First-time users  → product_view.created_at (set when product was viewed)
             // We never fall back to visited_at because that refreshes on every page visit
             // and would give a wrong (later) baseline that makes the message fire too late.
-            const lockIsReset = v._lock && v._lock.stage === 0 && !v._lock.stage_1_sent_at;
-            const productViewTime = (lockIsReset && v._lock?.reentry_at)
-              ? v._lock.reentry_at
-              : (v._viewRec?.created_at || v._visitor?.created_at || v.created_at);
+            // Timer anchor: prefer campaign-entry time (lock) over original product-view time.
+            // Safety-net claimed: locked_at = NOW. Re-entry: reentry_at. Fresh view (no lock): viewRec.created_at.
+            const lockAnchor = v._lock ? (v._lock.reentry_at || v._lock.locked_at) : null;
+            const productViewTime = lockAnchor || v._viewRec?.created_at || v._visitor?.created_at || v.created_at;
             if ((now - new Date(productViewTime).getTime()) < STAGE1_DELAY_MS) return false;
           }
           if (isFollowup) {
