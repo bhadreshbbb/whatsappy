@@ -450,9 +450,15 @@ export const campaignsController = {
       const { phone } = req.body;
       if (!phone) return res.status(400).json({ error: 'phone is required' });
 
-      const channelId = req.headers['x-channel-id'] || '';
-      const campaign = db.abandoned_cart_campaigns.find(c => c.id == id && c.channel_id === channelId);
+      const headerChannelId = req.headers['x-channel-id'] || '';
+      // Find by ID — also accept demo/empty channel campaigns for backwards compat
+      const campaign = db.abandoned_cart_campaigns.find(c =>
+        c.id == id && (c.channel_id === headerChannelId || c.channel_id === 'demo' || c.channel_id === '')
+      );
       if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
+      // Use campaign's real channelId for credentials — same as automation does
+      const channelId = (campaign.channel_id && campaign.channel_id !== 'demo' && campaign.channel_id !== '')
+        ? campaign.channel_id : headerChannelId;
 
       const metaTpl = campaign.meta_template_id
         ? (db.meta_templates || []).find(t => String(t.id) === String(campaign.meta_template_id))
