@@ -149,25 +149,59 @@ export const whatsappService = {
   async sendTemplateMessage(phone, templatePayload, channelId = null) {
     const clean = String(phone).replace(/\D/g, '');
     const to = clean.startsWith('91') ? clean : `91${clean}`;
-    const creds = getCredentials(channelId);
-
     const body = { ...templatePayload, to };
+    const tplName = templatePayload?.template?.name || 'unknown';
+    const langCode = templatePayload?.template?.language?.code || 'en_US';
 
-    if (creds) {
-      const tplName = templatePayload?.template?.name || 'unknown';
-      const langCode = templatePayload?.template?.language?.code || 'en_US';
-      console.log(`[WhatsApp] Template "${tplName}" (${langCode}) → ${to}`);
-      console.log('[WhatsApp] Template payload:', JSON.stringify(body, null, 2));
-      const result = await callMetaApi(creds.phoneId, creds.token, body);
-      console.log(`[WhatsApp] ✓ Template sent wamid: ${result.wamid}`);
-      return { messageId: result.wamid, resolvedText: `[Carousel: ${tplName}]`, wamid: result.wamid };
+    // Build ordered list of channels to try: requested channelId first, then others
+    // This ensures 401 from one channel automatically falls back to another
+    const db = getDb();
+    const rows = db.channel_settings || [];
+    const allCreds = [];
+    // 1. Requested channel first (exact match)
+    if (channelId && channelId !== 'demo') {
+      const row = rows.find(r => r.channel_id === channelId);
+      if (row) {
+        try {
+          const s = JSON.parse(row.settings || '{}');
+          if (s.whatsapp_token && s.whatsapp_phone_id)
+            allCreds.push({ channelId: row.channel_id, token: s.whatsapp_token, phoneId: s.whatsapp_phone_id });
+        } catch (_) {}
+      }
+    }
+    // 2. Other non-demo channels as fallback
+    for (const row of rows) {
+      if (row.channel_id === 'demo' || row.channel_id === channelId) continue;
+      try {
+        const s = JSON.parse(row.settings || '{}');
+        if (s.whatsapp_token && s.whatsapp_phone_id)
+          allCreds.push({ channelId: row.channel_id, token: s.whatsapp_token, phoneId: s.whatsapp_phone_id });
+      } catch (_) {}
     }
 
-    // Simulation mode — no real credentials
-    const tplName = templatePayload?.template?.name || 'carousel';
+    if (allCreds.length > 0) {
+      let lastErr = null;
+      for (const creds of allCreds) {
+        try {
+          console.log(`[WhatsApp] Template "${tplName}" (${langCode}) → ${to} via channel "${creds.channelId}"`);
+          const result = await callMetaApi(creds.phoneId, creds.token, body);
+          console.log(`[WhatsApp] ✓ Template sent wamid: ${result.wamid}`);
+          return { messageId: result.wamid, resolvedText: `[Carousel: ${tplName}]`, wamid: result.wamid };
+        } catch (err) {
+          lastErr = err;
+          if (err.message.includes('401')) {
+            console.warn(`[WhatsApp] 401 on channel "${creds.channelId}" — trying next channel`);
+            continue; // try next channel
+          }
+          throw err; // non-401 errors are not credential issues
+        }
+      }
+      throw lastErr; // all channels exhausted
+    }
+
+    // Simulation mode — no credentials in DB
     const mockId = `tpl_${Date.now()}_${Math.random().toString(36).substr(2, 8)}`;
     console.log(`[WhatsApp SIM] Template "${tplName}" → ${to}`);
-    console.log('[WhatsApp SIM] Payload:', JSON.stringify(body, null, 2));
     return { messageId: mockId, resolvedText: `[Carousel: ${tplName}]` };
   },
 

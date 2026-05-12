@@ -1544,13 +1544,16 @@ async function sendMultiple(db, cam, events, type, credChannelId) {
       );
       if (failedExec) {
         const retries = failedExec.retry_count || 0;
-        if (retries >= 3) {
-          console.log(`[Retry] Skipping ${evt.phone} stage ${currentStage} — max retries (${retries}) reached. Error was: ${failedExec.error}`);
+        const ageMs = failedExec.sent_at ? Date.now() - new Date(failedExec.sent_at).getTime() : 0;
+        if (retries >= 3 && ageMs < 30 * 60 * 1000) {
+          // Max retries reached but less than 30 minutes old — stop spamming, wait
+          console.log(`[Retry] Pausing ${evt.phone} stage ${currentStage} — ${retries} failures, error: ${failedExec.error?.slice(0, 80)}`);
           continue;
         }
-        _retryCount = retries + 1;
+        // Either < 3 retries, or 30+ minutes have passed (credentials may have been fixed) — retry fresh
+        _retryCount = ageMs >= 30 * 60 * 1000 ? 0 : retries + 1;
         db.abandoned_cart_executions.splice(db.abandoned_cart_executions.indexOf(failedExec), 1);
-        console.log(`[Retry] Attempt ${_retryCount}/3 for stage ${currentStage} of ${cam.name} → ${evt.phone} (prev error: ${failedExec.error?.slice(0, 80)})`);
+        console.log(`[Retry] Attempt ${_retryCount + 1} for stage ${currentStage} of "${cam.name}" → ${evt.phone} (prev: ${failedExec.error?.slice(0, 60)})`);
       }
 
       // ── TEMPLATE SELECTION (4-stage array & infinite loop support) ──

@@ -1995,6 +1995,8 @@ export default function Campaigns() {
     s.on('apv_failed', (data) => {
       console.error(`[APV] ❌ FAILED stage-${data.stage} → ${data.phone} | error: ${data.error}`);
       setLiveSendMap(m => ({ ...m, [data.phone]: { status: 'failed', stage: data.stage, error: data.error, ts: data.timestamp } }));
+      // Show error for 15 seconds, then clear so countdown shows (apvQuickCheck retries in ≤15s)
+      setTimeout(() => setLiveSendMap(m => { const n = { ...m }; if (n[data.phone]?.status === 'failed') delete n[data.phone]; return n; }), 15000);
     });
 
     return () => s.disconnect();
@@ -2805,12 +2807,16 @@ export default function Campaigns() {
                         if (u.stage === 0) {
                           if (u.stage1_status === 'failed') {
                             const retries = u.stage1_retry_count || 0;
-                            const errMsg = u.stage1_error ? u.stage1_error.replace('Meta API error 401: ','').slice(0,50) : 'Send failed';
+                            const rawErr = u.stage1_error || 'Send failed';
+                            const errMsg = rawErr.replace(/Meta API error \d+:\s*/,'').replace(/"message":"([^"]+)".*/,'$1').slice(0,60);
+                            const secsAgo = u.stage1_sent_at ? Math.round((Date.now() - new Date(u.stage1_sent_at).getTime()) / 1000) : null;
+                            const retryIn = secsAgo != null ? Math.max(0, 15 - (secsAgo % 15)) : null;
                             return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(239,68,68,0.15)', color: '#f87171' }}>
-                              ❌ {retries >= 3 ? 'Max retries — fix credentials' : `Retrying (${retries}/3)`} — {errMsg}
+                              ❌ {errMsg} {retries >= 3 ? '· fix token in Settings' : retryIn != null ? `· retry in ${retryIn}s` : `· retry ${retries}/3`}
                             </span>;
                           }
-                          if (u.ready_to_send || (s1Secs != null && s1Secs <= 0)) return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(74,222,128,0.12)', color: '#4ade80' }}>⚡ Sending now…</span>;
+                          // Only show "Sending now" when live socket fires — not purely from countdown
+                          if (s1Secs != null && s1Secs <= 0 && u.stage1_status !== 'failed') return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(74,222,128,0.12)', color: '#4ade80' }}>⚡ Sending…</span>;
                           return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(251,191,36,0.1)', color: '#fbbf24' }}>
                             ⏳ 1st msg in {s1Secs != null ? fmtSecs(s1Secs) : (u.minutes_until_stage1 != null ? fmtCountdown(u.minutes_until_stage1) : '…')}
                           </span>;
