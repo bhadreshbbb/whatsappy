@@ -22,16 +22,25 @@ function getCredentials(channelId = null) {
     if (channelRow) {
       const s = JSON.parse(channelRow.settings || '{}');
       if (s?.whatsapp_token && s?.whatsapp_phone_id) {
+        console.log(`[Creds] Using DB settings for channel="${channelId}" phoneId="${s.whatsapp_phone_id}" token="${s.whatsapp_token.substring(0,10)}..."`);
         return { token: s.whatsapp_token, phoneId: s.whatsapp_phone_id, appId: s.whatsapp_app_id || null };
       }
+      console.warn(`[Creds] Channel "${channelId}" found in DB but whatsapp_token/phone_id missing`);
+    } else {
+      console.warn(`[Creds] Channel "${channelId}" NOT found in DB — available: [${(rows || []).map(r => r.channel_id).join(', ')}]`);
     }
-  } catch (_) {}
+  } catch (e) {
+    console.error('[Creds] DB read error:', e.message);
+  }
 
   // Env vars fallback (used when no DB settings for this channel)
   const token   = process.env.WHATSAPP_TOKEN;
   const phoneId = process.env.WHATSAPP_PHONE_ID;
   const appId   = process.env.WHATSAPP_APP_ID;
-  if (token && phoneId) return { token, phoneId, appId: appId || null };
+  if (token && phoneId) {
+    console.warn(`[Creds] Falling back to ENV vars — phoneId="${phoneId}" token="${token.substring(0,10)}..."`);
+    return { token, phoneId, appId: appId || null };
+  }
 
   try {
     const db = getDb();
@@ -41,10 +50,12 @@ function getCredentials(channelId = null) {
       if (row.channel_id === 'demo') continue;
       const s = JSON.parse(row?.settings || '{}');
       if (s?.whatsapp_token && s?.whatsapp_phone_id) {
+        console.warn(`[Creds] Last resort — using channel="${row.channel_id}" (requested="${channelId}")`);
         return { token: s.whatsapp_token, phoneId: s.whatsapp_phone_id, appId: s.whatsapp_app_id || null };
       }
     }
   } catch (_) {}
+  console.error(`[Creds] No credentials found for channelId="${channelId}" — simulation mode`);
   return null;
 }
 
