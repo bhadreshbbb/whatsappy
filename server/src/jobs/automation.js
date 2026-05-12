@@ -12,7 +12,23 @@ let productDetectionInterval;
 let productRefreshInterval;
 let templateStatusInterval;
 let lockCheckInterval;
-let _productCycleOffset = 0; // persists in memory between ticks; resets to 0 on restart
+let _productCycleOffset = 0;
+
+// Returns the channel that has WhatsApp credentials in Settings — the user's real channel.
+// All automation data queries use this channel, regardless of what campaign.channel_id says.
+function getPrimaryChannelId(db) {
+  const rows = db.channel_settings || [];
+  for (const row of rows) {
+    if (row.channel_id === 'demo') continue;
+    try {
+      const s = JSON.parse(row.settings || '{}');
+      if (s.whatsapp_token && s.whatsapp_phone_id) return row.channel_id;
+    } catch (_) {}
+  }
+  // Fallback: first non-demo user channel
+  const user = (db.users || []).find(u => u.channel_id && u.channel_id !== 'demo');
+  return user?.channel_id || 'demo';
+}
 const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000;
 const SIX_HOURS_MS = 60 * 1000; // DEMO: 1 minute (change back to 6 * 60 * 60 * 1000 for production
 const TWENTY_SIX_HOURS_MS = 26 * 60 * 60 * 1000;
@@ -802,7 +818,9 @@ async function runAutomation() {
   const campaigns = (db.abandoned_cart_campaigns || []).filter(c => c.is_active);
 
   for (const cam of campaigns) {
-    const channelId = cam.channel_id;
+    // Always use the channel that has Settings credentials — single source of truth.
+    // This handles campaigns that were created with wrong/demo channelId.
+    const channelId = getPrimaryChannelId(db);
     try {
       const delayMs = (cam.delay_hours || 0) * 60 * 60 * 1000;
       const targetTime = new Date(Date.now() - delayMs).toISOString();

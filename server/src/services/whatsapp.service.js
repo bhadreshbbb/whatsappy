@@ -12,53 +12,39 @@ import { getDb } from './database.js';
 
 // channelId is optional — when provided, reads that channel's settings instead of [0]
 function getCredentials(channelId = null) {
+  // ALL credentials come from Settings page (DB only). No env vars for WhatsApp.
   try {
-    const db  = getDb();
+    const db   = getDb();
     const rows = db.channel_settings || [];
 
-    // Collect ALL non-demo channels that have both token + phoneId
-    const candidates = [];
+    // 1. Exact channel match — Settings saved for this channel
+    if (channelId && channelId !== 'demo') {
+      const row = rows.find(r => r.channel_id === channelId);
+      if (row) {
+        const s = JSON.parse(row.settings || '{}');
+        if (s.whatsapp_token && s.whatsapp_phone_id) {
+          console.log(`[Creds] channel="${channelId}" phoneId="${s.whatsapp_phone_id}"`);
+          return { token: s.whatsapp_token, phoneId: s.whatsapp_phone_id, appId: s.whatsapp_app_id || null };
+        }
+      }
+    }
+
+    // 2. Any non-demo channel with credentials (for campaigns created before multi-login)
     for (const row of rows) {
       if (row.channel_id === 'demo') continue;
       try {
         const s = JSON.parse(row.settings || '{}');
-        if (s?.whatsapp_token && s?.whatsapp_phone_id) {
-          candidates.push({
-            cid:     row.channel_id,
-            token:   s.whatsapp_token,
-            phoneId: s.whatsapp_phone_id,
-            appId:   s.whatsapp_app_id || null,
-            // Score: exact match=3, has appId=2, has all 3 fields=1
-            score: (row.channel_id === channelId ? 3 : 0)
-                 + (s.whatsapp_app_id ? 2 : 0)
-                 + (s.whatsapp_token && s.whatsapp_phone_id && s.whatsapp_app_id ? 1 : 0),
-          });
+        if (s.whatsapp_token && s.whatsapp_phone_id) {
+          console.log(`[Creds] fallback channel="${row.channel_id}" phoneId="${s.whatsapp_phone_id}"`);
+          return { token: s.whatsapp_token, phoneId: s.whatsapp_phone_id, appId: s.whatsapp_app_id || null };
         }
       } catch (_) {}
-    }
-
-    if (candidates.length > 0) {
-      // Sort by score descending — exact channel wins if it has full credentials,
-      // otherwise fall back to the most complete channel (has appId)
-      candidates.sort((a, b) => b.score - a.score);
-      const best = candidates[0];
-      console.log(`[Creds] Using channel="${best.cid}" (requested="${channelId}") phoneId="${best.phoneId}" score=${best.score}`);
-      return { token: best.token, phoneId: best.phoneId, appId: best.appId };
     }
   } catch (e) {
     console.error('[Creds] DB read error:', e.message);
   }
 
-  // Env vars — only if NO DB credentials exist at all
-  const token   = process.env.WHATSAPP_TOKEN;
-  const phoneId = process.env.WHATSAPP_PHONE_ID;
-  const appId   = process.env.WHATSAPP_APP_ID;
-  if (token && phoneId) {
-    console.warn(`[Creds] ENV vars fallback — phoneId="${phoneId}"`);
-    return { token, phoneId, appId: appId || null };
-  }
-
-  console.error(`[Creds] No credentials found — simulation mode`);
+  console.error('[Creds] No credentials — add WhatsApp token in Settings page');
   return null;
 }
 
