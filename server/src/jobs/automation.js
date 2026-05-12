@@ -900,9 +900,10 @@ async function runAutomation() {
   const campaigns = (db.abandoned_cart_campaigns || []).filter(c => c.is_active);
 
   for (const cam of campaigns) {
-    // Always use the channel that has Settings credentials — single source of truth.
-    // This handles campaigns that were created with wrong/demo channelId.
-    const channelId = getPrimaryChannelId(db);
+    // Use the campaign's own channel_id — same channel user was logged into when they created it.
+    // Fallback to getPrimaryChannelId only for old demo/empty campaigns (pre-multi-login).
+    const channelId = (cam.channel_id && cam.channel_id !== 'demo' && cam.channel_id !== '')
+      ? cam.channel_id : getPrimaryChannelId(db);
     try {
       const delayMs = (cam.delay_hours || 0) * 60 * 60 * 1000;
       const targetTime = new Date(Date.now() - delayMs).toISOString();
@@ -1488,9 +1489,8 @@ function isBlockedByStatus(visitorStatus, campaignType) {
 }
 
 async function sendMultiple(db, cam, events, type, credChannelId) {
-  // credChannelId = channel with WhatsApp credentials (from getPrimaryChannelId)
-  // cam.channel_id = campaign's original channel (used for data queries)
-  // For credential lookups we always prefer credChannelId; getCredentials has non-demo fallback anyway.
+  // credChannelId = cam.channel_id (the channel the campaign belongs to = the logged-in user's channel)
+  // All credential lookups use this channel; sendTemplateMessage also tries other channels on 401.
   const channelId = credChannelId || cam.channel_id;
 
   // Deduplicate by phone — same user can appear in multiple sessions/events
