@@ -87,12 +87,15 @@ router.post('/test-send', async (req, res, next) => {
     const { phone } = req.body;
     if (!phone) return res.status(400).json({ error: 'phone required' });
 
-    const row = db.channel_settings.find(s => s.channel_id === channelId);
-    const s = JSON.parse(row?.settings || '{}');
-    const token   = s.whatsapp_token   || process.env.WHATSAPP_TOKEN;
-    const phoneId = s.whatsapp_phone_id || process.env.WHATSAPP_PHONE_ID;
+    // DB-only — find exact channel then fallback to any non-demo channel with credentials
+    let token = null, phoneId = null;
+    const rows = db.channel_settings || [];
+    const findCreds = (row) => { try { const s = JSON.parse(row?.settings || '{}'); return s.whatsapp_token && s.whatsapp_phone_id ? s : null; } catch { return null; } };
+    let cs = (channelId && channelId !== 'demo') ? findCreds(rows.find(r => r.channel_id === channelId)) : null;
+    if (!cs) cs = rows.filter(r => r.channel_id !== 'demo').map(r => findCreds(r)).find(Boolean);
+    if (cs) { token = cs.whatsapp_token; phoneId = cs.whatsapp_phone_id; }
 
-    if (!token || !phoneId) return res.json({ success: false, error: 'Credentials not configured', channelId, token_set: !!token, phone_id_set: !!phoneId });
+    if (!token || !phoneId) return res.json({ success: false, error: 'Credentials not configured in Settings', channelId, token_set: !!token, phone_id_set: !!phoneId });
 
     const to = String(phone).replace(/\D/g, '');
     const body = { messaging_product: 'whatsapp', to: to.startsWith('91') ? to : `91${to}`, type: 'text', text: { body: 'WhatsWay test message ✓' } };
@@ -138,8 +141,13 @@ router.post('/test-whatsapp', async (req, res, next) => {
     const row = db.channel_settings.find(s => s.channel_id === channelId);
     const s = JSON.parse(row?.settings || '{}');
 
-    const token   = s.whatsapp_token   || process.env.WHATSAPP_TOKEN;
-    const phoneId = s.whatsapp_phone_id || process.env.WHATSAPP_PHONE_ID;
+    // DB-only — find exact channel then fallback to any non-demo channel with credentials
+    let token = null, phoneId = null;
+    const rows2 = db.channel_settings || [];
+    const findCreds2 = (row) => { try { const s2 = JSON.parse(row?.settings || '{}'); return s2.whatsapp_token && s2.whatsapp_phone_id ? s2 : null; } catch { return null; } };
+    let cs2 = (channelId && channelId !== 'demo') ? findCreds2(rows2.find(r => r.channel_id === channelId)) : null;
+    if (!cs2) cs2 = rows2.filter(r => r.channel_id !== 'demo').map(r => findCreds2(r)).find(Boolean);
+    if (cs2) { token = cs2.whatsapp_token; phoneId = cs2.whatsapp_phone_id; }
 
     if (!token || !phoneId) {
       return res.json({ success: false, error: 'WhatsApp token or Phone ID not configured in Settings' });

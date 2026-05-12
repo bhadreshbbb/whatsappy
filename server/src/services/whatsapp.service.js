@@ -1,11 +1,8 @@
 /**
  * WhatsApp Cloud API Service
- * Calls Meta Graph API when credentials are set in .env / Settings.
+ * Calls Meta Graph API using credentials stored in Settings page (DB only).
  * Falls back to simulation log when not configured.
- *
- * Required env vars (or set via Settings page):
- *   WHATSAPP_TOKEN       — permanent access token from Meta Developer Console
- *   WHATSAPP_PHONE_ID    — Phone Number ID (not the display number)
+ * All credentials come from DB — no env var fallback for WhatsApp.
  */
 
 import { getDb } from './database.js';

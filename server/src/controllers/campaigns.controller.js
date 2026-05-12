@@ -743,10 +743,7 @@ export const campaignsController = {
           }
         }
       }
-      if (!token && process.env.WHATSAPP_TOKEN) {
-        token = process.env.WHATSAPP_TOKEN; phoneId = process.env.WHATSAPP_PHONE_ID;
-        credSource = 'ENV vars';
-      }
+      // DB-only — no env var fallback for WhatsApp credentials
 
       // ── Product data for this phone ──
       const visitor  = (db.website_visitors || []).find(v => v.phone === phone && v.channel_id === channelId);

@@ -2,16 +2,27 @@
 import { v4 as uuidv4 } from 'uuid';
 import { whatsappService } from '../services/whatsapp.service.js';
 
-// ── Get credentials (token, phoneId) from env or channel settings ──────────
+// ── Get credentials (DB only — no env var fallback for WhatsApp) ─────────────
 function getCredentials(channelId) {
-  const token  = process.env.WHATSAPP_TOKEN;
-  const phoneId = process.env.WHATSAPP_PHONE_ID;
-  if (token && phoneId) return { token, phoneId };
   try {
-    const db = getDb();
-    const row = db.channel_settings.find(s => s.channel_id === (channelId || 'demo')) || db.channel_settings[0];
-    const s = JSON.parse(row?.settings || '{}');
-    if (s?.whatsapp_token && s?.whatsapp_phone_id) return { token: s.whatsapp_token, phoneId: s.whatsapp_phone_id };
+    const db   = getDb();
+    const rows = db.channel_settings || [];
+    // Exact channel match first
+    if (channelId && channelId !== 'demo') {
+      const row = rows.find(r => r.channel_id === channelId);
+      if (row) {
+        const s = JSON.parse(row.settings || '{}');
+        if (s.whatsapp_token && s.whatsapp_phone_id) return { token: s.whatsapp_token, phoneId: s.whatsapp_phone_id };
+      }
+    }
+    // Any non-demo channel with credentials
+    for (const row of rows) {
+      if (row.channel_id === 'demo') continue;
+      try {
+        const s = JSON.parse(row.settings || '{}');
+        if (s.whatsapp_token && s.whatsapp_phone_id) return { token: s.whatsapp_token, phoneId: s.whatsapp_phone_id };
+      } catch (_) {}
+    }
   } catch (_) {}
   return null;
 }

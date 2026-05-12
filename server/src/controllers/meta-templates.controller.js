@@ -4,22 +4,36 @@ import { whatsappService } from '../services/whatsapp.service.js';
 import https from 'https';
 import http from 'http';
 
-// ── Get credentials from settings ─────────────────────────────────────────────
+// ── Get credentials from settings (DB only — no env var fallback for WhatsApp) ─
 function getCreds(channelId) {
-  const token = process.env.WHATSAPP_TOKEN;
-  const phoneId = process.env.WHATSAPP_PHONE_ID;
-  const wabaId = process.env.WHATSAPP_BUSINESS_ID;
-  const appId  = process.env.WHATSAPP_APP_ID;
-  if (token && phoneId && wabaId) return { token, phoneId, wabaId, appId: appId || null };
   try {
-    const db = getDb();
-    const row = db.channel_settings.find(s => s.channel_id === channelId)
-      || db.channel_settings[0];
-    const s = JSON.parse(row?.settings || '{}');
-    if (s?.whatsapp_token && s?.whatsapp_phone_id && s?.whatsapp_business_id) {
-      return { token: s.whatsapp_token, phoneId: s.whatsapp_phone_id, wabaId: s.whatsapp_business_id, appId: s.whatsapp_app_id || null };
+    const db   = getDb();
+    const rows = db.channel_settings || [];
+
+    // 1. Exact channel match
+    if (channelId && channelId !== 'demo') {
+      const row = rows.find(r => r.channel_id === channelId);
+      if (row) {
+        const s = JSON.parse(row.settings || '{}');
+        if (s.whatsapp_token && s.whatsapp_phone_id && s.whatsapp_business_id) {
+          return { token: s.whatsapp_token, phoneId: s.whatsapp_phone_id, wabaId: s.whatsapp_business_id, appId: s.whatsapp_app_id || null };
+        }
+      }
     }
-  } catch (_) { }
+
+    // 2. Any non-demo channel with full credentials
+    for (const row of rows) {
+      if (row.channel_id === 'demo') continue;
+      try {
+        const s = JSON.parse(row.settings || '{}');
+        if (s.whatsapp_token && s.whatsapp_phone_id && s.whatsapp_business_id) {
+          return { token: s.whatsapp_token, phoneId: s.whatsapp_phone_id, wabaId: s.whatsapp_business_id, appId: s.whatsapp_app_id || null };
+        }
+      } catch (_) {}
+    }
+  } catch (e) {
+    console.error('[MetaTemplates] getCreds DB error:', e.message);
+  }
   return null;
 }
 
