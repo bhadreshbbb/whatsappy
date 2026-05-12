@@ -1197,7 +1197,7 @@ async function runAutomation() {
             const msgPayload = buildSendMessagePayload(metaTpl, productConfig, order.phone, metaTpl.language);
 
             const { whatsappService } = await import('../services/whatsapp.service.js');
-            const result = await whatsappService.sendTemplateMessage(order.phone, msgPayload);
+            const result = await whatsappService.sendTemplateMessage(order.phone, msgPayload, channelId);
 
             // Record execution
             const execRecord = {
@@ -1652,7 +1652,7 @@ async function sendMultiple(db, cam, events, type) {
 
         let sendResult;
         try {
-          sendResult = await whatsappService.sendTemplateMessage(evt.phone, sendPayload);
+          sendResult = await whatsappService.sendTemplateMessage(evt.phone, sendPayload, channelId);
         } catch (sendErr) {
           console.error(`[MetaTemplateSend] FAILED for ${evt.phone} — ${sendErr.message}`);
           const failedAt = new Date().toISOString();
@@ -1914,7 +1914,7 @@ async function sendMultiple(db, cam, events, type) {
         console.log(`[Lang] Translating to ${userLang} for ${evt.phone} (${evt.name || 'user'})`);
       }
 
-      const sendResult = await whatsappService.sendMessage(evt.phone, components, variables);
+      const sendResult = await whatsappService.sendMessage(evt.phone, components, variables, channelId);
 
       // ── SAVE TO CHAT INBOX (live update) ──
       saveChatMessage(db, evt.phone, sendResult.resolvedText || '', channelId, {

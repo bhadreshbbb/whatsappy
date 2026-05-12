@@ -12,7 +12,22 @@ import { getDb } from './database.js';
 
 // channelId is optional — when provided, reads that channel's settings instead of [0]
 function getCredentials(channelId = null) {
-  // Env vars take precedence only when BOTH token + phoneId are set
+  try {
+    const db = getDb();
+    // Channel-specific DB settings take priority — always try the exact channel first
+    const rows = db.channel_settings || [];
+    const channelRow = channelId
+      ? rows.find(s => s.channel_id === channelId)
+      : null;
+    if (channelRow) {
+      const s = JSON.parse(channelRow.settings || '{}');
+      if (s?.whatsapp_token && s?.whatsapp_phone_id) {
+        return { token: s.whatsapp_token, phoneId: s.whatsapp_phone_id, appId: s.whatsapp_app_id || null };
+      }
+    }
+  } catch (_) {}
+
+  // Env vars fallback (used when no DB settings for this channel)
   const token   = process.env.WHATSAPP_TOKEN;
   const phoneId = process.env.WHATSAPP_PHONE_ID;
   const appId   = process.env.WHATSAPP_APP_ID;
@@ -20,13 +35,14 @@ function getCredentials(channelId = null) {
 
   try {
     const db = getDb();
-    // Use the specific channel when known; fall back to first row as last resort
-    const row = channelId
-      ? (db.channel_settings.find(s => s.channel_id === channelId) || db.channel_settings[0])
-      : db.channel_settings[0];
-    const s = JSON.parse(row?.settings || '{}');
-    if (s?.whatsapp_token && s?.whatsapp_phone_id) {
-      return { token: s.whatsapp_token, phoneId: s.whatsapp_phone_id, appId: s.whatsapp_app_id || null };
+    // Last resort: first non-demo row that has credentials
+    const rows = db.channel_settings || [];
+    for (const row of rows) {
+      if (row.channel_id === 'demo') continue;
+      const s = JSON.parse(row?.settings || '{}');
+      if (s?.whatsapp_token && s?.whatsapp_phone_id) {
+        return { token: s.whatsapp_token, phoneId: s.whatsapp_phone_id, appId: s.whatsapp_app_id || null };
+      }
     }
   } catch (_) {}
   return null;
@@ -52,10 +68,10 @@ export const whatsappService = {
   /**
    * Send a plain text message (used by Chat UI admin replies)
    */
-  async sendTextMessage(phone, text) {
+  async sendTextMessage(phone, text, channelId = null) {
     const clean = String(phone).replace(/\D/g, '');
     const to = clean.startsWith('91') ? clean : `91${clean}`;
-    const creds = getCredentials();
+    const creds = getCredentials(channelId);
 
     if (creds) {
       console.log(`[WhatsApp] → ${to}: "${text.substring(0, 60)}..."`);
@@ -80,7 +96,7 @@ export const whatsappService = {
    * components: [{type:'body', text:'...'}, ...]
    * variables: key/value map to fill {{placeholders}}
    */
-  async sendMessage(phone, components, variables) {
+  async sendMessage(phone, components, variables, channelId = null) {
     const clean = String(phone).replace(/\D/g, '');
     const to = clean.startsWith('91') ? clean : `91${clean}`;
 
@@ -95,7 +111,7 @@ export const whatsappService = {
       }
     }
 
-    const creds = getCredentials();
+    const creds = getCredentials(channelId);
 
     if (creds) {
       // With real credentials: send as plain text (most reliable for custom templates)
@@ -129,10 +145,10 @@ export const whatsappService = {
    * templatePayload = output of buildSendMessagePayload() — the full body object.
    * The "to" field is overwritten with the cleaned phone number.
    */
-  async sendTemplateMessage(phone, templatePayload) {
+  async sendTemplateMessage(phone, templatePayload, channelId = null) {
     const clean = String(phone).replace(/\D/g, '');
     const to = clean.startsWith('91') ? clean : `91${clean}`;
-    const creds = getCredentials();
+    const creds = getCredentials(channelId);
 
     const body = { ...templatePayload, to };
 

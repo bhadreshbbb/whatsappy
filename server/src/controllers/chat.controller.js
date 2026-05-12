@@ -186,7 +186,7 @@ export const chatController = {
 
       // Call WhatsApp API
       try {
-        const result = await whatsappService.sendTextMessage(phone, text || '');
+        const result = await whatsappService.sendTextMessage(phone, text || '', channelId);
         msg.status = 'sent';
         msg.wamid = result.wamid || null;
         db.save();
