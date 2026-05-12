@@ -1976,26 +1976,39 @@ export default function Campaigns() {
     const channelId = (_cid && _cid !== 'undefined' && _cid !== 'null') ? _cid : '';
     const s = io(BASE || 'http://localhost:3005', { query: { channelId }, transports: ['websocket', 'polling'] });
 
+    s.on('connect',    () => console.log('%c[APV Socket] ✅ Connected — live send events active', 'color:#4ade80'));
+    s.on('disconnect', () => console.warn('[APV Socket] ⚠ Disconnected'));
+
     s.on('apv_sending', (data) => {
-      console.log(`%c[APV] ⚡ SENDING stage-${data.stage} → ${data.phone} | ${data.campaign_name}`, 'color:#4ade80;font-weight:bold');
-      console.log(`%c[APV] Full payload:`, 'color:#818cf8');
-      console.log(JSON.stringify(data.payload, null, 2));
+      console.group(`%c⚡ APV SENDING  stage-${data.stage}  →  +${data.phone}`, 'color:#4ade80;font-size:13px;font-weight:bold');
+      console.log('%cCampaign :', 'color:#818cf8', data.campaign_name);
+      console.log('%cPhone    :', 'color:#818cf8', data.phone);
+      console.log('%cStage    :', 'color:#818cf8', data.stage);
+      console.log('%cTime     :', 'color:#818cf8', new Date(data.timestamp).toLocaleTimeString());
+      console.log('%cPayload  :', 'color:#818cf8', data.payload);
+      console.log('%cFull JSON:', 'color:#475569', JSON.stringify(data.payload, null, 2));
+      console.groupEnd();
       setLiveSendMap(m => ({ ...m, [data.phone]: { status: 'sending', stage: data.stage, ts: data.timestamp } }));
-      // After 30s clear the live badge (API result will come via apv_sent/apv_failed)
       setTimeout(() => setLiveSendMap(m => { const n = { ...m }; if (n[data.phone]?.status === 'sending') delete n[data.phone]; return n; }), 30000);
     });
 
     s.on('apv_sent', (data) => {
-      console.log(`%c[APV] ✅ SENT stage-${data.stage} → ${data.phone} | wamid: ${data.wamid}`, 'color:#4ade80;font-weight:bold');
+      console.group(`%c✅ APV SENT  stage-${data.stage}  →  +${data.phone}`, 'color:#4ade80;font-size:13px;font-weight:bold');
+      console.log('%cCampaign :', 'color:#818cf8', data.campaign_name);
+      console.log('%cwamid    :', 'color:#818cf8', data.wamid);
+      console.log('%cTime     :', 'color:#818cf8', new Date(data.timestamp).toLocaleTimeString());
+      console.groupEnd();
       setLiveSendMap(m => ({ ...m, [data.phone]: { status: 'sent', stage: data.stage, wamid: data.wamid, ts: data.timestamp } }));
-      // Clear after 5s — audience panel will reload and show ✅ from exec record
       setTimeout(() => setLiveSendMap(m => { const n = { ...m }; delete n[data.phone]; return n; }), 5000);
     });
 
     s.on('apv_failed', (data) => {
-      console.error(`[APV] ❌ FAILED stage-${data.stage} → ${data.phone} | error: ${data.error}`);
+      console.group(`%c❌ APV FAILED  stage-${data.stage}  →  +${data.phone}`, 'color:#f87171;font-size:13px;font-weight:bold');
+      console.log('%cCampaign :', 'color:#818cf8', data.campaign_name);
+      console.log('%cError    :', 'color:#f87171', data.error);
+      console.log('%cTime     :', 'color:#818cf8', new Date(data.timestamp).toLocaleTimeString());
+      console.groupEnd();
       setLiveSendMap(m => ({ ...m, [data.phone]: { status: 'failed', stage: data.stage, error: data.error, ts: data.timestamp } }));
-      // Show error for 15 seconds, then clear so countdown shows (apvQuickCheck retries in ≤15s)
       setTimeout(() => setLiveSendMap(m => { const n = { ...m }; if (n[data.phone]?.status === 'failed') delete n[data.phone]; return n; }), 15000);
     });
 
