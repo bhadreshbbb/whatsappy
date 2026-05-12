@@ -1122,11 +1122,13 @@ export const campaignsController = {
           }
 
           return {
-            stage1_status:  s1?.status  || null,
-            stage1_error:   s1?.error   || null,
+            stage1_status:      s1?.status      || null,
+            stage1_error:       s1?.error       || null,
+            stage1_retry_count: s1?.retry_count || 0,
             stage1_sent_at: lockAnchor ? lockAnchor.stage_1_sent_at : (s1?.sent_at || null),
-            stage2_status:  s2?.status  || null,
-            stage2_error:   s2?.error   || null,
+            stage2_status:      s2?.status      || null,
+            stage2_error:       s2?.error       || null,
+            stage2_retry_count: s2?.retry_count || 0,
             stage2_sent_at: lockAnchor ? lockAnchor.stage_2_sent_at : (s2?.sent_at || null),
           };
         };
@@ -1208,7 +1210,7 @@ export const campaignsController = {
             stage1_due_at: stage1DueMs ? new Date(stage1DueMs).toISOString() : null,
             minutes_until_stage1: minUntilStage1,
             apv_delay_min: stage1DelayMin,
-            ready_to_send: minUntilNext === 0 || minUntilStage1 === 0, is_locked: true,
+            ready_to_send: (minUntilNext === 0 || minUntilStage1 === 0) && (execs.stage1_retry_count || 0) < 3, is_locked: true,
             responded: inboundMsgs.length > 0,
             response_count: inboundMsgs.length,
             last_response_text: lastReply?.text || null,
@@ -1275,7 +1277,7 @@ export const campaignsController = {
             followup_count: viewRec?.followup_count || 0,
             minutes_since_activity: minSince,
             minutes_until_next_send: minUntilNext,
-            ready_to_send: minSince >= stage1DelayMin && execs.stage1_status !== 'sent' && execs.stage1_status !== 'failed',
+            ready_to_send: minSince >= stage1DelayMin && execs.stage1_status !== 'sent' && execs.stage1_status !== 'failed' && (execs.stage1_retry_count || 0) < 3,
             minutes_until_stage1: minUntilStage1,
             apv_delay_min: stage1DelayMin,
             is_locked: false,

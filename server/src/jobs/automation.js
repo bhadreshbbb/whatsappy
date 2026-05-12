@@ -1432,14 +1432,21 @@ async function sendMultiple(db, cam, events, type) {
         console.log(`[De-dupe] Already sent stage ${currentStage} of ${cam.name} to ${evt.phone}`);
         continue;
       }
-      // Remove any previous failed execution for this stage so the new attempt gets logged cleanly
-      const failedIdx = db.abandoned_cart_executions.findIndex(x =>
+      // Retry logic: allow up to 3 attempts, then stop so UI shows permanent error
+      let _retryCount = 0;
+      const failedExec = db.abandoned_cart_executions.find(x =>
         x.campaign_id === cam.id && x.phone === evt.phone &&
         (x.stage || 1) === currentStage && x.status === 'failed'
       );
-      if (failedIdx >= 0) {
-        db.abandoned_cart_executions.splice(failedIdx, 1);
-        console.log(`[Retry] Removed previous failed attempt for stage ${currentStage} of ${cam.name} → ${evt.phone}`);
+      if (failedExec) {
+        const retries = failedExec.retry_count || 0;
+        if (retries >= 3) {
+          console.log(`[Retry] Max retries (3) reached for stage ${currentStage} of ${cam.name} → ${evt.phone} — skipping permanently`);
+          continue;
+        }
+        _retryCount = retries + 1;
+        db.abandoned_cart_executions.splice(db.abandoned_cart_executions.indexOf(failedExec), 1);
+        console.log(`[Retry] Attempt ${_retryCount}/3 for stage ${currentStage} of ${cam.name} → ${evt.phone}`);
       }
 
       // ── TEMPLATE SELECTION (4-stage array & infinite loop support) ──
@@ -1690,6 +1697,7 @@ async function sendMultiple(db, cam, events, type) {
             template_id: metaTpl.id, template_name: metaTpl.name,
             stage: currentStage, language: metaLangCode,
             status: 'failed', error: sendErr.message,
+            retry_count: _retryCount,
             sent_at: failedAt, is_meta_template: true,
             payload_sent: JSON.stringify(sendPayload),
           });
@@ -1951,6 +1959,7 @@ async function sendMultiple(db, cam, events, type) {
       });
 
       // ── LOG EXECUTION ──
+      const _execStatus = sendResult.messageId ? 'sent' : 'failed';
       db.abandoned_cart_executions.push({
         id: (db.abandoned_cart_executions.length || 0) + 1,
         campaign_id: cam.id,
@@ -1961,10 +1970,13 @@ async function sendMultiple(db, cam, events, type) {
         template_name: templateName,
         stage: currentStage,
         language: userLang,
-        status: 'sent',
+        status: _execStatus,
+        error: _execStatus === 'failed' ? 'Message send failed — check WhatsApp credentials' : null,
+        retry_count: _retryCount,
         sent_at: new Date().toISOString(),
         product_image: variables.product_image || ''
       });
+      if (_execStatus === 'failed') { db.save(); continue; }
 
       // ── UPDATE EVENT STATE ──
       if (type === 'upsell') {
