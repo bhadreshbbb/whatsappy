@@ -2745,11 +2745,18 @@ export default function Campaigns() {
                       // ACTIVE — locked in campaign
                       if (u.lock_status === 'active') {
                         if (u.stage === 0) {
+                          if (u.stage1_status === 'failed') {
+                            const retries = u.stage1_retry_count || 0;
+                            const errMsg = u.stage1_error ? u.stage1_error.replace('Meta API error 401: ','').slice(0,60) : 'Send failed';
+                            return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(239,68,68,0.15)', color: '#f87171' }}>
+                              ❌ {retries >= 3 ? 'Failed (max retries)' : `Failed · retry ${retries}/3`} — {errMsg}
+                            </span>;
+                          }
                           if (u.ready_to_send) return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(74,222,128,0.12)', color: '#4ade80' }}>🟢 1st msg sending ≤60s</span>;
                           const waitLeft = u.minutes_until_stage1 != null ? u.minutes_until_stage1
                             : (mAgo != null ? Math.max(0, (u.apv_delay_min || 2) - mAgo) : null);
                           return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(251,191,36,0.1)', color: '#fbbf24' }}>
-                            🔄 re-entered · 1st msg in {waitLeft != null ? fmtCountdown(waitLeft) : '…'}
+                            ⏳ 1st msg in {waitLeft != null ? fmtCountdown(waitLeft) : '…'}
                           </span>;
                         }
                         if (u.stage === 1) {
@@ -3004,10 +3011,12 @@ export default function Campaigns() {
                                             {u.stage1_status === 'sent'
                                               ? <span className="text-[9px]" style={{ color: '#4ade80' }}>✅ Sent · {fmtTs(u.stage1_sent_at || u.stage_1_sent_at)}</span>
                                               : u.stage1_status === 'failed'
-                                                ? <span className="text-[9px]" style={{ color: '#f87171' }}>❌ Failed — {u.stage1_error || 'WhatsApp API error'} · Stage 2 still sending after delay</span>
+                                                ? <span className="text-[9px]" style={{ color: '#f87171' }}>
+                                                    ❌ Failed{(u.stage1_retry_count||0) >= 3 ? ' (max retries — fix credentials)' : ` · retry ${u.stage1_retry_count||0}/3`} — {(u.stage1_error||'WhatsApp API error').replace('Meta API error 401: ','').slice(0,80)}
+                                                  </span>
                                                 : u.ready_to_send
-                                                  ? <span className="text-[9px]" style={{ color: '#4ade80' }}>🟢 Sending within 60s (next automation tick)</span>
-                                                  : <span className="text-[9px]" style={{ color: '#475569' }}>⏳ Waiting · {u.minutes_until_stage1 != null ? `${fmtCountdown(u.minutes_until_stage1)} until send` : `${u.apv_delay_min ?? 2}m inactivity needed`}{u.minutes_since_activity != null ? ` · viewed ${fmtAgo(u.minutes_since_activity)}` : ''}</span>
+                                                  ? <span className="text-[9px]" style={{ color: '#4ade80' }}>🟢 Sending within 60s…</span>
+                                                  : <span className="text-[9px]" style={{ color: '#475569' }}>⏳ {u.minutes_until_stage1 != null ? `${fmtCountdown(u.minutes_until_stage1)} until send` : `${u.apv_delay_min ?? 2}m delay needed`}{u.minutes_since_activity != null ? ` · viewed ${fmtAgo(u.minutes_since_activity)}` : ''}</span>
                                             }
                                           </div>
 

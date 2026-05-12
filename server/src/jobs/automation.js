@@ -1440,8 +1440,10 @@ async function sendMultiple(db, cam, events, type) {
       );
       if (failedExec) {
         const retries = failedExec.retry_count || 0;
-        if (retries >= 3) {
-          console.log(`[Retry] Max retries (3) reached for stage ${currentStage} of ${cam.name} → ${evt.phone} — skipping permanently`);
+        // 401 = auth error — no point retrying, fix credentials first
+        const isAuthError = (failedExec.error || '').includes('401');
+        if (retries >= 3 || isAuthError) {
+          console.log(`[Retry] Skipping ${evt.phone} stage ${currentStage} — ${isAuthError ? '401 auth error (fix credentials)' : 'max retries reached'}`);
           continue;
         }
         _retryCount = retries + 1;
