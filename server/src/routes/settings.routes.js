@@ -79,6 +79,42 @@ router.post('/', (req, res, next) => {
 });
 
 // Manual re-seed endpoint — called from UI "Sync Products" button
+// Test actual message send (POST /messages) — not just token verification
+router.post('/test-send', async (req, res, next) => {
+  try {
+    const db = getDb();
+    const channelId = req.headers['x-channel-id'] || '';
+    const { phone } = req.body;
+    if (!phone) return res.status(400).json({ error: 'phone required' });
+
+    const row = db.channel_settings.find(s => s.channel_id === channelId);
+    const s = JSON.parse(row?.settings || '{}');
+    const token   = s.whatsapp_token   || process.env.WHATSAPP_TOKEN;
+    const phoneId = s.whatsapp_phone_id || process.env.WHATSAPP_PHONE_ID;
+
+    if (!token || !phoneId) return res.json({ success: false, error: 'Credentials not configured', channelId, token_set: !!token, phone_id_set: !!phoneId });
+
+    const to = String(phone).replace(/\D/g, '');
+    const body = { messaging_product: 'whatsapp', to: to.startsWith('91') ? to : `91${to}`, type: 'text', text: { body: 'WhatsWay test message ✓' } };
+    const url = `https://graph.facebook.com/v25.0/${phoneId}/messages`;
+    const metaRes = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(10000),
+    });
+    const data = await metaRes.json();
+    res.json({
+      success: metaRes.ok,
+      status: metaRes.status,
+      response: data,
+      channelId,
+      phoneId,
+      token_prefix: token.substring(0, 15) + '...',
+    });
+  } catch (error) { next(error); }
+});
+
 router.post('/sync-catalog', async (req, res, next) => {
   try {
     const db = getDb();
