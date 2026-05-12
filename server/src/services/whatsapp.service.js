@@ -44,15 +44,23 @@ function getCredentials(channelId = null) {
 
   try {
     const db = getDb();
-    // Last resort: first non-demo row that has credentials
+    // Last resort: pick the most complete non-demo channel (has appId = most fully set up)
     const rows = db.channel_settings || [];
+    const candidates = [];
     for (const row of rows) {
       if (row.channel_id === 'demo') continue;
-      const s = JSON.parse(row?.settings || '{}');
-      if (s?.whatsapp_token && s?.whatsapp_phone_id) {
-        console.warn(`[Creds] Last resort — using channel="${row.channel_id}" (requested="${channelId}")`);
-        return { token: s.whatsapp_token, phoneId: s.whatsapp_phone_id, appId: s.whatsapp_app_id || null };
-      }
+      try {
+        const s = JSON.parse(row?.settings || '{}');
+        if (s?.whatsapp_token && s?.whatsapp_phone_id) {
+          candidates.push({ channelId: row.channel_id, token: s.whatsapp_token, phoneId: s.whatsapp_phone_id, appId: s.whatsapp_app_id || null });
+        }
+      } catch (_) {}
+    }
+    if (candidates.length > 0) {
+      // Prefer channel with appId (most complete setup); otherwise last in list (most recently added)
+      const best = candidates.find(c => c.appId) || candidates[candidates.length - 1];
+      console.warn(`[Creds] Last resort — using channel="${best.channelId}" (requested="${channelId}") phoneId="${best.phoneId}"`);
+      return { token: best.token, phoneId: best.phoneId, appId: best.appId };
     }
   } catch (_) {}
   console.error(`[Creds] No credentials found for channelId="${channelId}" — simulation mode`);

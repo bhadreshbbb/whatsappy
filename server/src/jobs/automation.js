@@ -376,6 +376,33 @@ async function checkLockedUsers() {
 export function startAutomation() {
   console.log('Starting automation engine...');
 
+  // ── Migrate "demo" campaigns/locks/visitors to the real channel ──────────
+  // Campaigns created before proper login have channel_id = "demo".
+  // Find the real channel (first non-demo user's channel) and reassign them.
+  try {
+    const db = getDb();
+    const realChannel = (db.users || []).find(u => u.channel_id && u.channel_id !== 'demo')?.channel_id
+      || (db.channel_settings || []).find(s => {
+           if (s.channel_id === 'demo') return false;
+           try { const p = JSON.parse(s.settings || '{}'); return p.whatsapp_token && p.whatsapp_phone_id; } catch { return false; }
+         })?.channel_id;
+    if (realChannel) {
+      let migrated = 0;
+      for (const t of ['abandoned_cart_campaigns', 'website_visitors', 'campaign_locks',
+                        'abandoned_cart_executions', 'product_views', 'cart_events',
+                        'purchase_history', 'chat_conversations', 'chat_messages']) {
+        for (const row of (db[t] || [])) {
+          if (row.channel_id === 'demo' || row.channel_id === '') {
+            row.channel_id = realChannel; migrated++;
+          }
+        }
+      }
+      if (migrated > 0) { db.save(); console.log(`[Migrate] Moved ${migrated} "demo" records → channel "${realChannel}"`); }
+    }
+  } catch (e) {
+    console.error('[Migrate] Error:', e.message);
+  }
+
   // Seed product catalog from Shopify on boot
   seedProductCatalog().catch(err => console.error('[Seed] Error:', err));
 
