@@ -376,31 +376,18 @@ async function checkLockedUsers() {
 export function startAutomation() {
   console.log('Starting automation engine...');
 
-  // ── Migrate "demo" campaigns/locks/visitors to the real channel ──────────
-  // Campaigns created before proper login have channel_id = "demo".
-  // Find the real channel (first non-demo user's channel) and reassign them.
+  // ── Reset 401-failed executions so they retry with updated credentials ──
   try {
     const db = getDb();
-    const realChannel = (db.users || []).find(u => u.channel_id && u.channel_id !== 'demo')?.channel_id
-      || (db.channel_settings || []).find(s => {
-           if (s.channel_id === 'demo') return false;
-           try { const p = JSON.parse(s.settings || '{}'); return p.whatsapp_token && p.whatsapp_phone_id; } catch { return false; }
-         })?.channel_id;
-    if (realChannel) {
-      let migrated = 0;
-      for (const t of ['abandoned_cart_campaigns', 'website_visitors', 'campaign_locks',
-                        'abandoned_cart_executions', 'product_views', 'cart_events',
-                        'purchase_history', 'chat_conversations', 'chat_messages']) {
-        for (const row of (db[t] || [])) {
-          if (row.channel_id === 'demo' || row.channel_id === '') {
-            row.channel_id = realChannel; migrated++;
-          }
-        }
+    let reset = 0;
+    for (const x of (db.abandoned_cart_executions || [])) {
+      if (x.status === 'failed' && (x.error || '').includes('401')) {
+        x.status = 'reset_for_retry'; x.retry_count = 0; reset++;
       }
-      if (migrated > 0) { db.save(); console.log(`[Migrate] Moved ${migrated} "demo" records → channel "${realChannel}"`); }
     }
+    if (reset > 0) { db.save(); console.log(`[Boot] Reset ${reset} 401-failed executions for retry`); }
   } catch (e) {
-    console.error('[Migrate] Error:', e.message);
+    console.error('[Boot] Reset error:', e.message);
   }
 
   // Seed product catalog from Shopify on boot
@@ -1436,7 +1423,7 @@ async function sendMultiple(db, cam, events, type) {
       let _retryCount = 0;
       const failedExec = db.abandoned_cart_executions.find(x =>
         x.campaign_id === cam.id && x.phone === evt.phone &&
-        (x.stage || 1) === currentStage && x.status === 'failed'
+        (x.stage || 1) === currentStage && (x.status === 'failed' || x.status === 'reset_for_retry')
       );
       if (failedExec) {
         const retries = failedExec.retry_count || 0;
