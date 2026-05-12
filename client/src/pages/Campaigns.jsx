@@ -1945,7 +1945,9 @@ export default function Campaigns() {
   const [testModal, setTestModal] = useState(null);  // { id, name } | null
   const [testPhone, setTestPhone] = useState('');
   const [testSending, setTestSending] = useState(false);
-  const [testResult, setTestResult] = useState(null); // last result for display
+  const [testResult, setTestResult] = useState(null);
+  const [debugResult, setDebugResult] = useState(null);
+  const [debugLoading, setDebugLoading] = useState(false);
   const [flowModal, setFlowModal] = useState(null); // campaign object | null
   const [responsesOpen, setResponsesOpen]       = useState({}); // campaignId → bool
   const [responsesMap, setResponsesMap]         = useState({}); // campaignId → { responses[], summary }
@@ -2121,6 +2123,31 @@ export default function Campaigns() {
       console.error('[Test Send]', e);
     }
     setTestSending(false);
+  };
+
+  const handleDebugPayload = async (campaignId, phone) => {
+    if (!campaignId) return;
+    setDebugLoading(true);
+    setDebugResult(null);
+    try {
+      const _cid = localStorage.getItem('channelId') || '';
+      const BASE  = import.meta.env.VITE_API_URL || '';
+      const token = localStorage.getItem('authToken');
+      const res   = await fetch(`${BASE}/api/campaigns/${campaignId}/debug-payload`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-channel-id': _cid, Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ phone: phone || '919999999999' }),
+      });
+      const data = await res.json();
+      setDebugResult(data);
+      console.group('%c[Debug Payload]', 'color:#fbbf24;font-weight:bold');
+      console.log('Credentials:', data.credentials);
+      console.log('Meta verify:', data.meta_verify);
+      console.log('Product view:', data.product_view);
+      console.log('Full payload:', JSON.stringify(data.payload, null, 2));
+      console.groupEnd();
+    } catch (e) { setDebugResult({ error: e.message }); }
+    setDebugLoading(false);
   };
 
   const load = async () => {
@@ -2429,7 +2456,7 @@ export default function Campaigns() {
                         setPayloadMap(p => { const n = {...p}; delete n[c.id]; return n; });
                         setAudienceMap(p => { const n = {...p}; delete n[c.id]; return n; });
                         setSendResultMap(p => { const n = {...p}; delete n[c.id]; return n; });
-                        if (testModal?.id === c.id) { setTestModal(null); setTestResult(null); }
+                        if (testModal?.id === c.id) { setTestModal(null); setTestResult(null); setDebugResult(null); }
                         if (flowModal?.id === c.id) setFlowModal(null);
                         load();
                       }}
@@ -3418,10 +3445,41 @@ export default function Campaigns() {
                         {testSending ? 'Sending…' : 'Send'}
                       </button>
                     </div>
+                      <button onClick={() => handleDebugPayload(c.id, testPhone.trim())} disabled={debugLoading || !testPhone.trim()}
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-semibold transition-all"
+                        style={{ background: 'rgba(251,191,36,0.12)', border: '1px solid rgba(251,191,36,0.3)', color: '#fbbf24', opacity: (!testPhone.trim() || debugLoading) ? 0.5 : 1 }}>
+                        🔍 {debugLoading ? 'Loading…' : 'View Payload'}
+                      </button>
                     {testResult && (
                       <div className="text-[10px] px-2.5 py-1.5 rounded-lg"
                         style={{ background: testResult.success ? 'rgba(74,222,128,0.08)' : 'rgba(248,113,113,0.08)', border: `1px solid ${testResult.success ? 'rgba(74,222,128,0.2)' : 'rgba(248,113,113,0.2)'}`, color: testResult.success ? '#4ade80' : '#f87171' }}>
                         {testResult.success ? `✓ Sent! wamid: ${testResult.wamid}` : `✗ ${testResult.error || 'Failed'}`}
+                      </div>
+                    )}
+                    {debugResult && (
+                      <div className="rounded-lg p-2 space-y-1.5" style={{ background: 'rgba(0,0,0,0.4)', border: '1px solid rgba(251,191,36,0.2)' }}>
+                        <p className="text-[10px] font-bold" style={{ color: '#fbbf24' }}>🔍 Debug Payload</p>
+                        <div className="text-[9px] space-y-1" style={{ color: '#94a3b8' }}>
+                          <div><span style={{color:'#64748b'}}>Creds source:</span> <span style={{color:'#e2e8f0'}}>{debugResult.credentials?.source || '—'}</span></div>
+                          <div><span style={{color:'#64748b'}}>Phone ID:</span> <span style={{color:'#e2e8f0'}}>{debugResult.credentials?.phone_id || '—'}</span></div>
+                          <div><span style={{color:'#64748b'}}>Token:</span> <span style={{color:'#e2e8f0'}}>{debugResult.credentials?.token_prefix || '—'} <span style={{color:'#475569'}}>({debugResult.credentials?.token_length} chars)</span></span></div>
+                          <div><span style={{color:'#64748b'}}>API URL:</span> <span style={{color:'#e2e8f0'}}>{debugResult.api_url || '—'}</span></div>
+                          {debugResult.meta_verify && (
+                            <div><span style={{color:'#64748b'}}>Meta verify:</span> <span style={{color: debugResult.meta_verify.error ? '#f87171' : '#4ade80'}}>{debugResult.meta_verify.error || `✓ ${debugResult.meta_verify.verified_name} (${debugResult.meta_verify.display_phone_number})`}</span></div>
+                          )}
+                          {debugResult.product_view && (
+                            <div><span style={{color:'#64748b'}}>Product:</span> <span style={{color:'#e2e8f0'}}>{debugResult.product_view.product_name} — {debugResult.product_view.product_price}</span></div>
+                          )}
+                          {debugResult.campaign_lock && (
+                            <div><span style={{color:'#64748b'}}>Lock stage:</span> <span style={{color:'#e2e8f0'}}>{debugResult.campaign_lock.stage} | locked: {debugResult.campaign_lock.locked_at?.slice(0,16)}</span></div>
+                          )}
+                        </div>
+                        {debugResult.payload && (
+                          <pre className="text-[8px] overflow-auto max-h-40 rounded p-1.5 mt-1" style={{ background: 'rgba(0,0,0,0.5)', color: '#94a3b8', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
+                            {JSON.stringify(debugResult.payload, null, 2)}
+                          </pre>
+                        )}
+                        {!debugResult.payload && <p className="text-[9px]" style={{color:'#475569'}}>No Meta template linked — text template will be used</p>}
                       </div>
                     )}
                     <p className="text-[9px]" style={{ color: '#334155' }}>Full payload logged in browser console (F12)</p>
@@ -3447,7 +3505,7 @@ export default function Campaigns() {
                 </button>
 
                 {/* Test Send toggle */}
-                <button title="Test send" onClick={() => { if (testModal?.id === c.id) { setTestModal(null); setTestResult(null); } else { setTestModal({ id: c.id, name: c.name }); setTestPhone(''); setTestResult(null); } }}
+                <button title="Test send" onClick={() => { if (testModal?.id === c.id) { setTestModal(null); setTestResult(null); setDebugResult(null); } else { setTestModal({ id: c.id, name: c.name }); setTestPhone(''); setTestResult(null); setDebugResult(null); } }}
                   className="p-2 rounded-lg border transition-all"
                   style={{ background: testModal?.id === c.id ? 'rgba(167,139,250,0.15)' : 'rgba(255,255,255,0.04)', borderColor: testModal?.id === c.id ? 'rgba(167,139,250,0.4)' : 'rgba(255,255,255,0.07)', color: testModal?.id === c.id ? '#a78bfa' : '#64748b' }}>
                   <Send size={13}/>

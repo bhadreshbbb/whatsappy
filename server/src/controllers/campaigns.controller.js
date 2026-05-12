@@ -708,6 +708,89 @@ export const campaignsController = {
     }
   },
 
+  async debugPayload(req, res, next) {
+    try {
+      const db  = getDb();
+      const { id } = req.params;
+      const { phone } = req.body;
+      const headerChannelId = req.headers['x-channel-id'] || '';
+
+      const campaign = db.abandoned_cart_campaigns.find(c =>
+        c.id == id && (c.channel_id === headerChannelId || c.channel_id === 'demo' || c.channel_id === '')
+      );
+      if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
+      const channelId = (campaign.channel_id && campaign.channel_id !== 'demo') ? campaign.channel_id : headerChannelId;
+
+      // ── Credentials ──
+      const rows = db.channel_settings || [];
+      let credSource = null, token = null, phoneId = null, appId = null;
+      const channelRow = rows.find(s => s.channel_id === channelId);
+      if (channelRow) {
+        const s = JSON.parse(channelRow.settings || '{}');
+        if (s.whatsapp_token && s.whatsapp_phone_id) {
+          token = s.whatsapp_token; phoneId = s.whatsapp_phone_id; appId = s.whatsapp_app_id || null;
+          credSource = `DB channel="${channelId}"`;
+        }
+      }
+      if (!token) {
+        for (const row of rows) {
+          if (row.channel_id === 'demo') continue;
+          const s = JSON.parse(row.settings || '{}');
+          if (s.whatsapp_token && s.whatsapp_phone_id) {
+            token = s.whatsapp_token; phoneId = s.whatsapp_phone_id; appId = s.whatsapp_app_id || null;
+            credSource = `DB best-match channel="${row.channel_id}"`;
+            break;
+          }
+        }
+      }
+      if (!token && process.env.WHATSAPP_TOKEN) {
+        token = process.env.WHATSAPP_TOKEN; phoneId = process.env.WHATSAPP_PHONE_ID;
+        credSource = 'ENV vars';
+      }
+
+      // ── Product data for this phone ──
+      const visitor  = (db.website_visitors || []).find(v => v.phone === phone && v.channel_id === channelId);
+      const viewRec  = (db.product_views   || []).filter(v => v.phone === phone && v.channel_id === channelId)
+                         .sort((a,b) => new Date(b.created_at) - new Date(a.created_at))[0] || null;
+      const lock     = (db.campaign_locks  || []).find(l => l.phone === phone && String(l.campaign_id) === String(id));
+
+      // ── Meta template ──
+      const metaTpl  = campaign.meta_template_id
+        ? (db.meta_templates || []).find(t => String(t.id) === String(campaign.meta_template_id))
+        : null;
+
+      let payload = null;
+      if (metaTpl) {
+        const { buildSendMessagePayload } = await import('./meta-templates.controller.js');
+        const pc = metaTpl.product_config || {};
+        payload = buildSendMessagePayload(metaTpl, pc, phone || '919999999999', metaTpl.language || 'en', campaign.id);
+      }
+
+      // ── Verify token against Meta ──
+      let metaVerify = null;
+      if (token && phoneId) {
+        try {
+          const vRes = await fetch(`https://graph.facebook.com/v25.0/${phoneId}?fields=verified_name,display_phone_number,status`, {
+            headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(8000),
+          });
+          metaVerify = await vRes.json();
+        } catch (e) { metaVerify = { error: e.message }; }
+      }
+
+      res.json({
+        campaign:      { id: campaign.id, name: campaign.name, type: campaign.campaign_type, channel_id: campaign.channel_id },
+        credentials:   { source: credSource, phone_id: phoneId, app_id: appId, token_prefix: token ? token.substring(0,20)+'...' : null, token_length: token?.length || 0 },
+        meta_verify:   metaVerify,
+        visitor:       visitor ? { phone: visitor.phone, status: visitor.status, name: visitor.name } : null,
+        product_view:  viewRec  ? { product_name: viewRec.product_name, product_url: viewRec.product_url, product_price: viewRec.product_price, product_image: viewRec.product_image, created_at: viewRec.created_at } : null,
+        campaign_lock: lock     ? { stage: lock.stage, locked_at: lock.locked_at, stage_1_sent_at: lock.stage_1_sent_at } : null,
+        meta_template: metaTpl  ? { id: metaTpl.id, name: metaTpl.name, status: metaTpl.meta_status, language: metaTpl.language } : null,
+        api_url:       phoneId  ? `https://graph.facebook.com/v25.0/${phoneId}/messages` : null,
+        payload,
+      });
+    } catch (error) { next(error); }
+  },
+
   async getCampaignAnalytics(req, res, next) {
     try {
       const db = getDb();

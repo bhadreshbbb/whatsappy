@@ -10,6 +10,7 @@ router.put('/:id', campaignsController.updateCampaign);
 router.delete('/:id', campaignsController.deleteCampaign);
 router.post('/:id/send', campaignsController.sendCampaign);
 router.post('/:id/send-test', campaignsController.sendTestMessage);
+router.post('/:id/debug-payload', campaignsController.debugPayload);
 router.post('/:id/status', campaignsController.updateStatus);
 router.get('/:id/executions', campaignsController.getExecutions);
 router.get('/:id/audience', campaignsController.getAudience);
