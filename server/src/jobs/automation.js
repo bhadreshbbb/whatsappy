@@ -1589,7 +1589,18 @@ async function sendMultiple(db, cam, events, type) {
           }
 
           if (_apvSkip) {
-            console.warn(`[AbandonedProductView] Skipping send for ${evt.phone} — cannot build valid payload`);
+            console.warn(`[AbandonedProductView] Skipping send for ${evt.phone} — cannot build valid payload (no product image + no template header)`);
+            // Record as failed so UI shows the issue and ready_to_send clears
+            db.abandoned_cart_executions.push({
+              id: (db.abandoned_cart_executions.length || 0) + 1,
+              campaign_id: cam.id, campaign_name: cam.name,
+              phone: evt.phone, name: evt.name || '',
+              template_id: metaTpl.id, template_name: metaTpl.name,
+              stage: currentStage, language: metaLangCode,
+              status: 'failed', error: 'No product image available and template has no header image',
+              sent_at: new Date().toISOString(), is_meta_template: true,
+            });
+            db.save();
             continue;
           }
         } else if (!metaTpl.is_carousel && (evt.product_name || evt.product_url)) {
@@ -1801,7 +1812,16 @@ async function sendMultiple(db, cam, events, type) {
       // ── PATH B: Old message_templates (type: "text") ───────────────────────
       const templateRecord = db.message_templates.find(t => t.id == templateId);
       if (!templateRecord) {
-        console.warn(`[Automation] Template ${templateId} not found for campaign ${cam.name}, skipping ${evt.phone}`);
+        console.warn(`[Automation] Template ${templateId} not found for campaign "${cam.name}" — skipping ${evt.phone}`);
+        db.abandoned_cart_executions.push({
+          id: (db.abandoned_cart_executions.length || 0) + 1,
+          campaign_id: cam.id, campaign_name: cam.name,
+          phone: evt.phone, name: evt.name || '',
+          template_id: templateId, stage: currentStage,
+          status: 'failed', error: `Template not found or not configured (id: ${templateId || 'none'})`,
+          sent_at: new Date().toISOString(),
+        });
+        db.save();
         continue;
       }
 
@@ -1917,6 +1937,31 @@ async function sendMultiple(db, cam, events, type) {
           db.product_views[pvIdx].followup_count   = currentStage;
           db.product_views[pvIdx].whatsapp_sent_at = new Date().toISOString();
           db.product_views[pvIdx].campaign_id      = cam.id;
+        }
+      }
+
+      // ── Campaign lock for APV PATH B (text template) — matches PATH A lock creation ──
+      if (cam.campaign_type === 'abandoned_product_view') {
+        if (!db.campaign_locks) db.campaign_locks = [];
+        const nowIso = new Date().toISOString();
+        const existingLock = db.campaign_locks.find(l => l.phone === evt.phone && String(l.campaign_id) === String(cam.id));
+        if (!existingLock) {
+          db.campaign_locks.push({
+            id: uuidv4(), channel_id: channelId,
+            phone: evt.phone, campaign_id: cam.id, campaign_type: cam.campaign_type,
+            locked_at: nowIso, reentry_at: null,
+            product_url: evt.product_url || '', product_name: evt.product_name || '',
+            product_price: evt.product_price || '', product_image: evt.product_image || '',
+            stage: currentStage, stage_1_sent_at: currentStage === 1 ? nowIso : null,
+            stage_2_sent_at: currentStage === 2 ? nowIso : null,
+            lock_status: 'active', revenue: 0,
+            last_status_check: nowIso, last_known_status: 'product_view_lock', unlock_reason: null,
+          });
+          console.log(`[Lock/PathB] Created lock for ${evt.phone} — stage ${currentStage}`);
+        } else {
+          existingLock.stage = currentStage;
+          if (currentStage === 1) existingLock.stage_1_sent_at = nowIso;
+          if (currentStage === 2) existingLock.stage_2_sent_at = nowIso;
         }
       }
 

@@ -1230,13 +1230,18 @@ export const campaignsController = {
           const viewRec = latestViewByPhone[c.phone];
           if (viewRec?.product_url && !viewRec.product_url.includes(productSlug)) return null;
           if ((viewRec?.followup_count || 0) >= 2) return null;
-          // minSince must match automation's inactivity check: use last_seen (visitor.visited_at)
-          // so the badge countdown is accurate — automation fires when visited_at is 2+ min old
-          const lastAct = c.last_seen || viewRec?.created_at;
-          const minSince = lastAct ? Math.floor((now - new Date(lastAct).getTime()) / 60000) : null;
+          // Use viewRec.created_at as anchor — matches automation's timer exactly.
+          // visitor.visited_at updates on every page visit, causing display drift.
+          const anchorTime = viewRec?.created_at || c.last_seen;
+          const minSince = anchorTime ? Math.floor((now - new Date(anchorTime).getTime()) / 60000) : null;
           // Ignore product views older than 7 days — they are stale
           if (minSince == null || minSince > MAX_VIEW_AGE_MIN) return null;
           const execs = getExecs(c.phone);
+          const stage1DelayMin = campaign.apv_delay_min != null ? campaign.apv_delay_min : 2;
+          // Compute stage 1 countdown using same anchor as automation
+          const minUntilStage1 = (minSince != null && minSince < stage1DelayMin)
+            ? stage1DelayMin - minSince
+            : 0;
           // Compute stage 2 countdown even for pending users whose stage 1 exec exists
           const s1SentMs = execs.stage1_sent_at ? new Date(execs.stage1_sent_at).getTime() : null;
           const pendingFollowupMs = (campaign.apv_followup_min || 4) * 60 * 1000;
@@ -1244,7 +1249,6 @@ export const campaignsController = {
           const minUntilNext = (s2DueMs && execs.stage1_status === 'sent' && !execs.stage2_sent_at)
             ? Math.max(0, Math.floor((s2DueMs - now) / 60000))
             : null;
-          const stage1DelayMin = campaign.apv_delay_min != null ? campaign.apv_delay_min : 2;
           return {
             phone: c.phone, name: c.name || 'Unknown',
             city: c.city || '', device: c.device || '',
@@ -1260,8 +1264,9 @@ export const campaignsController = {
             followup_count: viewRec?.followup_count || 0,
             minutes_since_activity: minSince,
             minutes_until_next_send: minUntilNext,
+            ready_to_send: minSince >= stage1DelayMin && execs.stage1_status !== 'sent' && execs.stage1_status !== 'failed',
+            minutes_until_stage1: minUntilStage1,
             apv_delay_min: stage1DelayMin,
-            ready_to_send: minSince >= stage1DelayMin && execs.stage1_status !== 'sent',
             is_locked: false,
             last_response_text: null, last_response_at: null,
             stage_1_sent_at: execs.stage1_sent_at, stage_2_sent_at: execs.stage2_sent_at,
