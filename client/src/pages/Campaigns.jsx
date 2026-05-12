@@ -8,6 +8,7 @@ import {
   Flame, Smartphone, Monitor, Repeat, Send, GitBranch, Image,
 } from "lucide-react";
 import { campaignsApi, templatesApi, analyticsApi, visitorsApi } from "../api";
+import { io } from "socket.io-client";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -1967,6 +1968,38 @@ export default function Campaigns() {
     return () => clearInterval(t);
   }, []);
 
+  // liveSendMap: phone → { status:'sending'|'sent'|'failed', stage, wamid, error, ts }
+  const [liveSendMap, setLiveSendMap] = useState({});
+  useEffect(() => {
+    const BASE = import.meta.env.VITE_API_URL || '';
+    const _cid = localStorage.getItem('channelId');
+    const channelId = (_cid && _cid !== 'undefined' && _cid !== 'null') ? _cid : '';
+    const s = io(BASE || 'http://localhost:3005', { query: { channelId }, transports: ['websocket', 'polling'] });
+
+    s.on('apv_sending', (data) => {
+      console.log(`%c[APV] ⚡ SENDING stage-${data.stage} → ${data.phone} | ${data.campaign_name}`, 'color:#4ade80;font-weight:bold');
+      console.log(`%c[APV] Full payload:`, 'color:#818cf8');
+      console.log(JSON.stringify(data.payload, null, 2));
+      setLiveSendMap(m => ({ ...m, [data.phone]: { status: 'sending', stage: data.stage, ts: data.timestamp } }));
+      // After 30s clear the live badge (API result will come via apv_sent/apv_failed)
+      setTimeout(() => setLiveSendMap(m => { const n = { ...m }; if (n[data.phone]?.status === 'sending') delete n[data.phone]; return n; }), 30000);
+    });
+
+    s.on('apv_sent', (data) => {
+      console.log(`%c[APV] ✅ SENT stage-${data.stage} → ${data.phone} | wamid: ${data.wamid}`, 'color:#4ade80;font-weight:bold');
+      setLiveSendMap(m => ({ ...m, [data.phone]: { status: 'sent', stage: data.stage, wamid: data.wamid, ts: data.timestamp } }));
+      // Clear after 5s — audience panel will reload and show ✅ from exec record
+      setTimeout(() => setLiveSendMap(m => { const n = { ...m }; delete n[data.phone]; return n; }), 5000);
+    });
+
+    s.on('apv_failed', (data) => {
+      console.error(`[APV] ❌ FAILED stage-${data.stage} → ${data.phone} | error: ${data.error}`);
+      setLiveSendMap(m => ({ ...m, [data.phone]: { status: 'failed', stage: data.stage, error: data.error, ts: data.timestamp } }));
+    });
+
+    return () => s.disconnect();
+  }, []);
+
   const CH = () => {
     const _cid = localStorage.getItem('channelId');
     const cid = (_cid && _cid !== 'undefined' && _cid !== 'null') ? _cid : '';
@@ -2743,6 +2776,11 @@ export default function Campaigns() {
                       const mUntil = u.minutes_until_next_send;
                       const s1Secs = secsUntil(u.stage1_due_at);
                       const s2Secs = secsUntil(u.stage2_due_at);
+
+                      // Live socket override — shows EXACT moment API call fires
+                      const live = liveSendMap[u.phone];
+                      if (live?.status === 'sending') return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(74,222,128,0.18)', color: '#4ade80', fontWeight: 700 }}>⚡ SENDING NOW — stage {live.stage}</span>;
+                      if (live?.status === 'failed')  return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(239,68,68,0.15)', color: '#f87171' }}>❌ Send failed — {live.error?.slice(0,60)}</span>;
 
                       // PENDING — not yet locked
                       if (u.lock_status === 'pending') {

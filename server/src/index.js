@@ -63,6 +63,9 @@ io.on('connection', (socket) => {
   });
 });
 
+// Make io globally available so automation.js can emit APV send events
+global.io = io;
+
 // Pass io to chat controller
 setChatIo(io);
 

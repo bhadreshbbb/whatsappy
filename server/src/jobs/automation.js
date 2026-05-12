@@ -1541,20 +1541,13 @@ async function sendMultiple(db, cam, events, type, credChannelId) {
       );
       if (failedExec) {
         const retries = failedExec.retry_count || 0;
-        const isAuthError = (failedExec.error || '').includes('401');
-        const ageMs = failedExec.sent_at ? Date.now() - new Date(failedExec.sent_at).getTime() : 0;
-        // 401 errors: allow retry after 10 minutes (credentials may have been fixed)
-        if (retries >= 3 && !(isAuthError && ageMs > 10 * 60 * 1000)) {
-          console.log(`[Retry] Skipping ${evt.phone} stage ${currentStage} — max retries (${retries}) reached`);
+        if (retries >= 3) {
+          console.log(`[Retry] Skipping ${evt.phone} stage ${currentStage} — max retries (${retries}) reached. Error was: ${failedExec.error}`);
           continue;
         }
-        if (isAuthError && ageMs <= 10 * 60 * 1000) {
-          console.log(`[Retry] Skipping ${evt.phone} stage ${currentStage} — 401 auth error, retry after 10m (${Math.round(ageMs/60000)}m ago)`);
-          continue;
-        }
-        _retryCount = isAuthError ? 0 : retries + 1; // reset count on auth-error retry (fresh start)
+        _retryCount = retries + 1;
         db.abandoned_cart_executions.splice(db.abandoned_cart_executions.indexOf(failedExec), 1);
-        console.log(`[Retry] Attempt ${_retryCount} for stage ${currentStage} of ${cam.name} → ${evt.phone}`);
+        console.log(`[Retry] Attempt ${_retryCount}/3 for stage ${currentStage} of ${cam.name} → ${evt.phone} (prev error: ${failedExec.error?.slice(0, 80)})`);
       }
 
       // ── TEMPLATE SELECTION (4-stage array & infinite loop support) ──
@@ -1810,6 +1803,16 @@ async function sendMultiple(db, cam, events, type, credChannelId) {
         console.log(JSON.stringify(sendPayload, null, 2));
         console.log('╚══════════════════════════════════════════════════════════════╝\n');
 
+        // Emit real-time event to browser — fires the EXACT moment API call is made
+        if (global.io) {
+          global.io.emit('apv_sending', {
+            phone: evt.phone, name: evt.name || '',
+            campaign_id: cam.id, campaign_name: cam.name,
+            stage: currentStage, channel_id: channelId,
+            payload: sendPayload, timestamp: new Date().toISOString(),
+          });
+        }
+
         let sendResult;
         try {
           sendResult = await whatsappService.sendTemplateMessage(evt.phone, sendPayload, channelId);
@@ -1827,6 +1830,12 @@ async function sendMultiple(db, cam, events, type, credChannelId) {
             sent_at: failedAt, is_meta_template: true,
             payload_sent: JSON.stringify(sendPayload),
           });
+          if (global.io) {
+            global.io.emit('apv_failed', {
+              phone: evt.phone, campaign_id: cam.id, campaign_name: cam.name,
+              stage: currentStage, error: sendErr.message, timestamp: failedAt,
+            });
+          }
           // Keep lock at stage=0 — apvQuickCheck retries every 15s automatically
           db.save();
           continue;
@@ -1956,6 +1965,15 @@ async function sendMultiple(db, cam, events, type, credChannelId) {
               console.log(`[APV Stage 2] ${evt.phone} → product_recommendation — campaign "${cam.name}"`);
             }
           }
+        }
+
+        // Emit success event so browser console shows wamid
+        if (global.io) {
+          global.io.emit('apv_sent', {
+            phone: evt.phone, campaign_id: cam.id, campaign_name: cam.name,
+            stage: currentStage, wamid: sendResult?.messageId,
+            timestamp: new Date().toISOString(),
+          });
         }
 
         cam.total_sent = (cam.total_sent || 0) + 1;
