@@ -95,12 +95,51 @@ router.post('/sync-catalog', async (req, res, next) => {
   }
 });
 
-router.post('/test-whatsapp', (req, res, next) => {
+router.post('/test-whatsapp', async (req, res, next) => {
   try {
-    const { phone } = req.body;
-    if (!phone) return res.status(400).json({ error: 'Phone number required' });
-    // Mock test — real integration would call Meta API here
-    res.json({ success: true, message: `Test message sent to ${phone}` });
+    const db = getDb();
+    const channelId = req.headers['x-channel-id'] || '';
+    const row = db.channel_settings.find(s => s.channel_id === channelId);
+    const s = JSON.parse(row?.settings || '{}');
+
+    const token   = s.whatsapp_token   || process.env.WHATSAPP_TOKEN;
+    const phoneId = s.whatsapp_phone_id || process.env.WHATSAPP_PHONE_ID;
+
+    if (!token || !phoneId) {
+      return res.json({ success: false, error: 'WhatsApp token or Phone ID not configured in Settings' });
+    }
+
+    // Verify credentials by fetching phone number info from Meta
+    const url = `https://graph.facebook.com/v25.0/${phoneId}?fields=verified_name,display_phone_number,quality_rating,status`;
+    const metaRes = await fetch(url, {
+      headers: { Authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(10000),
+    });
+    const data = await metaRes.json();
+
+    if (!metaRes.ok) {
+      return res.json({
+        success: false,
+        error: `Meta API error ${metaRes.status}: ${JSON.stringify(data?.error || data)}`,
+        hint: data?.error?.code === 190
+          ? 'Token is expired or invalid. Regenerate it from Meta Business Manager → System Users.'
+          : data?.error?.code === 100
+          ? 'Phone Number ID is wrong. Use the numeric ID from Meta Developer Console, not the display number.'
+          : null,
+        phone_id_used: phoneId,
+        token_prefix: token.substring(0, 12) + '...',
+      });
+    }
+
+    res.json({
+      success: true,
+      verified_name: data.verified_name,
+      display_phone_number: data.display_phone_number,
+      quality_rating: data.quality_rating,
+      status: data.status,
+      phone_id_used: phoneId,
+      token_prefix: token.substring(0, 12) + '...',
+    });
   } catch (error) {
     next(error);
   }
