@@ -1230,9 +1230,14 @@ export const campaignsController = {
           const viewRec = latestViewByPhone[c.phone];
           if (viewRec?.product_url && !viewRec.product_url.includes(productSlug)) return null;
           if ((viewRec?.followup_count || 0) >= 2) return null;
-          // Use viewRec.created_at as anchor — matches automation's timer exactly.
-          // visitor.visited_at updates on every page visit, causing display drift.
-          const anchorTime = viewRec?.created_at || c.last_seen;
+          // Timer anchor: if the product was viewed BEFORE this campaign existed,
+          // the delay starts from campaign creation (user entered campaign then),
+          // not from the old view time. Matches automation safety-net logic.
+          const rawAnchor = viewRec?.created_at || c.last_seen;
+          const campaignCreatedAt = campaign.created_at || null;
+          const anchorTime = (rawAnchor && campaignCreatedAt && new Date(rawAnchor) < new Date(campaignCreatedAt))
+            ? campaignCreatedAt
+            : rawAnchor;
           const minSince = anchorTime ? Math.floor((now - new Date(anchorTime).getTime()) / 60000) : null;
           // Ignore product views older than 7 days — they are stale
           if (minSince == null || minSince > MAX_VIEW_AGE_MIN) return null;
