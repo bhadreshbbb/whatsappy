@@ -14,56 +14,50 @@ import { getDb } from './database.js';
 function getCredentials(channelId = null) {
   try {
     const db = getDb();
-    // Channel-specific DB settings take priority — always try the exact channel first
     const rows = db.channel_settings || [];
-    const channelRow = channelId
-      ? rows.find(s => s.channel_id === channelId)
-      : null;
-    if (channelRow) {
-      const s = JSON.parse(channelRow.settings || '{}');
-      if (s?.whatsapp_token && s?.whatsapp_phone_id) {
-        console.log(`[Creds] Using DB settings for channel="${channelId}" phoneId="${s.whatsapp_phone_id}" token="${s.whatsapp_token.substring(0,10)}..."`);
-        return { token: s.whatsapp_token, phoneId: s.whatsapp_phone_id, appId: s.whatsapp_app_id || null };
+
+    // 1. Try exact channel from DB first
+    if (channelId && channelId !== 'demo' && channelId !== '') {
+      const row = rows.find(s => s.channel_id === channelId);
+      if (row) {
+        const s = JSON.parse(row.settings || '{}');
+        if (s?.whatsapp_token && s?.whatsapp_phone_id) {
+          console.log(`[Creds] DB channel="${channelId}" phoneId="${s.whatsapp_phone_id}"`);
+          return { token: s.whatsapp_token, phoneId: s.whatsapp_phone_id, appId: s.whatsapp_app_id || null };
+        }
       }
-      console.warn(`[Creds] Channel "${channelId}" found in DB but whatsapp_token/phone_id missing`);
-    } else {
-      console.warn(`[Creds] Channel "${channelId}" NOT found in DB — available: [${(rows || []).map(r => r.channel_id).join(', ')}]`);
+    }
+
+    // 2. Search all non-demo channels — pick the most complete one (has appId = most fully set up)
+    const candidates = [];
+    for (const row of rows) {
+      if (row.channel_id === 'demo') continue;
+      try {
+        const s = JSON.parse(row.settings || '{}');
+        if (s?.whatsapp_token && s?.whatsapp_phone_id) {
+          candidates.push({ cid: row.channel_id, token: s.whatsapp_token, phoneId: s.whatsapp_phone_id, appId: s.whatsapp_app_id || null });
+        }
+      } catch (_) {}
+    }
+    if (candidates.length > 0) {
+      const best = candidates.find(c => c.appId) || candidates[candidates.length - 1];
+      console.log(`[Creds] Best-match channel="${best.cid}" (requested="${channelId}") phoneId="${best.phoneId}"`);
+      return { token: best.token, phoneId: best.phoneId, appId: best.appId };
     }
   } catch (e) {
     console.error('[Creds] DB read error:', e.message);
   }
 
-  // Env vars fallback (used when no DB settings for this channel)
+  // 3. Env vars — last resort only (for local dev / initial setup)
   const token   = process.env.WHATSAPP_TOKEN;
   const phoneId = process.env.WHATSAPP_PHONE_ID;
   const appId   = process.env.WHATSAPP_APP_ID;
   if (token && phoneId) {
-    console.warn(`[Creds] Falling back to ENV vars — phoneId="${phoneId}" token="${token.substring(0,10)}..."`);
+    console.warn(`[Creds] ENV vars fallback — phoneId="${phoneId}"`);
     return { token, phoneId, appId: appId || null };
   }
 
-  try {
-    const db = getDb();
-    // Last resort: pick the most complete non-demo channel (has appId = most fully set up)
-    const rows = db.channel_settings || [];
-    const candidates = [];
-    for (const row of rows) {
-      if (row.channel_id === 'demo') continue;
-      try {
-        const s = JSON.parse(row?.settings || '{}');
-        if (s?.whatsapp_token && s?.whatsapp_phone_id) {
-          candidates.push({ channelId: row.channel_id, token: s.whatsapp_token, phoneId: s.whatsapp_phone_id, appId: s.whatsapp_app_id || null });
-        }
-      } catch (_) {}
-    }
-    if (candidates.length > 0) {
-      // Prefer channel with appId (most complete setup); otherwise last in list (most recently added)
-      const best = candidates.find(c => c.appId) || candidates[candidates.length - 1];
-      console.warn(`[Creds] Last resort — using channel="${best.channelId}" (requested="${channelId}") phoneId="${best.phoneId}"`);
-      return { token: best.token, phoneId: best.phoneId, appId: best.appId };
-    }
-  } catch (_) {}
-  console.error(`[Creds] No credentials found for channelId="${channelId}" — simulation mode`);
+  console.error(`[Creds] No credentials found — simulation mode`);
   return null;
 }
 
