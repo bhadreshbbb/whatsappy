@@ -87,6 +87,28 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
+// ── ONE-TIME: clear all contact/visitor data (remove after use) ─────────────
+app.post('/api/__clear_contacts', async (req, res) => {
+  if (req.headers['x-clear-secret'] !== 'trk-clear-2025-abc') {
+    return res.status(403).json({ error: 'forbidden' });
+  }
+  const COLS = [
+    'website_visitors', 'cart_events', 'purchase_history', 'page_views',
+    'product_views', 'searches', 'custom_events', 'chat_conversations',
+    'chat_messages', 'abandoned_cart_executions', 'campaign_locks',
+  ];
+  const db = getDb();
+  const results = {};
+  for (const col of COLS) {
+    const before = (db[col] || []).length;
+    db[col] = [];
+    results[col] = before;
+  }
+  db.save();
+  console.log('[Admin] Contact data cleared:', results);
+  res.json({ success: true, cleared: results });
+});
+
 // Public routes — no auth required
 app.use('/api/auth',     authRoutes);
 app.use('/api/tracking', trackingRoutes);          // pixel — called by website visitors
