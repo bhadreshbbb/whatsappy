@@ -389,6 +389,77 @@ async function checkLockedUsers() {
   if (changed) db.save();
 }
 
+/**
+ * APV Quick Check — runs every 15 seconds.
+ * Fires stage-1 and stage-2 messages for APV locks whose delay has expired.
+ * Works directly from campaign_locks — bypasses all visitor channel_id filtering
+ * so multi-login channel_id mismatches can never block message delivery.
+ */
+async function apvQuickCheck() {
+  const db = getDb();
+  const channelId = getPrimaryChannelId(db);
+  const now = Date.now();
+
+  const apvCampaigns = (db.abandoned_cart_campaigns || []).filter(c =>
+    c.is_active && c.campaign_type === 'abandoned_product_view'
+  );
+  if (apvCampaigns.length === 0) return;
+
+  for (const cam of apvCampaigns) {
+    const STAGE1_DELAY_MS = (cam.apv_delay_min  != null ? cam.apv_delay_min  : 2) * 60 * 1000;
+    const STAGE2_GAP_MS   = (cam.apv_followup_min != null ? cam.apv_followup_min : 4) * 60 * 1000;
+
+    const buildEvent = (l) => {
+      const visitor = (db.website_visitors || []).find(v => v.phone === l.phone);
+      const viewRec = (db.product_views  || [])
+        .filter(v => v.phone === l.phone)
+        .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
+      return {
+        phone:         l.phone,
+        name:          visitor?.name || '',
+        product_name:  l.product_name  || viewRec?.product_name  || '',
+        product_image: l.product_image || viewRec?.product_image || '',
+        product_url:   l.product_url   || viewRec?.product_url   || '',
+        product_price: l.product_price || viewRec?.product_price || '',
+        followup_count: 0,       // overridden per stage below
+        whatsapp_sent:  0,       // overridden per stage below
+        whatsapp_sent_at: null,  // overridden per stage below
+        _lock: l, _viewRec: viewRec, _visitor: visitor,
+      };
+    };
+
+    // ── Stage 1: locks at stage=0 whose delay has expired ──────────────────
+    const stage1Locks = (db.campaign_locks || []).filter(l => {
+      if (String(l.campaign_id) !== String(cam.id) || l.lock_status !== 'active') return false;
+      if ((l.stage || 0) !== 0) return false;
+      const anchor = l.reentry_at || l.locked_at;
+      return anchor && (now - new Date(anchor).getTime()) >= STAGE1_DELAY_MS;
+    });
+
+    if (stage1Locks.length > 0) {
+      console.log(`[APV Quick] "${cam.name}" stage 1 — ${stage1Locks.length} overdue lock(s)`);
+      const events = stage1Locks.map(l => ({ ...buildEvent(l), followup_count: 0, whatsapp_sent: 0 }));
+      await sendMultiple(db, cam, events, 'view', channelId);
+    }
+
+    // ── Stage 2: locks at stage=1 whose follow-up gap has passed ───────────
+    const stage2Locks = (db.campaign_locks || []).filter(l => {
+      if (String(l.campaign_id) !== String(cam.id) || l.lock_status !== 'active') return false;
+      if (l.stage !== 1 || !l.stage_1_sent_at) return false;
+      return (now - new Date(l.stage_1_sent_at).getTime()) >= STAGE2_GAP_MS;
+    });
+
+    if (stage2Locks.length > 0) {
+      console.log(`[APV Quick] "${cam.name}" stage 2 — ${stage2Locks.length} overdue lock(s)`);
+      const events = stage2Locks.map(l => ({
+        ...buildEvent(l),
+        followup_count: 1, whatsapp_sent: 1, whatsapp_sent_at: l.stage_1_sent_at,
+      }));
+      await sendMultiple(db, cam, events, 'view', channelId);
+    }
+  }
+}
+
 export function startAutomation() {
   console.log('Starting automation engine...');
 
@@ -516,6 +587,14 @@ export function startAutomation() {
   lockCheckInterval = setInterval(() => {
     checkLockedUsers().catch(err => console.error('[LockCheck] Error:', err));
   }, 60 * 1000);
+
+  // APV quick fire — every 15 seconds: send APV messages the instant their delay expires
+  // Works directly from campaign_locks → no channel_id filtering → no missed sends
+  setInterval(() => {
+    apvQuickCheck().catch(err => console.error('[APVQuick] Error:', err));
+  }, 15 * 1000);
+  // Fire immediately on startup too
+  apvQuickCheck().catch(err => console.error('[APVQuick] Initial error:', err));
 
   // Check pending template statuses immediately on startup
   autoRefreshPendingStatuses().catch(err => console.error('[TemplateStatus] Initial error:', err));
@@ -1703,10 +1782,7 @@ async function sendMultiple(db, cam, events, type, credChannelId) {
             status: 'failed', error: `Payload build failed: ${buildErr.message}`,
             retry_count: _retryCount, sent_at: failedAt, is_meta_template: true,
           });
-          if (cam.campaign_type === 'abandoned_product_view' && currentStage === 1) {
-            const apvLock = (db.campaign_locks || []).find(l => l.phone === evt.phone && String(l.campaign_id) === String(cam.id));
-            if (apvLock && apvLock.stage === 0) { apvLock.stage = 1; apvLock.stage_1_sent_at = failedAt; }
-          }
+          // Keep lock at stage=0 so apvQuickCheck can retry every 15s
           db.save();
           continue;
         }
@@ -1746,34 +1822,7 @@ async function sendMultiple(db, cam, events, type, credChannelId) {
             sent_at: failedAt, is_meta_template: true,
             payload_sent: JSON.stringify(sendPayload),
           });
-          // APV stage 1 failure: advance lock so stage 2 still fires after followup delay,
-          // and the failed exec is visible (matched by stage_1_sent_at timestamp).
-          if (cam.campaign_type === 'abandoned_product_view' && currentStage === 1) {
-            if (!db.campaign_locks) db.campaign_locks = [];
-            const apvLock = db.campaign_locks.find(l =>
-              l.phone === evt.phone && String(l.campaign_id) === String(cam.id)
-            );
-            if (apvLock) {
-              if (apvLock.stage === 0) {
-                apvLock.stage = 1;
-                apvLock.stage_1_sent_at = failedAt;
-                console.log(`[APV] Stage 1 failed → lock advanced to stage 1, stage 2 queued after delay`);
-              }
-            } else {
-              db.campaign_locks.push({
-                id: uuidv4(), channel_id: channelId,
-                phone: evt.phone, campaign_id: cam.id, campaign_type: cam.campaign_type,
-                locked_at: failedAt, reentry_at: null,
-                product_url: evt.product_url || '', product_name: evt.product_name || '',
-                product_price: evt.product_price || '', product_image: evt.product_image || '',
-                stage: 1, stage_1_sent_at: failedAt, stage_2_sent_at: null,
-                lock_status: 'active', revenue: 0,
-                last_status_check: failedAt, last_known_status: 'product_view_lock',
-                unlock_reason: null,
-              });
-              console.log(`[APV] Stage 1 failed → lock created at stage 1, stage 2 queued after delay`);
-            }
-          }
+          // Keep lock at stage=0 — apvQuickCheck retries every 15s automatically
           db.save();
           continue;
         }
@@ -2115,16 +2164,7 @@ async function sendMultiple(db, cam, events, type, credChannelId) {
             status: 'failed', error: e.message || 'Unexpected error in automation',
             sent_at: failedAt,
           });
-          // APV: advance lock to stage 1 so the green badge clears
-          if (cam.campaign_type === 'abandoned_product_view' && fallbackStage === 1) {
-            const apvLock = (db.campaign_locks || []).find(l =>
-              l.phone === evt.phone && String(l.campaign_id) === String(cam.id)
-            );
-            if (apvLock && apvLock.stage === 0) {
-              apvLock.stage = 1;
-              apvLock.stage_1_sent_at = failedAt;
-            }
-          }
+          // Keep lock at stage=0 — apvQuickCheck retries every 15s
           db.save();
         }
       } catch (_) {}

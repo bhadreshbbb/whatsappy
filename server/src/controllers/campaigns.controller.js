@@ -1367,6 +1367,7 @@ export const campaignsController = {
             is_locked: false,
             last_response_text: null, last_response_at: null,
             stage_1_sent_at: execs.stage1_sent_at, stage_2_sent_at: execs.stage2_sent_at,
+            stage1_due_at: anchorTime ? new Date(new Date(anchorTime).getTime() + stage1DelayMin * 60 * 1000).toISOString() : null,
             stage2_due_at: s2DueMs ? new Date(s2DueMs).toISOString() : null,
             ...execs,
           };

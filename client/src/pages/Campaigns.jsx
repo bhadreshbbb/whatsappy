@@ -293,6 +293,13 @@ function CreateModal({ onClose, onCreated }) {
   const [translatedTpl, setTranslatedTpl] = useState(null);
   const [validationErr, setValidationErr] = useState("");
 
+  // ── Live per-second ticker for countdown badges ───────────────────────────
+  const [tickNow, setTickNow] = useState(Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setTickNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, []);
+
   // ── Audience filters (same as Custom campaign) ────────────────────────────
   const [showFilters, setShowFilters] = useState(false);
   const [contacts, setContacts]       = useState([]);
@@ -2718,27 +2725,40 @@ export default function Campaigns() {
                       return `${Math.floor(min / 60)}h ${min % 60}m`;
                     };
 
+                    // Live seconds countdown from an ISO timestamp
+                    const secsUntil = (isoTs) => {
+                      if (!isoTs) return null;
+                      return Math.max(0, Math.ceil((new Date(isoTs).getTime() - tickNow) / 1000));
+                    };
+                    const fmtSecs = (secs) => {
+                      if (secs == null) return '—';
+                      if (secs <= 0) return '⚡ sending now';
+                      if (secs < 60) return `${secs}s`;
+                      const m = Math.floor(secs / 60), s = secs % 60;
+                      return `${m}m ${s}s`;
+                    };
+
                     const lockBadge = (u) => {
                       const mAgo = u.minutes_since_activity;
                       const mUntil = u.minutes_until_next_send;
+                      const s1Secs = secsUntil(u.stage1_due_at);
+                      const s2Secs = secsUntil(u.stage2_due_at);
 
-                      // PENDING — not yet locked (or lock not yet created), check execution records for real state
+                      // PENDING — not yet locked
                       if (u.lock_status === 'pending') {
                         if (u.stage1_status === 'failed') {
-                          return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(239,68,68,0.15)', color: '#f87171' }}>❌ 1st msg failed · retrying...</span>;
+                          const retries = u.stage1_retry_count || 0;
+                          const errMsg = u.stage1_error ? u.stage1_error.replace('Meta API error 401: ','').slice(0,50) : 'Send failed';
+                          return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(239,68,68,0.15)', color: '#f87171' }}>❌ {retries >= 3 ? 'Max retries' : `Retry ${retries}/3`} — {errMsg}</span>;
                         }
                         if (u.stage1_status === 'sent') {
-                          // Stage 1 sent, lock creation may have lagged — show stage 2 countdown
-                          if (mUntil === 0) return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(74,222,128,0.12)', color: '#4ade80' }}>✅ 1st sent · 🟢 2nd sending ≤60s</span>;
-                          if (mUntil != null) return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(99,102,241,0.1)', color: '#818cf8' }}>✅ 1st sent · 2nd in {fmtCountdown(mUntil)}</span>;
+                          if (s2Secs != null && s2Secs <= 0) return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(74,222,128,0.12)', color: '#4ade80' }}>✅ 1st sent · ⚡ 2nd sending</span>;
+                          if (s2Secs != null) return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(99,102,241,0.1)', color: '#818cf8' }}>✅ 1st sent · 2nd in {fmtSecs(s2Secs)}</span>;
                           return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(74,222,128,0.15)', color: '#4ade80' }}>✅ 1st sent</span>;
                         }
-                        if (u.ready_to_send) {
-                          return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(74,222,128,0.12)', color: '#4ade80' }}>🟢 1st msg sending ≤60s</span>;
-                        }
-                        const waitLeft = mAgo != null ? Math.max(0, (u.apv_delay_min || 2) - mAgo) : null;
+                        if (u.ready_to_send) return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(74,222,128,0.12)', color: '#4ade80' }}>⚡ Sending now…</span>;
                         return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(100,116,139,0.1)', color: '#64748b' }}>
-                          ⏳ 1st msg in {waitLeft != null ? `${waitLeft}m` : '…'}
+                          ⏳ 1st msg in {s1Secs != null ? fmtSecs(s1Secs) : '…'}
                         </span>;
                       }
 
@@ -2747,22 +2767,21 @@ export default function Campaigns() {
                         if (u.stage === 0) {
                           if (u.stage1_status === 'failed') {
                             const retries = u.stage1_retry_count || 0;
-                            const errMsg = u.stage1_error ? u.stage1_error.replace('Meta API error 401: ','').slice(0,60) : 'Send failed';
+                            const errMsg = u.stage1_error ? u.stage1_error.replace('Meta API error 401: ','').slice(0,50) : 'Send failed';
                             return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(239,68,68,0.15)', color: '#f87171' }}>
-                              ❌ {retries >= 3 ? 'Failed (max retries)' : `Failed · retry ${retries}/3`} — {errMsg}
+                              ❌ {retries >= 3 ? 'Max retries — fix credentials' : `Retrying (${retries}/3)`} — {errMsg}
                             </span>;
                           }
-                          if (u.ready_to_send) return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(74,222,128,0.12)', color: '#4ade80' }}>🟢 1st msg sending ≤60s</span>;
-                          const waitLeft = u.minutes_until_stage1 != null ? u.minutes_until_stage1
-                            : (mAgo != null ? Math.max(0, (u.apv_delay_min || 2) - mAgo) : null);
+                          if (u.ready_to_send || (s1Secs != null && s1Secs <= 0)) return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(74,222,128,0.12)', color: '#4ade80' }}>⚡ Sending now…</span>;
                           return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(251,191,36,0.1)', color: '#fbbf24' }}>
-                            ⏳ 1st msg in {waitLeft != null ? fmtCountdown(waitLeft) : '…'}
+                            ⏳ 1st msg in {s1Secs != null ? fmtSecs(s1Secs) : (u.minutes_until_stage1 != null ? fmtCountdown(u.minutes_until_stage1) : '…')}
                           </span>;
                         }
                         if (u.stage === 1) {
                           const s1Label = u.stage1_status === 'failed' ? '❌ 1st failed' : '✅ 1st sent';
                           if (u.stage2_status === 'failed') return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(239,68,68,0.15)', color: '#f87171' }}>{s1Label} · ❌ 2nd failed</span>;
-                          if (mUntil === 0) return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(74,222,128,0.12)', color: '#4ade80' }}>{s1Label} · 🟢 2nd sending ≤60s</span>;
+                          if (s2Secs != null && s2Secs <= 0) return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(74,222,128,0.12)', color: '#4ade80' }}>{s1Label} · ⚡ 2nd sending</span>;
+                          if (s2Secs != null) return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(99,102,241,0.1)', color: '#818cf8' }}>{s1Label} · 2nd in {fmtSecs(s2Secs)}</span>;
                           return <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(99,102,241,0.1)', color: '#818cf8' }}>
                             {s1Label} · 2nd in {fmtCountdown(mUntil)}
                           </span>;
