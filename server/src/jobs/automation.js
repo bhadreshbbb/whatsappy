@@ -2158,6 +2158,15 @@ async function sendMultiple(db, cam, events, type, credChannelId) {
         console.log(`[Lang] Translating to ${userLang} for ${evt.phone} (${evt.name || 'user'})`);
       }
 
+      if (global.io) {
+        global.io.emit('apv_sending', {
+          phone: evt.phone, name: evt.name || '',
+          campaign_id: cam.id, campaign_name: cam.name,
+          stage: currentStage, channel_id: channelId,
+          timestamp: new Date().toISOString(),
+        });
+      }
+
       const sendResult = await whatsappService.sendMessage(evt.phone, components, variables, channelId);
 
       // ── SAVE TO CHAT INBOX (live update) ──
@@ -2186,6 +2195,14 @@ async function sendMultiple(db, cam, events, type, credChannelId) {
         product_image: variables.product_image || ''
       });
       if (_execStatus === 'failed') { db.save(); continue; }
+
+      if (global.io) {
+        global.io.emit('apv_sent', {
+          phone: evt.phone, campaign_id: cam.id, campaign_name: cam.name,
+          stage: currentStage, wamid: sendResult?.messageId,
+          timestamp: new Date().toISOString(),
+        });
+      }
 
       // ── UPDATE EVENT STATE ──
       if (type === 'upsell') {
