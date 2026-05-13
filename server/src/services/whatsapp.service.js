@@ -188,7 +188,7 @@ export const whatsappService = {
           console.log(`[WhatsApp] Template "${tplName}" (${langCode}) → ${to} via channel "${creds.channelId}"`);
           const result = await callMetaApi(creds.phoneId, creds.token, body);
           console.log(`[WhatsApp] ✓ Template sent wamid: ${result.wamid}`);
-          return { messageId: result.wamid, resolvedText: `[Carousel: ${tplName}]`, wamid: result.wamid };
+          return { messageId: result.wamid, resolvedText: `[Carousel: ${tplName}]`, wamid: result.wamid, metaResponse: result.raw, sentPayload: body };
         } catch (err) {
           lastErr = err;
           if (err.message.includes('401')) {

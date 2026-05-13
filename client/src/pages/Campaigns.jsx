@@ -2016,6 +2016,12 @@ export default function Campaigns() {
         `%c[APV ✅ SENT]  +${data.phone}  stage-${data.stage}  wamid=${data.wamid}  cam="${data.campaign_name}"`,
         'color:#4ade80;font-weight:bold;font-size:12px'
       );
+      if (data.payload) {
+        console.log('%cMeta API Payload:', 'color:#818cf8;font-weight:bold', data.payload);
+      }
+      if (data.meta_response) {
+        console.log('%c✓ wamid:', 'color:#4ade80;font-weight:bold', data.wamid, '\nFull Meta Response →', data.meta_response);
+      }
       setLiveSendMap(m => ({ ...m, [data.phone]: { status: 'sent', stage: data.stage, wamid: data.wamid, ts: data.timestamp } }));
       setTimeout(() => setLiveSendMap(m => { const n = { ...m }; delete n[data.phone]; return n; }), 5000);
       // Refresh audience panel immediately so lock status updates without waiting 20s

@@ -478,12 +478,13 @@ async function apvQuickCheck() {
       return passed;
     });
 
-    dbg('3. STAGE1 OVERDUE', `${stage1Locks.length} lock(s) ready → calling sendMultiple`);
-
     if (stage1Locks.length > 0) {
+      dbg('3. STAGE1 OVERDUE', `${stage1Locks.length} lock(s) ready → calling sendMultiple`);
       console.log(`[APV Quick] "${cam.name}" stage 1 — ${stage1Locks.length} overdue lock(s)`);
       const events = stage1Locks.map(l => ({ ...buildEvent(l), followup_count: 0, whatsapp_sent: 0 }));
       await sendMultiple(db, cam, events, 'view', channelId);
+    } else {
+      dbg('3. STAGE1 OVERDUE', '0 lock(s) ready — nothing to send');
     }
 
     // ── Stage 2: locks at stage=1 whose follow-up gap has passed ───────────
@@ -2067,11 +2068,13 @@ async function sendMultiple(db, cam, events, type, credChannelId) {
           }
         }
 
-        // Emit success event so browser console shows wamid
+        // Emit success event so browser console shows full payload + Meta response
         if (global.io) {
           global.io.emit('apv_sent', {
             phone: evt.phone, campaign_id: cam.id, campaign_name: cam.name,
             stage: currentStage, wamid: sendResult?.messageId,
+            payload: sendResult?.sentPayload || sendPayload,
+            meta_response: sendResult?.metaResponse || null,
             timestamp: new Date().toISOString(),
           });
         }
@@ -2211,6 +2214,8 @@ async function sendMultiple(db, cam, events, type, credChannelId) {
         global.io.emit('apv_sent', {
           phone: evt.phone, campaign_id: cam.id, campaign_name: cam.name,
           stage: currentStage, wamid: sendResult?.messageId,
+          payload: sendResult?.sentPayload || null,
+          meta_response: sendResult?.metaResponse || null,
           timestamp: new Date().toISOString(),
         });
       }
