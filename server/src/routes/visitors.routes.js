@@ -99,26 +99,32 @@ router.delete('/cleanup-phone/:phone', (req, res) => {
       'order_responses', 'searches', 'custom_events', 'user_sessions',
     ];
 
+    // splice in-place so the actual in-memory array (held by database.js) is mutated,
+    // not just a local reassignment that getDb()'s returned object reference would miss
+    const spliceByPhone = (arr, matchFn) => {
+      let n = 0;
+      for (let i = arr.length - 1; i >= 0; i--) {
+        if (matchFn(arr[i])) { arr.splice(i, 1); n++; }
+      }
+      return n;
+    };
+
     const counts = {};
     for (const table of TABLES) {
       if (!Array.isArray(db[table])) continue;
-      const before = db[table].length;
-      db[table] = db[table].filter(r => !phones.includes(r.phone));
-      const deleted = before - db[table].length;
-      if (deleted > 0) counts[table] = deleted;
+      const n = spliceByPhone(db[table], r => phones.includes(r.phone));
+      if (n > 0) counts[table] = n;
     }
 
     // chat_messages — also check from/to/conversation_id
     if (Array.isArray(db.chat_messages)) {
-      const before = db.chat_messages.length;
-      db.chat_messages = db.chat_messages.filter(r =>
-        !phones.includes(r.phone) &&
-        !phones.includes(r.from) &&
-        !phones.includes(r.to) &&
-        !phones.includes(r.conversation_id)
+      const n = spliceByPhone(db.chat_messages, r =>
+        phones.includes(r.phone) ||
+        phones.includes(r.from) ||
+        phones.includes(r.to) ||
+        phones.includes(r.conversation_id)
       );
-      const deleted = before - db.chat_messages.length;
-      if (deleted > 0) counts.chat_messages = deleted;
+      if (n > 0) counts.chat_messages = n;
     }
 
     db.save();
