@@ -459,7 +459,7 @@ export const trackingController = {
               // Without this, the timer continues from the original view time — so if 2 of 3
               // mins already elapsed before cart-add, only 1 min would remain after cart-clear.
               const hasActiveAPVCamp = phone && (db.abandoned_cart_campaigns || []).some(c =>
-                c.channel_id === cid && c.campaign_type === 'abandoned_product_view' && c.is_active
+                c.campaign_type === 'abandoned_product_view' && c.is_active && c.channel_id !== 'demo'
               );
               if (hasActiveAPVCamp) {
                 // Reset product_view timestamps → FLOW 2b timer anchor becomes NOW
@@ -850,7 +850,7 @@ export const trackingController = {
           // If an active APV campaign exists, immediately set product_view_lock on the
           // main status — no 60-second wait for the automation loop to claim the user.
           const hasActiveAPV = (db.abandoned_cart_campaigns || []).some(c =>
-            c.channel_id === cid && c.campaign_type === 'abandoned_product_view' && c.is_active
+            c.campaign_type === 'abandoned_product_view' && c.is_active && c.channel_id !== 'demo'
           );
 
           if (hasActiveAPV) {
@@ -864,7 +864,7 @@ export const trackingController = {
             // Also check if this phone has a lock that completed (shifted_recommendation with stage=2)
             const completedLock = v.phone
               ? (db.campaign_locks || []).find(l =>
-                  l.phone === v.phone && l.channel_id === cid &&
+                  l.phone === v.phone &&
                   l.campaign_type === 'abandoned_product_view' &&
                   (l.lock_status === 'shifted_recommendation' || (l.lock_status === 'active' && l.stage >= 2)))
               : null;
@@ -873,7 +873,7 @@ export const trackingController = {
             // 'active' for the new session so the checks above miss this case.
             const inProgressLock = v.phone
               ? (db.campaign_locks || []).find(l =>
-                  l.phone === v.phone && l.channel_id === cid &&
+                  l.phone === v.phone &&
                   l.campaign_type === 'abandoned_product_view' &&
                   l.lock_status === 'active' && l.stage >= 1)
               : null;
@@ -891,7 +891,7 @@ export const trackingController = {
             if (isReentry && v.phone) {
               // Find the active APV lock for this phone (any resettable status)
               const apvLock = (db.campaign_locks || []).find(l =>
-                l.phone === v.phone && l.channel_id === cid &&
+                l.phone === v.phone &&
                 l.campaign_type === 'abandoned_product_view' &&
                 ['active', 'shifted_recommendation'].includes(l.lock_status)
               );
@@ -1029,7 +1029,7 @@ export const trackingController = {
         // ── CREATE visitor on-the-fly when product event arrives before trackVisitor ──
         const now = new Date().toISOString();
         const hasActiveAPV = (db.abandoned_cart_campaigns || []).some(c =>
-          c.channel_id === cid && c.campaign_type === 'abandoned_product_view' && c.is_active
+          c.campaign_type === 'abandoned_product_view' && c.is_active && c.channel_id !== 'demo'
         );
         db.website_visitors.push({
           id:           (db.website_visitors.length || 0) + 1,

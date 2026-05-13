@@ -14,6 +14,16 @@ let templateStatusInterval;
 let lockCheckInterval;
 let _productCycleOffset = 0;
 
+// Returns true if the given channelId has valid WhatsApp credentials in channel_settings.
+function hasValidCredentials(db, channelId) {
+  const row = (db.channel_settings || []).find(r => r.channel_id === channelId);
+  if (!row) return false;
+  try {
+    const s = JSON.parse(row.settings || '{}');
+    return !!(s.whatsapp_token && s.whatsapp_phone_id);
+  } catch (_) { return false; }
+}
+
 // Returns the channel that has WhatsApp credentials in Settings — the user's real channel.
 // All automation data queries use this channel, regardless of what campaign.channel_id says.
 function getPrimaryChannelId(db) {
@@ -407,9 +417,9 @@ async function apvQuickCheck() {
   if (apvCampaigns.length === 0) return;
 
   for (const cam of apvCampaigns) {
-    // Use the campaign's own channelId for credentials — same as sendTestMessage does.
-    // getPrimaryChannelId could return a different channel with wrong/stale credentials.
-    const channelId = (cam.channel_id && cam.channel_id !== 'demo' && cam.channel_id !== '')
+    // Use the campaign's own channelId only if it has valid credentials — if the channel
+    // was deleted or replaced, fall back to the primary channel so messages still go out.
+    const channelId = (cam.channel_id && cam.channel_id !== 'demo' && cam.channel_id !== '' && hasValidCredentials(db, cam.channel_id))
       ? cam.channel_id : getPrimaryChannelId(db);
     const STAGE1_DELAY_MS = (cam.apv_delay_min  != null ? cam.apv_delay_min  : 2) * 60 * 1000;
     const STAGE2_GAP_MS   = (cam.apv_followup_min != null ? cam.apv_followup_min : 4) * 60 * 1000;
@@ -918,9 +928,9 @@ async function runAutomation() {
   const campaigns = (db.abandoned_cart_campaigns || []).filter(c => c.is_active);
 
   for (const cam of campaigns) {
-    // Use the campaign's own channel_id — same channel user was logged into when they created it.
-    // Fallback to getPrimaryChannelId only for old demo/empty campaigns (pre-multi-login).
-    const channelId = (cam.channel_id && cam.channel_id !== 'demo' && cam.channel_id !== '')
+    // Use the campaign's own channel_id only if it has valid credentials — if the channel
+    // was deleted or replaced, fall back to the primary channel so messages still go out.
+    const channelId = (cam.channel_id && cam.channel_id !== 'demo' && cam.channel_id !== '' && hasValidCredentials(db, cam.channel_id))
       ? cam.channel_id : getPrimaryChannelId(db);
     try {
       const delayMs = (cam.delay_hours || 0) * 60 * 60 * 1000;

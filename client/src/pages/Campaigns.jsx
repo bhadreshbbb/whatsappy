@@ -1992,7 +1992,7 @@ export default function Campaigns() {
       const isSuccess = step.includes('✅');
       const isFail    = step.includes('❌') || step.startsWith('11. FAILED');
       const color = isSuccess ? '#4ade80' : isFail || isSkip ? '#f87171' : '#94a3b8';
-      const phoneTag = phone ? `+${phone}` : '[campaign]';
+      const phoneTag = phone ? (phone.startsWith('+') ? phone : `+${phone}`) : '[campaign]';
       console.log(
         `%c[APV ${ts}] ${phoneTag}  ${step}`,
         `color:${color};font-weight:${(isSkip || isSuccess || isFail) ? 'bold' : 'normal'}`,
