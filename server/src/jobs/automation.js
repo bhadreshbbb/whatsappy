@@ -463,7 +463,11 @@ async function apvQuickCheck() {
       if (global.io) global.io.emit('apv_debug', { campaign: cam.name, channelId, phone, step, detail, ts: new Date().toLocaleTimeString() });
     };
 
-    dbg('1. CHANNEL', `channelId="${channelId}"${channelId !== cam.channel_id ? ` (campaign has stale "${cam.channel_id}" — using primary)` : ''}`);
+    // Resolve template name for step-1 log so it's visible immediately
+    const _step1Tpl = cam.meta_template_id
+      ? ((db.meta_templates || []).find(t => String(t.id) === String(cam.meta_template_id))?.name || `id=${cam.meta_template_id}`)
+      : '(none — PATH B)';
+    dbg('1. CHANNEL', `CAMPAIGN="${cam.name}" (id=${cam.id})  template="${_step1Tpl}"  channelId="${channelId}"${channelId !== cam.channel_id ? ` (campaign has stale "${cam.channel_id}" — using primary)` : ''}`);
 
     // ── Stage 1: locks at stage=0 whose delay has expired ──────────────────
     const allLocksForCam = (db.campaign_locks || []).filter(l => String(l.campaign_id) === String(cam.id));

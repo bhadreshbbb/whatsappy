@@ -1995,7 +1995,7 @@ export default function Campaigns() {
       const color = isSuccess ? '#4ade80' : isFail || isSkip ? '#f87171' : '#94a3b8';
       const phoneTag = phone ? (phone.startsWith('+') ? phone : `+${phone}`) : '[campaign]';
       console.log(
-        `%c[APV ${ts}] ${phoneTag}  ${step}`,
+        `%c[APV ${ts}] [${campaign}] ${phoneTag}  ${step}`,
         `color:${color};font-weight:${(isSkip || isSuccess || isFail) ? 'bold' : 'normal'}`,
         '→', detail
       );
