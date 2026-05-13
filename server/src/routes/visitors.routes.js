@@ -84,6 +84,52 @@ router.post('/migrate-from-demo', (req, res) => {
   }
 });
 
+// DELETE /api/visitors/cleanup-phone/:phone
+// Removes ALL records for a phone number (all variants) from every table.
+router.delete('/cleanup-phone/:phone', (req, res) => {
+  try {
+    const db = getDb();
+    const raw    = req.params.phone.replace(/^\+/, '');
+    const short  = raw.replace(/^91/, '');
+    const phones = [...new Set([raw, `+${raw}`, short])];
+
+    const TABLES = [
+      'website_visitors', 'cart_events', 'purchase_history', 'product_views',
+      'abandoned_cart_executions', 'campaign_locks', 'chat_conversations',
+      'order_responses', 'searches', 'custom_events', 'user_sessions',
+    ];
+
+    const counts = {};
+    for (const table of TABLES) {
+      if (!Array.isArray(db[table])) continue;
+      const before = db[table].length;
+      db[table] = db[table].filter(r => !phones.includes(r.phone));
+      const deleted = before - db[table].length;
+      if (deleted > 0) counts[table] = deleted;
+    }
+
+    // chat_messages — also check from/to/conversation_id
+    if (Array.isArray(db.chat_messages)) {
+      const before = db.chat_messages.length;
+      db.chat_messages = db.chat_messages.filter(r =>
+        !phones.includes(r.phone) &&
+        !phones.includes(r.from) &&
+        !phones.includes(r.to) &&
+        !phones.includes(r.conversation_id)
+      );
+      const deleted = before - db.chat_messages.length;
+      if (deleted > 0) counts.chat_messages = deleted;
+    }
+
+    db.save();
+    const total = Object.values(counts).reduce((s, v) => s + v, 0);
+    console.log(`[Cleanup] Removed ${total} records for phones ${phones.join(', ')}:`, counts);
+    res.json({ success: true, phones_matched: phones, total_deleted: total, by_table: counts });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 router.get('/:id', visitorsController.getVisitor);
 router.get('/:id/carts', visitorsController.getVisitorCarts);
 router.get('/:id/activity', visitorsController.getVisitorActivity);
