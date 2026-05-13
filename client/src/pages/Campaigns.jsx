@@ -1942,6 +1942,7 @@ export default function Campaigns() {
   const [expandedAPVRow, setExpandedAPVRow] = useState(null); // "campaignId-rowIndex"
   const [editTiming, setEditTiming] = useState(null); // { id, stage1Min, stage2Min, saving }
   const [allMetaTpls, setAllMetaTpls] = useState([]); // for displaying template name on cards
+  const [fixingTemplate, setFixingTemplate] = useState({}); // campaignId → bool
 
   const [sendResultMap, setSendResultMap] = useState({}); // campaignId → { sent, skipped, errors[] }
   const [testModal, setTestModal] = useState(null);  // { id, name } | null
@@ -2501,10 +2502,46 @@ export default function Campaigns() {
                         const tplName = c.meta_template_name ||
                           allMetaTpls.find(t => String(t.id) === String(c.meta_template_id))?.name ||
                           `template #${c.meta_template_id}`;
+                        const isFixing = fixingTemplate[c.id];
                         return (
-                          <span className="text-[9px] px-1.5 py-0.5 rounded font-bold"
-                            style={{ background: 'rgba(167,139,250,0.1)', border: '1px solid rgba(167,139,250,0.2)', color: '#a78bfa' }}>
-                            📋 {tplName}
+                          <span className="flex items-center gap-1">
+                            <span className="text-[9px] px-1.5 py-0.5 rounded font-bold"
+                              style={{ background: 'rgba(167,139,250,0.1)', border: '1px solid rgba(167,139,250,0.2)', color: '#a78bfa' }}>
+                              📋 {tplName}
+                            </span>
+                            {c.campaign_type === 'abandoned_product_view' && (
+                              <button
+                                title="Force all APV campaigns to use this template"
+                                disabled={isFixing}
+                                onClick={async (e) => {
+                                  e.stopPropagation();
+                                  if (!confirm(`Set "${tplName}" as the template for ALL APV campaigns?`)) return;
+                                  setFixingTemplate(m => ({ ...m, [c.id]: true }));
+                                  try {
+                                    const r = await fetch('/api/campaigns/fix-apv-template', {
+                                      method: 'POST',
+                                      headers: { ...CH(), 'Content-Type': 'application/json' },
+                                      body: JSON.stringify({ meta_template_id: c.meta_template_id }),
+                                    });
+                                    const d = await r.json();
+                                    if (d.success) {
+                                      alert(`✓ Fixed! ${d.campaigns_updated} campaign(s) now use "${d.template_applied.name}"`);
+                                      // Reload campaigns to show updated badges
+                                      fetch('/api/campaigns', { headers: CH() }).then(r => r.json()).then(d => setCampaigns(d || [])).catch(() => {});
+                                    } else {
+                                      alert('Fix failed: ' + (d.error || JSON.stringify(d)));
+                                    }
+                                  } catch (err) {
+                                    alert('Error: ' + err.message);
+                                  } finally {
+                                    setFixingTemplate(m => ({ ...m, [c.id]: false }));
+                                  }
+                                }}
+                                className="text-[9px] px-1 py-0.5 rounded font-bold cursor-pointer"
+                                style={{ background: 'rgba(167,139,250,0.2)', border: '1px solid rgba(167,139,250,0.4)', color: '#a78bfa' }}>
+                                {isFixing ? '…' : '⚡ Fix All'}
+                              </button>
+                            )}
                           </span>
                         );
                       })()}
