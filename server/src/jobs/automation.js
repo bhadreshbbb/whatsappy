@@ -431,15 +431,16 @@ async function apvQuickCheck() {
       };
     };
 
-    const dbg = (step, detail) => {
-      if (global.io) global.io.emit('apv_debug', { campaign: cam.name, channelId, step, detail, ts: new Date().toLocaleTimeString() });
+    // phone param is optional — campaign-level steps omit it, per-lock steps pass it
+    const dbg = (step, detail, phone = undefined) => {
+      if (global.io) global.io.emit('apv_debug', { campaign: cam.name, channelId, phone, step, detail, ts: new Date().toLocaleTimeString() });
     };
 
     dbg('1. CHANNEL', `cam.channel_id="${cam.channel_id}" → using channelId="${channelId}"`);
 
     // ── Stage 1: locks at stage=0 whose delay has expired ──────────────────
     const allLocksForCam = (db.campaign_locks || []).filter(l => String(l.campaign_id) === String(cam.id));
-    dbg('2. ALL LOCKS', `total locks for campaign: ${allLocksForCam.length} | ${allLocksForCam.map(l=>`phone=${l.phone} stage=${l.stage} status=${l.lock_status}`).join(' | ')}`);
+    dbg('2. ALL LOCKS', `total=${allLocksForCam.length} | ${allLocksForCam.map(l=>`${l.phone} stage=${l.stage} status=${l.lock_status}`).join(' | ')}`);
 
     const stage1Locks = allLocksForCam.filter(l => {
       if (l.lock_status !== 'active') return false;
@@ -447,11 +448,12 @@ async function apvQuickCheck() {
       const anchor = l.reentry_at || l.locked_at;
       const ageMs = anchor ? (now - new Date(anchor).getTime()) : 0;
       const passed = ageMs >= STAGE1_DELAY_MS;
-      if (!passed) dbg('2b. STAGE1 NOT YET', `phone=${l.phone} age=${Math.round(ageMs/1000)}s need=${Math.round(STAGE1_DELAY_MS/1000)}s`);
+      if (!passed) dbg('2b. DELAY NOT YET', `age=${Math.round(ageMs/1000)}s need=${Math.round(STAGE1_DELAY_MS/1000)}s remaining=${Math.round((STAGE1_DELAY_MS-ageMs)/1000)}s`, l.phone);
+      else          dbg('2c. DELAY PASSED ✅', `age=${Math.round(ageMs/1000)}s >= delay=${Math.round(STAGE1_DELAY_MS/1000)}s → queuing for send`, l.phone);
       return passed;
     });
 
-    dbg('3. STAGE1 OVERDUE', `${stage1Locks.length} lock(s) ready to send`);
+    dbg('3. STAGE1 OVERDUE', `${stage1Locks.length} lock(s) ready → calling sendMultiple`);
 
     if (stage1Locks.length > 0) {
       console.log(`[APV Quick] "${cam.name}" stage 1 — ${stage1Locks.length} overdue lock(s)`);
@@ -1858,8 +1860,10 @@ async function sendMultiple(db, cam, events, type, credChannelId) {
 
         let sendResult;
         try {
+          emit('10b. CALLING API', evt.phone, `POST graph.facebook.com/v25.0/{phoneId}/messages`);
           sendResult = await whatsappService.sendTemplateMessage(evt.phone, sendPayload, channelId);
         } catch (sendErr) {
+          emit('11. FAILED ❌', evt.phone, `error="${sendErr.message.slice(0, 120)}"`);
           console.error(`[MetaTemplateSend] FAILED for ${evt.phone} — ${sendErr.message}`);
           const failedAt = new Date().toISOString();
           db.abandoned_cart_executions.push({
@@ -2011,6 +2015,7 @@ async function sendMultiple(db, cam, events, type, credChannelId) {
         }
 
         // Emit success event so browser console shows wamid
+        emit('11. SENT ✅', evt.phone, `wamid=${sendResult?.messageId || 'null'} stage=${currentStage}`);
         if (global.io) {
           global.io.emit('apv_sent', {
             phone: evt.phone, campaign_id: cam.id, campaign_name: cam.name,

@@ -1976,68 +1976,49 @@ export default function Campaigns() {
     const channelId = (_cid && _cid !== 'undefined' && _cid !== 'null') ? _cid : '';
     const s = io(BASE || 'http://localhost:3005', { query: { channelId }, transports: ['websocket', 'polling'] });
 
-    s.on('connect',    () => console.log('%c[APV Socket] ✅ Connected — live send events active', 'color:#4ade80'));
+    s.on('connect',    () => console.log('%c[APV Socket] ✅ Connected — live debug events active', 'color:#4ade80;font-weight:bold'));
     s.on('disconnect', () => console.warn('[APV Socket] ⚠ Disconnected'));
 
-    // Step-by-step debug trace from server
-    const _groups = {};
+    // ── Step-by-step debug trace from server ──────────────────────────────
+    // Flat logs — no console.group (groups caused steps to be invisible due to
+    // phone key mismatch between apvQuickCheck steps 1-3 and sendMultiple steps 4+)
     s.on('apv_debug', ({ campaign, phone, step, detail, ts }) => {
-      const key = `${campaign}||${phone}`;
-      const isSkip = step.startsWith('❌');
-      const isFirst = step.startsWith('1.');
-
-      // Open group on first step
-      if (isFirst && !_groups[key]) {
-        console.group(`%c📡 APV FLOW  +${phone}  |  ${campaign}  [${ts}]`, 'color:#818cf8;font-size:12px;font-weight:bold');
-        _groups[key] = true;
-      }
-
-      const color = isSkip ? '#f87171' : step.startsWith('→') ? '#4ade80' : '#94a3b8';
+      const isSkip    = step.startsWith('❌');
+      const isSuccess = step.includes('✅');
+      const isFail    = step.includes('❌') || step.startsWith('11. FAILED');
+      const color = isSuccess ? '#4ade80' : isFail || isSkip ? '#f87171' : '#94a3b8';
+      const phoneTag = phone ? `+${phone}` : '[campaign]';
       console.log(
-        `%c  ${isSkip ? '❌' : '→'} ${step}`,
-        `color:${isSkip ? '#f87171' : '#94a3b8'};font-weight:${isSkip ? 'bold' : 'normal'}`,
-        detail
+        `%c[APV ${ts}] ${phoneTag}  ${step}`,
+        `color:${color};font-weight:${(isSkip || isSuccess || isFail) ? 'bold' : 'normal'}`,
+        '→', detail
       );
-
-      // Close group on skip or on step 10 (credentials = last step before actual send)
-      if ((isSkip || step.startsWith('10.')) && _groups[key]) {
-        console.groupEnd();
-        delete _groups[key];
-      }
     });
 
     s.on('apv_sending', (data) => {
-      // Close debug trace group if open
-      const _key = `${data.campaign_name}|${data.phone}`;
-      if (_debugGroups[_key]) { console.groupEnd(); delete _debugGroups[_key]; }
-      console.group(`%c⚡ APV SENDING  stage-${data.stage}  →  +${data.phone}`, 'color:#4ade80;font-size:13px;font-weight:bold');
-      console.log('%cCampaign :', 'color:#818cf8', data.campaign_name);
-      console.log('%cPhone    :', 'color:#818cf8', data.phone);
-      console.log('%cStage    :', 'color:#818cf8', data.stage);
-      console.log('%cTime     :', 'color:#818cf8', new Date(data.timestamp).toLocaleTimeString());
-      console.log('%cPayload  :', 'color:#818cf8', data.payload);
-      console.log('%cFull JSON:', 'color:#475569', JSON.stringify(data.payload, null, 2));
-      console.groupEnd();
+      console.log(
+        `%c[APV ⚡ SENDING]  +${data.phone}  stage-${data.stage}  cam="${data.campaign_name}"  ch="${data.channel_id}"`,
+        'color:#facc15;font-weight:bold;font-size:12px',
+        '\nPayload →', data.payload
+      );
       setLiveSendMap(m => ({ ...m, [data.phone]: { status: 'sending', stage: data.stage, ts: data.timestamp } }));
       setTimeout(() => setLiveSendMap(m => { const n = { ...m }; if (n[data.phone]?.status === 'sending') delete n[data.phone]; return n; }), 30000);
     });
 
     s.on('apv_sent', (data) => {
-      console.group(`%c✅ APV SENT  stage-${data.stage}  →  +${data.phone}`, 'color:#4ade80;font-size:13px;font-weight:bold');
-      console.log('%cCampaign :', 'color:#818cf8', data.campaign_name);
-      console.log('%cwamid    :', 'color:#818cf8', data.wamid);
-      console.log('%cTime     :', 'color:#818cf8', new Date(data.timestamp).toLocaleTimeString());
-      console.groupEnd();
+      console.log(
+        `%c[APV ✅ SENT]  +${data.phone}  stage-${data.stage}  wamid=${data.wamid}  cam="${data.campaign_name}"`,
+        'color:#4ade80;font-weight:bold;font-size:12px'
+      );
       setLiveSendMap(m => ({ ...m, [data.phone]: { status: 'sent', stage: data.stage, wamid: data.wamid, ts: data.timestamp } }));
       setTimeout(() => setLiveSendMap(m => { const n = { ...m }; delete n[data.phone]; return n; }), 5000);
     });
 
     s.on('apv_failed', (data) => {
-      console.group(`%c❌ APV FAILED  stage-${data.stage}  →  +${data.phone}`, 'color:#f87171;font-size:13px;font-weight:bold');
-      console.log('%cCampaign :', 'color:#818cf8', data.campaign_name);
-      console.log('%cError    :', 'color:#f87171', data.error);
-      console.log('%cTime     :', 'color:#818cf8', new Date(data.timestamp).toLocaleTimeString());
-      console.groupEnd();
+      console.log(
+        `%c[APV ❌ FAILED]  +${data.phone}  stage-${data.stage}  cam="${data.campaign_name}"\n  error: ${data.error}`,
+        'color:#f87171;font-weight:bold;font-size:12px'
+      );
       setLiveSendMap(m => ({ ...m, [data.phone]: { status: 'failed', stage: data.stage, error: data.error, ts: data.timestamp } }));
       setTimeout(() => setLiveSendMap(m => { const n = { ...m }; if (n[data.phone]?.status === 'failed') delete n[data.phone]; return n; }), 15000);
     });
