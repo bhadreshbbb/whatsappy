@@ -1766,7 +1766,8 @@ async function sendMultiple(db, cam, events, type, credChannelId) {
                 if (!productImage && (scraped.image_url || scraped.image))  productImage = scraped.image_url || scraped.image;
 
                 // Patch the product_views record so future sends skip scraping
-                const pvIdx = db.product_views.findIndex(v => v.channel_id === channelId && v.phone === evt.phone && v.product_url === productUrl);
+                // No channel_id filter — multilogin may have stored views under different channel
+                const pvIdx = db.product_views.findIndex(v => v.phone === evt.phone && v.product_url === productUrl);
                 if (pvIdx >= 0) {
                   if (!db.product_views[pvIdx].product_name  && productName)  db.product_views[pvIdx].product_name  = productName;
                   if (!db.product_views[pvIdx].product_price && productPrice) db.product_views[pvIdx].product_price = productPrice;
@@ -1830,24 +1831,23 @@ async function sendMultiple(db, cam, events, type, credChannelId) {
                     emit('9e. IMAGE UPLOADED ✅', evt.phone, `media_id="${productMediaId}"`);
                     console.log(`[AbandonedProductView] Image uploaded for ${evt.phone} → media_id: ${productMediaId}`);
                   } catch (imgErr) {
-                    emit('9e. IMAGE UPLOAD FAILED', evt.phone, `${imgErr.message} — falling back to template header image`);
-                    console.warn(`[AbandonedProductView] Image upload failed for ${evt.phone}: ${imgErr.message} — falling back to template header`);
-                    // Use the template's own stored header image as fallback
-                    productMediaId = metaTpl.header_image_id || '';
+                    emit('9e. IMAGE UPLOAD FAILED', evt.phone, `${imgErr.message} — will use image URL directly (link mode)`);
+                    console.warn(`[AbandonedProductView] Image upload failed for ${evt.phone}: ${imgErr.message} — using image URL as link`);
+                    // Leave productMediaId = '' — buildSendMessagePayload will use productImage URL via { link: url }
+                    productMediaId = '';
                   }
                 }
               } else {
-                // No product image at all — fall back to template's stored header image
-                productMediaId = metaTpl.header_image_id || '';
-                if (productMediaId) {
-                  emit('9e. IMAGE FALLBACK', evt.phone, `no product image — using template header media_id="${productMediaId}"`);
-                  console.log(`[AbandonedProductView] No product image for ${evt.phone} — using template header image`);
-                } else if (metaTpl.header_type === 'IMAGE') {
-                  emit('❌ SKIP no_image', evt.phone, `header_type=IMAGE but no product image and no template header_image_id`);
-                  console.warn(`[AbandonedProductView] SKIP ${evt.phone} — template requires IMAGE header but no image available`);
+                // No product image URL available — productMediaId stays '' so buildSendMessagePayload
+                // won't use the template's header image (wrong product) as fallback.
+                // If header is required and truly no image can be found, skip.
+                productMediaId = '';
+                if (metaTpl.header_type === 'IMAGE') {
+                  emit('9e. NO IMAGE — SKIP', evt.phone, `no product image URL and header_type=IMAGE — skip to avoid sending wrong product image`);
+                  console.warn(`[AbandonedProductView] SKIP ${evt.phone} — no product image available`);
                   _apvSkip = true;
                 } else {
-                  emit('9e. NO IMAGE', evt.phone, `header_type="${metaTpl.header_type}" — skipping image (not required)`);
+                  emit('9e. NO IMAGE', evt.phone, `header_type="${metaTpl.header_type}" — no image needed`);
                 }
               }
 

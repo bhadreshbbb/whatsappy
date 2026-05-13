@@ -1065,8 +1065,12 @@ export function buildSendMessagePayload(tpl, productConfig, recipientPhone = '{{
 
   // Non-carousel image header — inject product image from productConfig.cards[0]
   if (!tpl.is_carousel && tpl.header_type === 'IMAGE') {
-    const mediaId = firstCard.media_id || tpl.header_image_id || '';
-    const imgUrl  = firstCard.image || firstCard.image_url || tpl.header_image_url || '';
+    const cardMediaId = firstCard.media_id || '';
+    const cardImgUrl  = firstCard.image || firstCard.image_url || '';
+    // Only fall back to template's stored header if the card has NO product-specific image at all.
+    // This prevents Faux Georgette (or any template default) from overriding the actual product image.
+    const mediaId = cardMediaId || (cardImgUrl ? '' : (tpl.header_image_id || ''));
+    const imgUrl  = cardImgUrl  || (cardMediaId ? '' : (tpl.header_image_url || ''));
     if (mediaId) {
       components.push({ type: 'header', parameters: [{ type: 'image', image: { id: mediaId } }] });
     } else if (imgUrl) {
