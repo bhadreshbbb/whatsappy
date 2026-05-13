@@ -62,6 +62,18 @@ export const campaignsController = {
       const delayHours      = b.delay_hours  != null ? Number(b.delay_hours)  : 1;
       const runTimes        = b.run_times    != null ? Number(b.run_times)    : 1; // 0 = infinite
 
+      // For APV campaigns: auto-deactivate all existing APV campaigns for this channel
+      // so only ONE is ever active. Prevents stale campaigns with wrong templates from firing.
+      if (campaignType === 'abandoned_product_view') {
+        for (const old of db.abandoned_cart_campaigns) {
+          if (old.channel_id === channelId && old.campaign_type === 'abandoned_product_view' && old.is_active) {
+            old.is_active = 0;
+            old.updated_at = new Date().toISOString();
+            console.log(`[Campaign] Auto-deactivated old APV campaign "${old.name}" (id=${old.id}) — replaced by new campaign`);
+          }
+        }
+      }
+
       const id = Date.now(); // use timestamp for unique IDs
       const newCampaign = {
         id,

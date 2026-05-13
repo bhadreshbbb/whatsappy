@@ -423,9 +423,19 @@ async function apvQuickCheck() {
   const db = getDb();
   const now = Date.now();
 
-  const apvCampaigns = (db.abandoned_cart_campaigns || []).filter(c =>
+  let apvCampaigns = (db.abandoned_cart_campaigns || []).filter(c =>
     c.is_active && c.campaign_type === 'abandoned_product_view'
   );
+  // Safety net: if multiple active APV campaigns exist (shouldn't happen — creation auto-deactivates old ones),
+  // keep only the most recently created one to avoid sending duplicate/wrong-template messages.
+  if (apvCampaigns.length > 1) {
+    apvCampaigns.sort((a, b) => Number(b.id) - Number(a.id));
+    const [newest, ...stale] = apvCampaigns;
+    for (const s of stale) { s.is_active = 0; s.updated_at = new Date().toISOString(); }
+    db.save();
+    console.warn(`[APVQuick] ⚠ Multiple active APV campaigns detected — auto-deactivated ${stale.length} stale (keeping "${newest.name}", template="${newest.meta_template_name}")`);
+    apvCampaigns = [newest];
+  }
   const allLocks = (db.campaign_locks || []).filter(l => apvCampaigns.some(c => String(c.id) === String(l.campaign_id)));
   console.log(`[APVQuick] tick — ${apvCampaigns.length} active APV campaign(s) | ${allLocks.length} total lock(s) | io=${!!global.io}`);
   if (apvCampaigns.length === 0) return;
