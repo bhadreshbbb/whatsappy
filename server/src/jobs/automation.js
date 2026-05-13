@@ -1299,7 +1299,7 @@ async function runAutomation() {
             const metaTpl = cam.meta_template_id
               ? (db.meta_templates || []).find(t =>
                   String(t.id) === String(cam.meta_template_id) &&
-                  (t.meta_status === 'APPROVED' || t.meta_status === 'ACTIVE')
+                  ['approved', 'active'].includes((t.meta_status || '').toLowerCase())
                 )
               : null;
 
@@ -1655,7 +1655,7 @@ async function sendMultiple(db, cam, events, type, credChannelId) {
       // Used when campaign has a linked approved Meta carousel template.
       // This is the correct format for product recommendation campaigns.
       const metaTpl = cam.meta_template_id
-        ? (db.meta_templates || []).find(t => String(t.id) === String(cam.meta_template_id) && (t.meta_status === 'APPROVED' || t.meta_status === 'ACTIVE'))
+        ? (db.meta_templates || []).find(t => String(t.id) === String(cam.meta_template_id) && ['approved', 'active'].includes((t.meta_status || '').toLowerCase()))
         : null;
       emit('9. TEMPLATE', evt.phone, `meta_template_id="${cam.meta_template_id}" found=${!!metaTpl} status="${metaTpl?.meta_status || 'N/A'}" name="${metaTpl?.name || 'none'}"`);
       if (cam.meta_template_id && !metaTpl) {
