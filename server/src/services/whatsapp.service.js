@@ -47,7 +47,8 @@ function getCredentials(channelId = null) {
 
 async function callMetaApi(phoneId, token, body) {
   const url = `https://graph.facebook.com/v25.0/${phoneId}/messages`;
-  console.log(`[MetaAPI] POST phoneId="${phoneId}" token="${token ? token.substring(0,15)+'...' : 'MISSING'}"`);
+  const to = body?.to || '?';
+  console.log(`\n▶▶▶ [MetaAPI] CALLING → to="${to}" phoneId="${phoneId}" token="${token ? token.substring(0,15)+'...' : 'MISSING'}" type="${body?.type || '?'}"`);
   const res = await fetch(url, {
     method: 'POST',
     headers: {
@@ -58,10 +59,11 @@ async function callMetaApi(phoneId, token, body) {
   });
   const data = await res.json();
   if (!res.ok) {
-    console.error(`[MetaAPI] FAILED ${res.status} phoneId="${phoneId}" error=${JSON.stringify(data?.error || data)}`);
+    console.error(`▶▶▶ [MetaAPI] FAILED ${res.status} to="${to}" phoneId="${phoneId}" error=${JSON.stringify(data?.error || data)}`);
     throw new Error(`Meta API error ${res.status}: ${JSON.stringify(data?.error || data)}`);
   }
   const wamid = data?.messages?.[0]?.id || null;
+  console.log(`▶▶▶ [MetaAPI] SUCCESS to="${to}" wamid="${wamid}"`);
   return { wamid, raw: data };
 }
 

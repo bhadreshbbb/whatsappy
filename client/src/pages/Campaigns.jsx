@@ -1974,10 +1974,15 @@ export default function Campaigns() {
     const BASE = import.meta.env.VITE_API_URL || '';
     const _cid = localStorage.getItem('channelId');
     const channelId = (_cid && _cid !== 'undefined' && _cid !== 'null') ? _cid : '';
-    const s = io(BASE || 'http://localhost:3005', { query: { channelId }, transports: ['websocket', 'polling'] });
+    // When BASE is empty (VITE_API_URL not set), pass undefined so socket.io
+    // connects to window.location.origin — NOT localhost which breaks on Render.
+    const socketUrl = BASE || undefined;
+    console.log(`%c[APV Socket] Connecting to: ${socketUrl || window.location.origin}`, 'color:#818cf8');
+    const s = io(socketUrl, { query: { channelId }, transports: ['websocket', 'polling'] });
 
-    s.on('connect',    () => console.log('%c[APV Socket] ✅ Connected — live debug events active', 'color:#4ade80;font-weight:bold'));
-    s.on('disconnect', () => console.warn('[APV Socket] ⚠ Disconnected'));
+    s.on('connect',       () => console.log(`%c[APV Socket] ✅ Connected  id=${s.id}  url=${socketUrl || window.location.origin}`, 'color:#4ade80;font-weight:bold;font-size:13px'));
+    s.on('connect_error', (e) => console.error(`[APV Socket] ❌ Connect error: ${e.message}  url=${socketUrl || window.location.origin}`));
+    s.on('disconnect',    (r) => console.warn(`[APV Socket] ⚠ Disconnected: ${r}`));
 
     // ── Step-by-step debug trace from server ──────────────────────────────
     // Flat logs — no console.group (groups caused steps to be invisible due to

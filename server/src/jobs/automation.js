@@ -402,6 +402,8 @@ async function apvQuickCheck() {
   const apvCampaigns = (db.abandoned_cart_campaigns || []).filter(c =>
     c.is_active && c.campaign_type === 'abandoned_product_view'
   );
+  const allLocks = (db.campaign_locks || []).filter(l => apvCampaigns.some(c => String(c.id) === String(l.campaign_id)));
+  console.log(`[APVQuick] tick — ${apvCampaigns.length} active APV campaign(s) | ${allLocks.length} total lock(s) | io=${!!global.io}`);
   if (apvCampaigns.length === 0) return;
 
   for (const cam of apvCampaigns) {
