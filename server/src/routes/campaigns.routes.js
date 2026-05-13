@@ -4,8 +4,9 @@ import { campaignsController } from '../controllers/campaigns.controller.js';
 const router = Router();
 
 router.get('/', campaignsController.getCampaigns);
-router.get('/:id', campaignsController.getCampaign);
 router.post('/', campaignsController.createCampaign);
+router.post('/fix-apv-template', campaignsController.fixApvTemplate);
+router.get('/:id', campaignsController.getCampaign);
 router.put('/:id', campaignsController.updateCampaign);
 router.delete('/:id', campaignsController.deleteCampaign);
 router.post('/:id/send', campaignsController.sendCampaign);

@@ -1540,4 +1540,50 @@ export const campaignsController = {
       next(error);
     }
   },
+
+  // POST /api/campaigns/fix-apv-template
+  // Body: { meta_template_name: "producrt_ddd" }  OR  { meta_template_id: 123 }
+  // Forces ALL active APV campaigns to use the specified template — fixes stale campaigns.
+  async fixApvTemplate(req, res, next) {
+    try {
+      const db = getDb();
+      const channelId = req.headers['x-channel-id'] || '';
+      const { meta_template_name, meta_template_id } = req.body;
+
+      // Find the target template
+      const tpl = meta_template_id
+        ? (db.meta_templates || []).find(t => String(t.id) === String(meta_template_id))
+        : (db.meta_templates || []).find(t => t.name === meta_template_name);
+
+      if (!tpl) {
+        return res.status(404).json({
+          error: `Template not found: ${meta_template_name || meta_template_id}`,
+          available: (db.meta_templates || []).map(t => ({ id: t.id, name: t.name, status: t.meta_status })),
+        });
+      }
+
+      const apvCampaigns = (db.abandoned_cart_campaigns || []).filter(c =>
+        c.campaign_type === 'abandoned_product_view' && c.channel_id === channelId
+      );
+
+      const before = apvCampaigns.map(c => ({ id: c.id, name: c.name, old_template: c.meta_template_name || c.meta_template_id, active: !!c.is_active }));
+      for (const c of apvCampaigns) {
+        c.meta_template_id   = tpl.id;
+        c.meta_template_name = tpl.name;
+        c.updated_at = new Date().toISOString();
+      }
+      db.save();
+
+      console.log(`[FixAPV] Updated ${apvCampaigns.length} APV campaign(s) → template "${tpl.name}" (id=${tpl.id})`);
+      res.json({
+        success: true,
+        template_applied: { id: tpl.id, name: tpl.name, status: tpl.meta_status },
+        campaigns_updated: apvCampaigns.length,
+        before,
+        after: apvCampaigns.map(c => ({ id: c.id, name: c.name, new_template: c.meta_template_name, active: !!c.is_active })),
+      });
+    } catch (error) {
+      next(error);
+    }
+  },
 };
