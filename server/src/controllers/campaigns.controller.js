@@ -1008,10 +1008,15 @@ export const campaignsController = {
       const db = getDb();
       const { id } = req.params;
       const channelId = req.headers['x-channel-id'] || '';
-      const campaign = db.abandoned_cart_campaigns.find(c => c.id == id && c.channel_id === channelId);
+      const campaign = db.abandoned_cart_campaigns.find(c =>
+        c.id == id && (c.channel_id === channelId || c.channel_id === 'demo' || !c.channel_id || c.channel_id === '')
+      );
       if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
+      // Use campaign's own channelId for data queries (consistent with automation)
+      const effectiveChannelId = (campaign.channel_id && campaign.channel_id !== 'demo' && campaign.channel_id !== '')
+        ? campaign.channel_id : channelId;
 
-      const settingsRow = (db.channel_settings || []).find(s => s.channel_id === channelId);
+      const settingsRow = (db.channel_settings || []).find(s => s.channel_id === effectiveChannelId);
       const chSettings = settingsRow ? (() => { try { return JSON.parse(settingsRow.settings || '{}'); } catch(_) { return {}; } })() : {};
       const productSlug = (chSettings.product_url_slug || '/products').replace(/\/+$/, '');
       const now = Date.now();
@@ -1019,17 +1024,17 @@ export const campaignsController = {
       // ── Build per-phone contact map — identical logic to Analytics command center ──
       // This ensures the audience panel shows the SAME users and statuses as the
       // command center (best status across all sessions, deduped by phone).
-      const allWithPhone = (db.website_visitors || []).filter(v => v.channel_id === channelId && v.phone);
+      const allWithPhone = (db.website_visitors || []).filter(v => v.channel_id === effectiveChannelId && v.phone);
       const phoneMap = new Map();
       allWithPhone.forEach(v => {
         if (!phoneMap.has(v.phone)) phoneMap.set(v.phone, []);
         phoneMap.get(v.phone).push(v);
       });
 
-      const allPageViews = (db.page_views       || []).filter(p => p.channel_id === channelId);
-      const allCarts     = (db.cart_events      || []).filter(c => c.channel_id === channelId);
-      const allPurchases = (db.purchase_history || []).filter(p => p.channel_id === channelId);
-      const allProdViews = (db.product_views    || []).filter(v => v.channel_id === channelId);
+      const allPageViews = (db.page_views       || []).filter(p => p.channel_id === effectiveChannelId);
+      const allCarts     = (db.cart_events      || []).filter(c => c.channel_id === effectiveChannelId);
+      const allPurchases = (db.purchase_history || []).filter(p => p.channel_id === effectiveChannelId);
+      const allProdViews = (db.product_views    || []).filter(v => v.channel_id === effectiveChannelId);
 
       const STATUS_RANK = { purchased: 7, followup_complete: 6, product_recommendation: 6, abandoned_checkout: 5, abandoned_cart: 4, product_view_lock: 3, product_view: 2, active: 1 };
 
@@ -1083,7 +1088,7 @@ export const campaignsController = {
       const allPhoneViewsMap = {};
       for (const v of allProdViews) {
         const phone = v.phone
-          || (db.website_visitors.find(vis => vis.session_id === v.session_id && vis.channel_id === channelId))?.phone;
+          || (db.website_visitors.find(vis => vis.session_id === v.session_id && vis.channel_id === effectiveChannelId))?.phone;
         if (!phone) continue;
         const vp = { ...v, phone };
         if (!allPhoneViewsMap[phone]) allPhoneViewsMap[phone] = [];
@@ -1113,7 +1118,7 @@ export const campaignsController = {
       if (campaign.campaign_type === 'abandoned_product_view') {
 
         const locks = (db.campaign_locks || []).filter(l =>
-          l.channel_id === channelId && String(l.campaign_id) === String(id)
+          l.channel_id === effectiveChannelId && String(l.campaign_id) === String(id)
         );
         const lockedPhones = new Set(locks.map(l => l.phone));
 
@@ -1131,7 +1136,7 @@ export const campaignsController = {
           const s1Ms = l.stage_1_sent_at ? new Date(l.stage_1_sent_at).getTime() : null;
           if (!s1Ms) continue;
           const replied = (db.chat_messages || []).some(m =>
-            m.phone === l.phone && m.channel_id === channelId && m.direction === 'in' &&
+            m.phone === l.phone && m.channel_id === effectiveChannelId && m.direction === 'in' &&
             new Date(m.timestamp || m.created_at).getTime() > s1Ms
           );
           if (replied) metricReplied++;
@@ -1140,18 +1145,18 @@ export const campaignsController = {
         // Attribution metrics — based on ww_cam tracking in URLs
         // attributed_clicks: unique visitors who clicked a link from this campaign (last_click_campaign_id)
         const attrClicks = (db.website_visitors || []).filter(v =>
-          v.channel_id === channelId && String(v.last_click_campaign_id) === camIdStr
+          v.channel_id === effectiveChannelId && String(v.last_click_campaign_id) === camIdStr
         );
         // attributed_carts: cart events stamped with source_campaign_id = this campaign
         const attrCarts = (db.cart_events || []).filter(c =>
-          c.channel_id === channelId && String(c.source_campaign_id) === camIdStr && !c.recovered
+          c.channel_id === effectiveChannelId && String(c.source_campaign_id) === camIdStr && !c.recovered
         );
         const attrCartsRecovered = (db.cart_events || []).filter(c =>
-          c.channel_id === channelId && String(c.source_campaign_id) === camIdStr
+          c.channel_id === effectiveChannelId && String(c.source_campaign_id) === camIdStr
         );
         // attributed_purchases: purchases stamped with source_campaign_id = this campaign
         const attrPurchases = (db.purchase_history || []).filter(p =>
-          p.channel_id === channelId && String(p.source_campaign_id) === camIdStr
+          p.channel_id === effectiveChannelId && String(p.source_campaign_id) === camIdStr
         );
         const attrRevenue = attrPurchases.reduce((s, p) => s + (parseFloat(p.total_amount) || 0), 0);
 
@@ -1247,7 +1252,7 @@ export const campaignsController = {
           const s1SentMs = stage1Ms;
           const inboundMsgs = (db.chat_messages || [])
             .filter(m =>
-              m.phone === l.phone && m.channel_id === channelId && m.direction === 'in' &&
+              m.phone === l.phone && m.channel_id === effectiveChannelId && m.direction === 'in' &&
               (!s1SentMs || new Date(m.timestamp || m.created_at).getTime() > s1SentMs)
             )
             .sort((a, b) => new Date(b.timestamp || b.created_at) - new Date(a.timestamp || a.created_at));
@@ -1255,18 +1260,18 @@ export const campaignsController = {
 
           // Clicked: product_view > 1 min after stage 1 send (inferred link click)
           // Attribution: did this user click the campaign link (ww_cam tracking)?
-          const visitorRec = db.website_visitors.find(v => v.phone === l.phone && v.channel_id === channelId);
+          const visitorRec = db.website_visitors.find(v => v.phone === l.phone && v.channel_id === effectiveChannelId);
           const clickedCampaign = visitorRec && String(visitorRec.last_click_campaign_id) === camIdStr;
           const clickedAt = clickedCampaign ? (visitorRec.last_click_at || null) : null;
 
           // Attribution: cart add after campaign click
           const attrCart = (db.cart_events || []).find(c =>
-            c.phone === l.phone && c.channel_id === channelId &&
+            c.phone === l.phone && c.channel_id === effectiveChannelId &&
             String(c.source_campaign_id) === camIdStr
           );
           // Attribution: purchase after campaign click
           const attrPurch = (db.purchase_history || []).find(p =>
-            p.phone === l.phone && p.channel_id === channelId &&
+            p.phone === l.phone && p.channel_id === effectiveChannelId &&
             String(p.source_campaign_id) === camIdStr
           );
 
@@ -1436,7 +1441,7 @@ export const campaignsController = {
 
         if (!db.orders) db.orders = [];
         const responses = db.order_responses || [];
-        audience = db.orders.filter(o => o.channel_id === channelId && o.is_cod && o.phone).map(o => {
+        audience = db.orders.filter(o => o.channel_id === effectiveChannelId && o.is_cod && o.phone).map(o => {
           const resp  = responses.filter(r => r.phone === o.phone && r.order_id === o.id)
             .sort((a,b) => new Date(b.responded_at) - new Date(a.responded_at));
           const latest = resp[0];
