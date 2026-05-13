@@ -118,6 +118,42 @@ router.post('/test-send', async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
+// DELETE /api/settings/channel/:channelId
+// Removes stale channel credentials and re-assigns its campaigns to the caller's real channel.
+router.delete('/channel/:channelId', (req, res, next) => {
+  try {
+    const db = getDb();
+    const targetId = req.params.channelId;
+    const realId   = req.headers['x-channel-id'] || '';
+
+    if (!targetId || targetId === 'demo') return res.status(400).json({ error: 'Invalid channelId' });
+    if (targetId === realId) return res.status(400).json({ error: 'Cannot delete your own active channel' });
+
+    // 1. Remove channel_settings entry
+    const settingsIdx = db.channel_settings.findIndex(s => s.channel_id === targetId);
+    const removedSettings = settingsIdx >= 0;
+    if (removedSettings) db.channel_settings.splice(settingsIdx, 1);
+
+    // 2. Re-assign campaigns that belonged to the stale channel → caller's real channel
+    const CAMPAIGN_TABLES = ['abandoned_cart_campaigns'];
+    const migrated = {};
+    for (const table of CAMPAIGN_TABLES) {
+      if (!Array.isArray(db[table])) continue;
+      let n = 0;
+      for (const doc of db[table]) {
+        if (doc.channel_id === targetId) { doc.channel_id = realId; n++; }
+      }
+      if (n > 0) migrated[table] = n;
+    }
+
+    db.save();
+    console.log(`[Settings] Deleted channel ${targetId}, migrated to ${realId}:`, migrated);
+    res.json({ success: true, deleted_channel: targetId, settings_removed: removedSettings, campaigns_migrated: migrated });
+  } catch (e) {
+    next(e);
+  }
+});
+
 router.post('/sync-catalog', async (req, res, next) => {
   try {
     const db = getDb();
