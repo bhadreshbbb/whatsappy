@@ -1941,6 +1941,7 @@ export default function Campaigns() {
   const [audienceLoading, setAudienceLoading] = useState({});
   const [expandedAPVRow, setExpandedAPVRow] = useState(null); // "campaignId-rowIndex"
   const [editTiming, setEditTiming] = useState(null); // { id, stage1Min, stage2Min, saving }
+  const [allMetaTpls, setAllMetaTpls] = useState([]); // for displaying template name on cards
 
   const [sendResultMap, setSendResultMap] = useState({}); // campaignId → { sent, skipped, errors[] }
   const [testModal, setTestModal] = useState(null);  // { id, name } | null
@@ -2241,6 +2242,8 @@ export default function Campaigns() {
     const c = await campaignsApi.list();
     setCampaigns(c || []);
     setLoading(false);
+    fetch('/api/meta-templates', { headers: CH() })
+      .then(r => r.json()).then(d => setAllMetaTpls(d.templates || [])).catch(() => {});
   };
 
   const handleToggle = async (c) => {
@@ -2488,6 +2491,17 @@ export default function Campaigns() {
                           Single Product
                         </span>
                       )}
+                      {c.meta_template_id && (() => {
+                        const tplName = c.meta_template_name ||
+                          allMetaTpls.find(t => String(t.id) === String(c.meta_template_id))?.name ||
+                          `template #${c.meta_template_id}`;
+                        return (
+                          <span className="text-[9px] px-1.5 py-0.5 rounded font-bold"
+                            style={{ background: 'rgba(167,139,250,0.1)', border: '1px solid rgba(167,139,250,0.2)', color: '#a78bfa' }}>
+                            📋 {tplName}
+                          </span>
+                        );
+                      })()}
                       {isCustom && (
                         <span className="text-[9px] px-1.5 py-0.5 rounded font-bold"
                           style={{ background: 'rgba(168,85,247,0.1)', border: '1px solid rgba(168,85,247,0.2)', color: '#c084fc' }}>

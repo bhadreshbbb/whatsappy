@@ -56,6 +56,9 @@ export const campaignsController = {
       const templateId      = b.template_id      || b.template?.id   || null;
       const templateIds     = b.template_ids     || [];
       const metaTemplateId  = b.meta_template_id || null;   // linked approved Meta carousel template
+      const metaTemplateName = metaTemplateId
+        ? ((db.meta_templates || []).find(t => String(t.id) === String(metaTemplateId))?.name || b.meta_template_name || null)
+        : null;
       const delayHours      = b.delay_hours  != null ? Number(b.delay_hours)  : 1;
       const runTimes        = b.run_times    != null ? Number(b.run_times)    : 1; // 0 = infinite
 
@@ -72,6 +75,7 @@ export const campaignsController = {
         template_id: templateId,
         template_ids: templateIds,
         meta_template_id: metaTemplateId,
+        meta_template_name: metaTemplateName,
         stage_vars: b.stage_vars || null,   // { s1: { v1, v2 }, s2: { v1, v2 } } for abandoned_product_view
         apv_delay_min:    b.apv_delay_min    != null ? Number(b.apv_delay_min)    : null, // APV: mins before 1st msg
         apv_followup_min: b.apv_followup_min != null ? Number(b.apv_followup_min) : null, // APV: mins gap before 2nd msg
@@ -113,6 +117,10 @@ export const campaignsController = {
         template_name:    template?.name ?? existing.template_name,
         template_ids:     template_ids ?? existing.template_ids,
         meta_template_id: req.body.meta_template_id !== undefined ? (req.body.meta_template_id || null) : existing.meta_template_id,
+        meta_template_name: (() => {
+          const newId = req.body.meta_template_id !== undefined ? (req.body.meta_template_id || null) : existing.meta_template_id;
+          return newId ? ((db.meta_templates || []).find(t => String(t.id) === String(newId))?.name || existing.meta_template_name || null) : null;
+        })(),
         delay_hours:      delayHours ?? existing.delay_hours,
         apv_delay_min:    req.body.apv_delay_min    != null ? Number(req.body.apv_delay_min)    : existing.apv_delay_min,
         apv_followup_min: req.body.apv_followup_min != null ? Number(req.body.apv_followup_min) : existing.apv_followup_min,
