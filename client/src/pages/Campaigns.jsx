@@ -1980,24 +1980,29 @@ export default function Campaigns() {
     s.on('disconnect', () => console.warn('[APV Socket] ⚠ Disconnected'));
 
     // Step-by-step debug trace from server
-    const _debugGroups = {};
+    const _groups = {};
     s.on('apv_debug', ({ campaign, phone, step, detail, ts }) => {
-      const key = `${campaign}|${phone}`;
+      const key = `${campaign}||${phone}`;
       const isSkip = step.startsWith('❌');
-      const isStart = step.startsWith('4.');
+      const isFirst = step.startsWith('1.');
 
-      if (isStart && !_debugGroups[key]) {
-        console.group(`%c📡 APV FLOW  ${phone}  |  ${campaign}  [${ts}]`, 'color:#818cf8;font-size:12px;font-weight:bold');
-        _debugGroups[key] = true;
+      // Open group on first step
+      if (isFirst && !_groups[key]) {
+        console.group(`%c📡 APV FLOW  +${phone}  |  ${campaign}  [${ts}]`, 'color:#818cf8;font-size:12px;font-weight:bold');
+        _groups[key] = true;
       }
 
-      const color = isSkip ? '#f87171' : '#94a3b8';
-      const prefix = isSkip ? '❌' : '→';
-      console.log(`%c  ${prefix} ${step}`, `color:${color};font-weight:${isSkip?'bold':'normal'}`, '|', detail);
+      const color = isSkip ? '#f87171' : step.startsWith('→') ? '#4ade80' : '#94a3b8';
+      console.log(
+        `%c  ${isSkip ? '❌' : '→'} ${step}`,
+        `color:${isSkip ? '#f87171' : '#94a3b8'};font-weight:${isSkip ? 'bold' : 'normal'}`,
+        detail
+      );
 
-      if (isSkip) {
+      // Close group on skip or on step 10 (credentials = last step before actual send)
+      if ((isSkip || step.startsWith('10.')) && _groups[key]) {
         console.groupEnd();
-        delete _debugGroups[key];
+        delete _groups[key];
       }
     });
 
