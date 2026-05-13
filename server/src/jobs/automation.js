@@ -24,10 +24,25 @@ function hasValidCredentials(db, channelId) {
   } catch (_) { return false; }
 }
 
-// Returns the channel that has WhatsApp credentials in Settings — the user's real channel.
-// All automation data queries use this channel, regardless of what campaign.channel_id says.
+// Returns the real user-owned channel that has WhatsApp credentials.
+// Prefers channels that have a user account (ignores orphaned / stale credentials).
 function getPrimaryChannelId(db) {
   const rows = db.channel_settings || [];
+
+  // Priority 1: a channel that has BOTH a user account AND credentials
+  const userChannels = (db.users || [])
+    .map(u => u.channel_id)
+    .filter(c => c && c !== 'demo');
+  for (const cid of userChannels) {
+    const row = rows.find(r => r.channel_id === cid);
+    if (!row) continue;
+    try {
+      const s = JSON.parse(row.settings || '{}');
+      if (s.whatsapp_token && s.whatsapp_phone_id) return cid;
+    } catch (_) {}
+  }
+
+  // Priority 2: first non-demo channel with credentials (legacy fallback)
   for (const row of rows) {
     if (row.channel_id === 'demo') continue;
     try {
@@ -35,9 +50,8 @@ function getPrimaryChannelId(db) {
       if (s.whatsapp_token && s.whatsapp_phone_id) return row.channel_id;
     } catch (_) {}
   }
-  // Fallback: first non-demo user channel
-  const user = (db.users || []).find(u => u.channel_id && u.channel_id !== 'demo');
-  return user?.channel_id || 'demo';
+
+  return userChannels[0] || 'demo';
 }
 const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000;
 const SIX_HOURS_MS = 60 * 1000; // DEMO: 1 minute (change back to 6 * 60 * 60 * 1000 for production
@@ -417,10 +431,9 @@ async function apvQuickCheck() {
   if (apvCampaigns.length === 0) return;
 
   for (const cam of apvCampaigns) {
-    // Use the campaign's own channelId only if it has valid credentials — if the channel
-    // was deleted or replaced, fall back to the primary channel so messages still go out.
-    const channelId = (cam.channel_id && cam.channel_id !== 'demo' && cam.channel_id !== '' && hasValidCredentials(db, cam.channel_id))
-      ? cam.channel_id : getPrimaryChannelId(db);
+    // Always use the primary user-owned channel — campaign.channel_id may be stale
+    // (e.g. created under an old channel that no longer has a user account).
+    const channelId = getPrimaryChannelId(db);
     const STAGE1_DELAY_MS = (cam.apv_delay_min  != null ? cam.apv_delay_min  : 2) * 60 * 1000;
     const STAGE2_GAP_MS   = (cam.apv_followup_min != null ? cam.apv_followup_min : 4) * 60 * 1000;
 
@@ -928,10 +941,8 @@ async function runAutomation() {
   const campaigns = (db.abandoned_cart_campaigns || []).filter(c => c.is_active);
 
   for (const cam of campaigns) {
-    // Use the campaign's own channel_id only if it has valid credentials — if the channel
-    // was deleted or replaced, fall back to the primary channel so messages still go out.
-    const channelId = (cam.channel_id && cam.channel_id !== 'demo' && cam.channel_id !== '' && hasValidCredentials(db, cam.channel_id))
-      ? cam.channel_id : getPrimaryChannelId(db);
+    // Always use the primary user-owned channel — campaign.channel_id may be stale.
+    const channelId = getPrimaryChannelId(db);
     try {
       const delayMs = (cam.delay_hours || 0) * 60 * 60 * 1000;
       const targetTime = new Date(Date.now() - delayMs).toISOString();
