@@ -2017,6 +2017,22 @@ export default function Campaigns() {
       );
       setLiveSendMap(m => ({ ...m, [data.phone]: { status: 'sent', stage: data.stage, wamid: data.wamid, ts: data.timestamp } }));
       setTimeout(() => setLiveSendMap(m => { const n = { ...m }; delete n[data.phone]; return n; }), 5000);
+      // Refresh audience panel immediately so lock status updates without waiting 20s
+      const cid = String(data.campaign_id);
+      setAudienceMap(prev => prev[cid] !== undefined
+        ? prev  // will be refreshed by fetch below
+        : prev
+      );
+      fetch(`/api/campaigns/${cid}/audience`, {
+        headers: (() => {
+          const _c = localStorage.getItem('channelId');
+          const ch = (_c && _c !== 'undefined' && _c !== 'null') ? _c : '';
+          const tk = localStorage.getItem('authToken');
+          return { 'x-channel-id': ch, ...(tk ? { Authorization: `Bearer ${tk}` } : {}) };
+        })()
+      }).then(r => r.ok ? r.json() : null).then(d => {
+        if (d) setAudienceMap(prev => ({ ...prev, [cid]: d }));
+      }).catch(() => {});
     });
 
     s.on('apv_failed', (data) => {

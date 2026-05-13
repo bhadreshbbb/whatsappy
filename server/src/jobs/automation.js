@@ -448,7 +448,7 @@ async function apvQuickCheck() {
       if (global.io) global.io.emit('apv_debug', { campaign: cam.name, channelId, phone, step, detail, ts: new Date().toLocaleTimeString() });
     };
 
-    dbg('1. CHANNEL', `cam.channel_id="${cam.channel_id}" → using channelId="${channelId}"`);
+    dbg('1. CHANNEL', `channelId="${channelId}"${channelId !== cam.channel_id ? ` (campaign has stale "${cam.channel_id}" — using primary)` : ''}`);
 
     // ── Stage 1: locks at stage=0 whose delay has expired ──────────────────
     const allLocksForCam = (db.campaign_locks || []).filter(l => String(l.campaign_id) === String(cam.id));
@@ -2028,24 +2028,31 @@ async function sendMultiple(db, cam, events, type, credChannelId) {
         // Status product_recommendation = both follow-ups sent, user in recommendation pool.
         // Any new product_view will restart the cycle via statusMachine re-entry rules.
         if (currentStage === 2 && cam.campaign_type === 'abandoned_product_view') {
-          const vIdx = db.website_visitors.findIndex(v => v.phone === evt.phone);
-          if (vIdx >= 0) {
-            const upgraded = upgradeStatus(db.website_visitors[vIdx], 'product_recommendation');
+          // Upgrade ALL sessions for this phone — a stale 'active' session on another channel
+          // must not leave 'product_view_lock' sessions behind after cycle completion.
+          const nowIso = new Date().toISOString();
+          let anyUpgraded = false;
+          db.website_visitors.forEach((v, idx) => {
+            if (v.phone !== evt.phone) return;
+            const upgraded = upgradeStatus(db.website_visitors[idx], 'product_recommendation');
             if (upgraded) {
-              db.website_visitors[vIdx].apv_source_campaign_id   = cam.id;
-              db.website_visitors[vIdx].apv_source_campaign_name = cam.name;
-              db.website_visitors[vIdx].apv_completed_at         = new Date().toISOString();
-              // Close the lock immediately — no need to wait for checkLockedUsers 5-min timer
-              const closeLock = (db.campaign_locks || []).find(l =>
-                l.phone === evt.phone && String(l.campaign_id) === String(cam.id)
-              );
-              if (closeLock && closeLock.lock_status === 'active') {
-                closeLock.lock_status   = 'shifted_recommendation';
-                closeLock.shifted_at    = new Date().toISOString();
-                closeLock.unlock_reason = 'follow_up_loop_complete_no_conversion';
-              }
-              console.log(`[APV Stage 2] ${evt.phone} → product_recommendation — campaign "${cam.name}"`);
+              db.website_visitors[idx].apv_source_campaign_id   = cam.id;
+              db.website_visitors[idx].apv_source_campaign_name = cam.name;
+              db.website_visitors[idx].apv_completed_at         = nowIso;
+              anyUpgraded = true;
             }
+          });
+          if (anyUpgraded) {
+            // Close the lock immediately — no need to wait for checkLockedUsers 5-min timer
+            const closeLock = (db.campaign_locks || []).find(l =>
+              l.phone === evt.phone && String(l.campaign_id) === String(cam.id)
+            );
+            if (closeLock && closeLock.lock_status === 'active') {
+              closeLock.lock_status   = 'shifted_recommendation';
+              closeLock.shifted_at    = nowIso;
+              closeLock.unlock_reason = 'follow_up_loop_complete_no_conversion';
+            }
+            console.log(`[APV Stage 2] ${evt.phone} → product_recommendation — campaign "${cam.name}"`);
           }
         }
 
@@ -2234,14 +2241,19 @@ async function sendMultiple(db, cam, events, type, credChannelId) {
           console.log(`[Stage 4] ${evt.phone} → followup_complete → weekly upsell loop`);
         }
       } else if (currentStage === 2 && cam.campaign_type === 'abandoned_product_view') {
-        const vIdx = db.website_visitors.findIndex(v => v.phone === evt.phone);
-        if (vIdx >= 0 && upgradeStatus(db.website_visitors[vIdx], 'product_recommendation')) {
+        const nowIso2 = new Date().toISOString();
+        let anyUpgraded2 = false;
+        db.website_visitors.forEach((v, idx) => {
+          if (v.phone !== evt.phone) return;
+          if (upgradeStatus(db.website_visitors[idx], 'product_recommendation')) anyUpgraded2 = true;
+        });
+        if (anyUpgraded2) {
           const closeLock = (db.campaign_locks || []).find(l =>
             l.phone === evt.phone && String(l.campaign_id) === String(cam.id)
           );
           if (closeLock && closeLock.lock_status === 'active') {
             closeLock.lock_status   = 'shifted_recommendation';
-            closeLock.shifted_at    = new Date().toISOString();
+            closeLock.shifted_at    = nowIso2;
             closeLock.unlock_reason = 'follow_up_loop_complete_no_conversion';
           }
           console.log(`[APV Stage 2] ${evt.phone} → product_recommendation`);
