@@ -1650,6 +1650,9 @@ async function sendMultiple(db, cam, events, type, credChannelId) {
         emit('❌ SKIP no_approved_template', evt.phone, `template id=${cam.meta_template_id} not found or not APPROVED — check Meta Templates page`);
         console.warn(`[Automation] Campaign "${cam.name}" — linked Meta template ${cam.meta_template_id} not found or not APPROVED (status may be PENDING/DRAFT/REJECTED)`);
       }
+      if (!cam.meta_template_id) {
+        emit('9. NO META TEMPLATE', evt.phone, `cam.meta_template_id is empty — will use PATH B (plain text template)`);
+      }
 
       if (metaTpl) {
         // Refresh products if campaign delay has elapsed since last product refresh
@@ -1669,6 +1672,8 @@ async function sendMultiple(db, cam, events, type, credChannelId) {
           const visitorName = visitor?.name || evt.name || 'Customer';
           let _apvSkip = false; // set true to skip this user
 
+          emit('9a. APV PRODUCT MODE', evt.phone, `single-product build — is_carousel=${metaTpl.is_carousel} template="${metaTpl.name}"`);
+
           try {
             // ── Step 1: Ensure product data is complete — scrape if anything missing ──
             let productName  = evt.product_name  || '';
@@ -1676,15 +1681,18 @@ async function sendMultiple(db, cam, events, type, credChannelId) {
             let productImage = evt.product_image || '';
             const productUrl = evt.product_url   || '';
 
+            emit('9b. PRODUCT DATA', evt.phone, `name="${productName}" price="${productPrice}" image=${!!productImage} url="${productUrl.slice(0,60)}"`);
+
             // If absolutely no data and no URL to scrape, skip this user
             if (!productUrl && !productName && !productImage) {
+              emit('❌ SKIP no_product_data', evt.phone, 'no productUrl, name, or image in lock/event — cannot build message');
               console.warn(`[AbandonedProductView] SKIP ${evt.phone} — no product URL or data available`);
               _apvSkip = true;
             }
 
             if (!_apvSkip && productUrl && (!productName || !productPrice || !productImage)) {
+              emit('9c. SCRAPING', evt.phone, `missing fields — scraping ${productUrl.slice(0, 80)}`);
               try {
-                console.log(`[AbandonedProductView] Missing product data for ${evt.phone} — scraping ${productUrl}`);
                 const scraped = await scrapeProductData(productUrl);
                 if (!productName  && (scraped.title || scraped.name))      productName  = scraped.title || scraped.name;
                 if (!productPrice && scraped.price)                         productPrice = scraped.price;
@@ -1697,8 +1705,10 @@ async function sendMultiple(db, cam, events, type, credChannelId) {
                   if (!db.product_views[pvIdx].product_price && productPrice) db.product_views[pvIdx].product_price = productPrice;
                   if (!db.product_views[pvIdx].product_image && productImage) db.product_views[pvIdx].product_image = productImage;
                 }
+                emit('9c. SCRAPED ✅', evt.phone, `name="${productName}" price="${productPrice}" image=${!!productImage}`);
                 console.log(`[AbandonedProductView] Scraped: "${productName}" ${productPrice} img=${!!productImage}`);
               } catch (scrapeErr) {
+                emit('9c. SCRAPE FAILED', evt.phone, `${scrapeErr.message} — continuing with available data`);
                 console.warn(`[AbandonedProductView] Scrape failed for ${evt.phone}: ${scrapeErr.message} — continuing with available data`);
               }
             }
@@ -1716,6 +1726,7 @@ async function sendMultiple(db, cam, events, type, credChannelId) {
               // Ensure v1/v2 are NEVER empty — Meta rejects empty variable values
               const v1 = tok(stageTpl.v1) || productName  || 'Check this product';
               const v2 = tok(stageTpl.v2) || productPrice || 'Limited time offer';
+              emit('9d. VARS', evt.phone, `stage=${currentStage} v1="${v1.slice(0,40)}" v2="${v2.slice(0,40)}"`);
 
               // ── Step 3: Upload product image to Meta media API → media_id ──
               let productMediaId = '';
@@ -1726,8 +1737,10 @@ async function sendMultiple(db, cam, events, type, credChannelId) {
                 );
                 if (cached) {
                   productMediaId = cached.media_id;
+                  emit('9e. IMAGE CACHE HIT ✅', evt.phone, `media_id="${productMediaId}"`);
                   console.log(`[AbandonedProductView] Image cache hit for ${evt.phone} — media_id: ${productMediaId}`);
                 } else {
+                  emit('9e. IMAGE UPLOADING', evt.phone, `downloading & uploading to Meta Media API…`);
                   try {
                     const { buffer, mimeType } = await whatsappService.downloadImage(productImage);
                     productMediaId = await whatsappService.uploadMedia(buffer, `apv_${Date.now()}.jpg`, mimeType);
@@ -1747,8 +1760,10 @@ async function sendMultiple(db, cam, events, type, credChannelId) {
                       created_at: new Date().toISOString(),
                     });
                     db.save();
+                    emit('9e. IMAGE UPLOADED ✅', evt.phone, `media_id="${productMediaId}"`);
                     console.log(`[AbandonedProductView] Image uploaded for ${evt.phone} → media_id: ${productMediaId}`);
                   } catch (imgErr) {
+                    emit('9e. IMAGE UPLOAD FAILED', evt.phone, `${imgErr.message} — falling back to template header image`);
                     console.warn(`[AbandonedProductView] Image upload failed for ${evt.phone}: ${imgErr.message} — falling back to template header`);
                     // Use the template's own stored header image as fallback
                     productMediaId = metaTpl.header_image_id || '';
@@ -1758,10 +1773,14 @@ async function sendMultiple(db, cam, events, type, credChannelId) {
                 // No product image at all — fall back to template's stored header image
                 productMediaId = metaTpl.header_image_id || '';
                 if (productMediaId) {
+                  emit('9e. IMAGE FALLBACK', evt.phone, `no product image — using template header media_id="${productMediaId}"`);
                   console.log(`[AbandonedProductView] No product image for ${evt.phone} — using template header image`);
                 } else if (metaTpl.header_type === 'IMAGE') {
+                  emit('❌ SKIP no_image', evt.phone, `header_type=IMAGE but no product image and no template header_image_id`);
                   console.warn(`[AbandonedProductView] SKIP ${evt.phone} — template requires IMAGE header but no image available`);
                   _apvSkip = true;
+                } else {
+                  emit('9e. NO IMAGE', evt.phone, `header_type="${metaTpl.header_type}" — skipping image (not required)`);
                 }
               }
 
@@ -1779,14 +1798,17 @@ async function sendMultiple(db, cam, events, type, credChannelId) {
                     media_id: productMediaId,
                   }],
                 };
+                emit('9f. CONFIG BUILT ✅', evt.phone, `v1="${v1.slice(0,30)}" v2="${v2.slice(0,30)}" media_id="${productMediaId}" url="${productUrl.slice(0,40)}"`);
               }
             }
           } catch (apvErr) {
+            emit('❌ SKIP apv_error', evt.phone, `unexpected error: ${apvErr.message}`);
             console.error(`[AbandonedProductView] Unexpected error building config for ${evt.phone}: ${apvErr.message}`);
             _apvSkip = true;
           }
 
           if (_apvSkip) {
+            emit('❌ SKIP apv_final', evt.phone, `cannot build valid payload — recording as failed`);
             console.warn(`[AbandonedProductView] Skipping send for ${evt.phone} — cannot build valid payload (no product image + no template header)`);
             // Record as failed so UI shows the issue and ready_to_send clears
             db.abandoned_cart_executions.push({
@@ -1804,13 +1826,16 @@ async function sendMultiple(db, cam, events, type, credChannelId) {
         } else if (!metaTpl.is_carousel && (evt.product_name || evt.product_url)) {
           const visitorName = visitor?.name || evt.name || 'Customer';
           perUserProductConfig = { cards: [{ name: visitorName, title: evt.product_name || '', price: evt.product_price || '', link: evt.product_url || '', url: evt.product_url || '', image: evt.product_image || '' }] };
+          emit('9a. NON-APV SINGLE PRODUCT', evt.phone, `using evt product data directly title="${evt.product_name?.slice(0,30)}"`);
         }
 
         // Build the exact /messages payload with language override + UTM tracking
         let sendPayload;
         try {
           sendPayload = buildSendMessagePayload(metaTpl, perUserProductConfig, evt.phone, metaLangCode, cam.id);
+          emit('9g. PAYLOAD BUILT ✅', evt.phone, `template="${metaTpl.name}" lang="${metaLangCode}" cards=${perUserProductConfig?.cards?.length ?? 0}`);
         } catch (buildErr) {
+          emit('❌ SKIP payload_build_failed', evt.phone, `buildSendMessagePayload error: ${buildErr.message}`);
           console.error(`[APV] buildSendMessagePayload failed for ${evt.phone}: ${buildErr.message}`);
           const failedAt = new Date().toISOString();
           db.abandoned_cart_executions.push({
@@ -1860,10 +1885,8 @@ async function sendMultiple(db, cam, events, type, credChannelId) {
 
         let sendResult;
         try {
-          emit('10b. CALLING API', evt.phone, `POST graph.facebook.com/v25.0/{phoneId}/messages`);
           sendResult = await whatsappService.sendTemplateMessage(evt.phone, sendPayload, channelId);
         } catch (sendErr) {
-          emit('11. FAILED ❌', evt.phone, `error="${sendErr.message.slice(0, 120)}"`);
           console.error(`[MetaTemplateSend] FAILED for ${evt.phone} — ${sendErr.message}`);
           const failedAt = new Date().toISOString();
           db.abandoned_cart_executions.push({
@@ -2015,7 +2038,6 @@ async function sendMultiple(db, cam, events, type, credChannelId) {
         }
 
         // Emit success event so browser console shows wamid
-        emit('11. SENT ✅', evt.phone, `wamid=${sendResult?.messageId || 'null'} stage=${currentStage}`);
         if (global.io) {
           global.io.emit('apv_sent', {
             phone: evt.phone, campaign_id: cam.id, campaign_name: cam.name,
@@ -2031,8 +2053,10 @@ async function sendMultiple(db, cam, events, type, credChannelId) {
       }
 
       // ── PATH B: Old message_templates (type: "text") ───────────────────────
+      emit('PATH B', evt.phone, `using plain text template_id="${templateId}" — no meta_template_id on campaign`);
       const templateRecord = db.message_templates.find(t => t.id == templateId);
       if (!templateRecord) {
+        emit('❌ SKIP path_b_no_template', evt.phone, `template id="${templateId}" not found in message_templates — add a template to campaign`);
         console.warn(`[Automation] Template ${templateId} not found for campaign "${cam.name}" — skipping ${evt.phone}`);
         db.abandoned_cart_executions.push({
           id: (db.abandoned_cart_executions.length || 0) + 1,
@@ -2045,6 +2069,7 @@ async function sendMultiple(db, cam, events, type, credChannelId) {
         db.save();
         continue;
       }
+      emit('PATH B TEMPLATE', evt.phone, `found template "${templateRecord.name}" body="${(templateRecord.body_text||'').slice(0,50)}"`);
 
       // Build components from new-format (body_text) or fall back to old components field
       let components;
