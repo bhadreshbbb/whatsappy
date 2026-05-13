@@ -469,12 +469,15 @@ async function apvQuickCheck() {
       const visitor = (db.website_visitors || []).find(v => v.phone === l.phone);
       // Find the product_view for this phone — no channel_id filter (multilogin may have
       // stored views under a different channel than getPrimaryChannelId returns).
-      // Priority: exact URL match → latest view → lock's own cached fields.
+      // Normalize URLs before matching: strip query params so UTM-tagged lock URLs
+      // still match clean product_view URLs stored by the tracker.
+      const cleanUrl = (u) => { try { return new URL(u).origin + new URL(u).pathname; } catch { return (u || '').split('?')[0]; } };
       const allViews = (db.product_views || []).filter(v => v.phone === l.phone);
-      const matchedView = l.product_url
-        ? allViews.find(v => v.product_url === l.product_url)
+      const lockCleanUrl = l.product_url ? cleanUrl(l.product_url) : '';
+      const matchedView = lockCleanUrl
+        ? allViews.find(v => cleanUrl(v.product_url) === lockCleanUrl)
         : null;
-      const latestView = allViews.sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
+      const latestView = [...allViews].sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
       const viewRec = matchedView || latestView;
       return {
         phone:         l.phone,
@@ -1799,9 +1802,10 @@ async function sendMultiple(db, cam, events, type, credChannelId) {
               // ── Step 3: Upload product image to Meta media API → media_id ──
               let productMediaId = '';
               if (productImage) {
-                // Check gallery cache first — avoid re-uploading same product image
+                // Check gallery cache — no channel_id filter (multilogin: image may have been
+                // uploaded under a different channel; media_id is global to the WhatsApp account)
                 const cached = (db.gallery_images || []).find(
-                  g => g.source_url === productImage && g.channel_id === channelId && g.media_id
+                  g => g.source_url === productImage && g.media_id
                 );
                 if (cached) {
                   productMediaId = cached.media_id;
