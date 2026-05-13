@@ -426,16 +426,34 @@ async function apvQuickCheck() {
   let apvCampaigns = (db.abandoned_cart_campaigns || []).filter(c =>
     c.is_active && c.campaign_type === 'abandoned_product_view'
   );
-  // Safety net: if multiple active APV campaigns exist (shouldn't happen — creation auto-deactivates old ones),
-  // keep only the most recently created one to avoid sending duplicate/wrong-template messages.
-  if (apvCampaigns.length > 1) {
-    apvCampaigns.sort((a, b) => Number(b.id) - Number(a.id));
-    const [newest, ...stale] = apvCampaigns;
-    for (const s of stale) { s.is_active = 0; s.updated_at = new Date().toISOString(); }
-    db.save();
-    console.warn(`[APVQuick] ⚠ Multiple active APV campaigns detected — auto-deactivated ${stale.length} stale (keeping "${newest.name}", template="${newest.meta_template_name}")`);
-    apvCampaigns = [newest];
+  // Enforce single active APV campaign — keep newest, deactivate rest, migrate their locks.
+  const allApvCampaigns = (db.abandoned_cart_campaigns || []).filter(c => c.campaign_type === 'abandoned_product_view');
+  const newestApv = allApvCampaigns.sort((a, b) => Number(b.id) - Number(a.id))[0];
+
+  if (apvCampaigns.length > 1 || (newestApv && apvCampaigns.length === 1 && String(apvCampaigns[0].id) !== String(newestApv.id))) {
+    // Deactivate all APV campaigns except the newest
+    let migratedLocks = 0;
+    for (const old of allApvCampaigns) {
+      if (String(old.id) === String(newestApv?.id)) continue;
+      if (old.is_active) { old.is_active = 0; old.updated_at = new Date().toISOString(); }
+      // Migrate active locks from this stale campaign → newest campaign
+      if (newestApv) {
+        for (const lock of (db.campaign_locks || [])) {
+          if (String(lock.campaign_id) === String(old.id) && lock.lock_status === 'active') {
+            lock.campaign_id = newestApv.id;
+            migratedLocks++;
+          }
+        }
+      }
+    }
+    if (migratedLocks > 0 || apvCampaigns.length > 1) {
+      db.save();
+      console.warn(`[APVQuick] ⚠ Deactivated stale APV campaigns, migrated ${migratedLocks} lock(s) → "${newestApv?.name}" (template="${newestApv?.meta_template_name}")`);
+    }
+    apvCampaigns = newestApv ? [newestApv] : [];
   }
+
+  // Also collect ANY active lock for any APV campaign (including ones just migrated)
   const allLocks = (db.campaign_locks || []).filter(l => apvCampaigns.some(c => String(c.id) === String(l.campaign_id)));
   console.log(`[APVQuick] tick — ${apvCampaigns.length} active APV campaign(s) | ${allLocks.length} total lock(s) | io=${!!global.io}`);
   if (apvCampaigns.length === 0) return;
@@ -449,12 +467,15 @@ async function apvQuickCheck() {
 
     const buildEvent = (l) => {
       const visitor = (db.website_visitors || []).find(v => v.phone === l.phone);
-      // Match the exact product_view that triggered this lock (by product_url).
-      // Lock data is primary — it holds the specific abandoned product.
-      // viewRec is fallback only for fields the lock didn't capture (e.g. price added later).
-      const viewRec = l.product_url
-        ? (db.product_views || []).find(v => v.phone === l.phone && v.product_url === l.product_url)
-        : (db.product_views || []).filter(v => v.phone === l.phone).sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
+      // Find the product_view for this phone — no channel_id filter (multilogin may have
+      // stored views under a different channel than getPrimaryChannelId returns).
+      // Priority: exact URL match → latest view → lock's own cached fields.
+      const allViews = (db.product_views || []).filter(v => v.phone === l.phone);
+      const matchedView = l.product_url
+        ? allViews.find(v => v.product_url === l.product_url)
+        : null;
+      const latestView = allViews.sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
+      const viewRec = matchedView || latestView;
       return {
         phone:         l.phone,
         name:          visitor?.name || '',
