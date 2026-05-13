@@ -449,18 +449,19 @@ async function apvQuickCheck() {
 
     const buildEvent = (l) => {
       const visitor = (db.website_visitors || []).find(v => v.phone === l.phone);
-      // Always use the LATEST product_views record — the user may have viewed a
-      // different product after the lock was created; lock data is stale in that case.
-      const viewRec = (db.product_views  || [])
-        .filter(v => v.phone === l.phone)
-        .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
+      // Match the exact product_view that triggered this lock (by product_url).
+      // Lock data is primary — it holds the specific abandoned product.
+      // viewRec is fallback only for fields the lock didn't capture (e.g. price added later).
+      const viewRec = l.product_url
+        ? (db.product_views || []).find(v => v.phone === l.phone && v.product_url === l.product_url)
+        : (db.product_views || []).filter(v => v.phone === l.phone).sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
       return {
         phone:         l.phone,
         name:          visitor?.name || '',
-        product_name:  viewRec?.product_name  || l.product_name  || '',
-        product_image: viewRec?.product_image || l.product_image || '',
-        product_url:   viewRec?.product_url   || l.product_url   || '',
-        product_price: viewRec?.product_price || l.product_price || '',
+        product_name:  l.product_name  || viewRec?.product_name  || '',
+        product_image: l.product_image || viewRec?.product_image || '',
+        product_url:   l.product_url   || viewRec?.product_url   || '',
+        product_price: l.product_price || viewRec?.product_price || '',
         followup_count: 0,       // overridden per stage below
         whatsapp_sent:  0,       // overridden per stage below
         whatsapp_sent_at: null,  // overridden per stage below
