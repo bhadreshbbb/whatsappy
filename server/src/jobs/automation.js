@@ -439,16 +439,18 @@ async function apvQuickCheck() {
 
     const buildEvent = (l) => {
       const visitor = (db.website_visitors || []).find(v => v.phone === l.phone);
+      // Always use the LATEST product_views record — the user may have viewed a
+      // different product after the lock was created; lock data is stale in that case.
       const viewRec = (db.product_views  || [])
         .filter(v => v.phone === l.phone)
         .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
       return {
         phone:         l.phone,
         name:          visitor?.name || '',
-        product_name:  l.product_name  || viewRec?.product_name  || '',
-        product_image: l.product_image || viewRec?.product_image || '',
-        product_url:   l.product_url   || viewRec?.product_url   || '',
-        product_price: l.product_price || viewRec?.product_price || '',
+        product_name:  viewRec?.product_name  || l.product_name  || '',
+        product_image: viewRec?.product_image || l.product_image || '',
+        product_url:   viewRec?.product_url   || l.product_url   || '',
+        product_price: viewRec?.product_price || l.product_price || '',
         followup_count: 0,       // overridden per stage below
         whatsapp_sent:  0,       // overridden per stage below
         whatsapp_sent_at: null,  // overridden per stage below
@@ -1663,16 +1665,21 @@ async function sendMultiple(db, cam, events, type, credChannelId) {
         : (cam.target_language || 'en');
       const metaLangCode = LANG_MAP[userLang] || userLang; // 'hi' → 'hi', 'en' → 'en_US'
 
-      // ── PATH A: Meta Carousel Template (type: "template") ──────────��──────
-      // Used when campaign has a linked approved Meta carousel template.
-      // This is the correct format for product recommendation campaigns.
+      // ── PATH A: Meta Carousel Template (type: "template") ──────────────────
+      // Find by ID exactly — same logic as test send. No status gating here;
+      // Meta will reject unapproved templates at the API level with a clear error.
       const metaTpl = cam.meta_template_id
-        ? (db.meta_templates || []).find(t => String(t.id) === String(cam.meta_template_id) && ['approved', 'active'].includes((t.meta_status || '').toLowerCase()))
+        ? (db.meta_templates || []).find(t => String(t.id) === String(cam.meta_template_id))
         : null;
-      emit('9. TEMPLATE', evt.phone, `meta_template_id="${cam.meta_template_id}" found=${!!metaTpl} status="${metaTpl?.meta_status || 'N/A'}" name="${metaTpl?.name || 'none'}"`);
+      const _tplStatus = (metaTpl?.meta_status || '').toLowerCase();
+      const _tplApproved = ['approved', 'active'].includes(_tplStatus);
+      emit('9. TEMPLATE', evt.phone, `meta_template_id="${cam.meta_template_id}" found=${!!metaTpl} status="${metaTpl?.meta_status || 'N/A'}" approved=${_tplApproved} name="${metaTpl?.name || 'none'}"`);
       if (cam.meta_template_id && !metaTpl) {
-        emit('❌ SKIP no_approved_template', evt.phone, `template id=${cam.meta_template_id} not found or not APPROVED — check Meta Templates page`);
-        console.warn(`[Automation] Campaign "${cam.name}" — linked Meta template ${cam.meta_template_id} not found or not APPROVED (status may be PENDING/DRAFT/REJECTED)`);
+        emit('❌ SKIP no_template_found', evt.phone, `template id=${cam.meta_template_id} not found in meta_templates DB — recreate campaign with correct template`);
+        console.warn(`[Automation] Campaign "${cam.name}" — meta_template_id=${cam.meta_template_id} not found in DB`);
+      }
+      if (metaTpl && !_tplApproved) {
+        emit('9. TEMPLATE STATUS WARN', evt.phone, `status="${metaTpl.meta_status}" — proceeding anyway (Meta will reject if not approved)`);
       }
       if (!cam.meta_template_id) {
         emit('9. NO META TEMPLATE', evt.phone, `cam.meta_template_id is empty — will use PATH B (plain text template)`);
