@@ -431,13 +431,27 @@ async function apvQuickCheck() {
       };
     };
 
+    const dbg = (step, detail) => {
+      if (global.io) global.io.emit('apv_debug', { campaign: cam.name, channelId, step, detail, ts: new Date().toLocaleTimeString() });
+    };
+
+    dbg('1. CHANNEL', `cam.channel_id="${cam.channel_id}" → using channelId="${channelId}"`);
+
     // ── Stage 1: locks at stage=0 whose delay has expired ──────────────────
-    const stage1Locks = (db.campaign_locks || []).filter(l => {
-      if (String(l.campaign_id) !== String(cam.id) || l.lock_status !== 'active') return false;
+    const allLocksForCam = (db.campaign_locks || []).filter(l => String(l.campaign_id) === String(cam.id));
+    dbg('2. ALL LOCKS', `total locks for campaign: ${allLocksForCam.length} | ${allLocksForCam.map(l=>`phone=${l.phone} stage=${l.stage} status=${l.lock_status}`).join(' | ')}`);
+
+    const stage1Locks = allLocksForCam.filter(l => {
+      if (l.lock_status !== 'active') return false;
       if ((l.stage || 0) !== 0) return false;
       const anchor = l.reentry_at || l.locked_at;
-      return anchor && (now - new Date(anchor).getTime()) >= STAGE1_DELAY_MS;
+      const ageMs = anchor ? (now - new Date(anchor).getTime()) : 0;
+      const passed = ageMs >= STAGE1_DELAY_MS;
+      if (!passed) dbg('2b. STAGE1 NOT YET', `phone=${l.phone} age=${Math.round(ageMs/1000)}s need=${Math.round(STAGE1_DELAY_MS/1000)}s`);
+      return passed;
     });
+
+    dbg('3. STAGE1 OVERDUE', `${stage1Locks.length} lock(s) ready to send`);
 
     if (stage1Locks.length > 0) {
       console.log(`[APV Quick] "${cam.name}" stage 1 — ${stage1Locks.length} overdue lock(s)`);
@@ -446,8 +460,8 @@ async function apvQuickCheck() {
     }
 
     // ── Stage 2: locks at stage=1 whose follow-up gap has passed ───────────
-    const stage2Locks = (db.campaign_locks || []).filter(l => {
-      if (String(l.campaign_id) !== String(cam.id) || l.lock_status !== 'active') return false;
+    const stage2Locks = allLocksForCam.filter(l => {
+      if (l.lock_status !== 'active') return false;
       if (l.stage !== 1 || !l.stage_1_sent_at) return false;
       return (now - new Date(l.stage_1_sent_at).getTime()) >= STAGE2_GAP_MS;
     });
@@ -1502,51 +1516,56 @@ async function sendMultiple(db, cam, events, type, credChannelId) {
     return true;
   });
 
+  const emit = (step, phone, detail) => {
+    if (global.io) global.io.emit('apv_debug', { campaign: cam.name, phone, step, detail, ts: new Date().toLocaleTimeString() });
+  };
+
   for (const evt of dedupedEvents) {
+    emit('4. ENTER sendMultiple', evt.phone, `channelId="${channelId}" followup_count=${evt.followup_count}`);
     try {
       // ── LIVE STATUS GUARD: re-fetch visitor status at send time ──
-      // The user may have changed status SINCE this batch was assembled.
-      // This ensures we never send a lower-funnel campaign to a higher-funnel user.
       const visitor = db.website_visitors.find(v => v.phone === evt.phone);
-      
+
       if (visitor?.is_opted_out) {
+        emit('❌ SKIP opted_out', evt.phone, 'visitor is opted out');
         console.log(`[Status Guard] Skipped "${cam.name}" for ${evt.phone} — user is opted out`);
         continue;
       }
 
       const liveStatus = visitor?.status;
+      emit('5. VISITOR STATUS', evt.phone, `status="${liveStatus}" visitor_found=${!!visitor}`);
 
-      // APV events from apvQuickCheck carry evt._lock — the lock is the source of truth.
-      // Skip status guard so visitors whose status changed to 'cart'/'active'/etc still get the message.
-      // Only hard-block is purchased (converted) or opted-out (already handled above).
       const isApvFromLock = cam.campaign_type === 'abandoned_product_view' && !!evt._lock;
+      emit('6. APV FROM LOCK', evt.phone, `isApvFromLock=${isApvFromLock} (skips status guard)`);
 
       if (!isApvFromLock && liveStatus && isBlockedByStatus(liveStatus, cam.campaign_type)) {
+        emit('❌ SKIP status_guard', evt.phone, `status="${liveStatus}" blocked for ${cam.campaign_type}`);
         console.log(`[Status Guard] Skipped "${cam.name}" for ${evt.phone} — status="${liveStatus}"`);
         continue;
       }
 
-      // For APV from lock: block only if already purchased (no point sending)
       if (isApvFromLock && (liveStatus === 'purchased' || liveStatus === 'followup_complete')) {
+        emit('❌ SKIP already_converted', evt.phone, `status="${liveStatus}"`);
         console.log(`[APV Lock] Skipping ${evt.phone} — already converted (status="${liveStatus}")`);
         continue;
       }
 
-      // Determine current stage
       const currentStage = (type === 'upsell' || type === 'broadcast')
         ? (evt.upsell_count || 0) + 1
         : (evt.followup_count || 0) + 1;
+      emit('7. STAGE', evt.phone, `currentStage=${currentStage}`);
 
-      // ── DEDUP CHECK — only block if already successfully sent (allow retry on failure) ──
+      // ── DEDUP CHECK ──
       const alreadySent = db.abandoned_cart_executions.find(x =>
         x.campaign_id === cam.id && x.phone === evt.phone &&
         (x.stage || 1) === currentStage && x.status === 'sent'
       );
       if (alreadySent) {
+        emit('❌ SKIP dedup', evt.phone, `stage ${currentStage} already sent at ${alreadySent.sent_at}`);
         console.log(`[De-dupe] Already sent stage ${currentStage} of ${cam.name} to ${evt.phone}`);
         continue;
       }
-      // Retry logic: allow up to 3 attempts, then stop so UI shows permanent error
+
       let _retryCount = 0;
       const failedExec = db.abandoned_cart_executions.find(x =>
         x.campaign_id === cam.id && x.phone === evt.phone &&
@@ -1555,15 +1574,18 @@ async function sendMultiple(db, cam, events, type, credChannelId) {
       if (failedExec) {
         const retries = failedExec.retry_count || 0;
         const ageMs = failedExec.sent_at ? Date.now() - new Date(failedExec.sent_at).getTime() : 0;
+        emit('8. FAILED EXEC FOUND', evt.phone, `retry_count=${retries} age=${Math.round(ageMs/1000)}s error="${failedExec.error?.slice(0,60)}"`);
         if (retries >= 3 && ageMs < 30 * 60 * 1000) {
-          // Max retries reached but less than 30 minutes old — stop spamming, wait
+          emit('❌ SKIP max_retries', evt.phone, `${retries} failures, wait ${Math.round((30*60*1000-ageMs)/1000)}s more`);
           console.log(`[Retry] Pausing ${evt.phone} stage ${currentStage} — ${retries} failures, error: ${failedExec.error?.slice(0, 80)}`);
           continue;
         }
-        // Either < 3 retries, or 30+ minutes have passed (credentials may have been fixed) — retry fresh
         _retryCount = ageMs >= 30 * 60 * 1000 ? 0 : retries + 1;
         db.abandoned_cart_executions.splice(db.abandoned_cart_executions.indexOf(failedExec), 1);
+        emit('8b. RETRY', evt.phone, `attempt ${_retryCount+1}, deleted old failed exec`);
         console.log(`[Retry] Attempt ${_retryCount + 1} for stage ${currentStage} of "${cam.name}" → ${evt.phone} (prev: ${failedExec.error?.slice(0, 60)})`);
+      } else {
+        emit('8. NO FAILED EXEC', evt.phone, `fresh send attempt`);
       }
 
       // ── TEMPLATE SELECTION (4-stage array & infinite loop support) ──
@@ -1621,7 +1643,9 @@ async function sendMultiple(db, cam, events, type, credChannelId) {
       const metaTpl = cam.meta_template_id
         ? (db.meta_templates || []).find(t => String(t.id) === String(cam.meta_template_id) && (t.meta_status === 'APPROVED' || t.meta_status === 'ACTIVE'))
         : null;
+      emit('9. TEMPLATE', evt.phone, `meta_template_id="${cam.meta_template_id}" found=${!!metaTpl} status="${metaTpl?.meta_status || 'N/A'}" name="${metaTpl?.name || 'none'}"`);
       if (cam.meta_template_id && !metaTpl) {
+        emit('❌ SKIP no_approved_template', evt.phone, `template id=${cam.meta_template_id} not found or not APPROVED — check Meta Templates page`);
         console.warn(`[Automation] Campaign "${cam.name}" — linked Meta template ${cam.meta_template_id} not found or not APPROVED (status may be PENDING/DRAFT/REJECTED)`);
       }
 
@@ -1818,6 +1842,9 @@ async function sendMultiple(db, cam, events, type, credChannelId) {
         console.log('║  Payload:');
         console.log(JSON.stringify(sendPayload, null, 2));
         console.log('╚══════════════════════════════════════════════════════════════╝\n');
+
+        // Log credentials being used
+        emit('10. CREDENTIALS', evt.phone, `channelId="${channelId}" → getCredentials() will try this channel first, then fallback to others on 401`);
 
         // Emit real-time event to browser — fires the EXACT moment API call is made
         if (global.io) {

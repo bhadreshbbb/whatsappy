@@ -1979,7 +1979,32 @@ export default function Campaigns() {
     s.on('connect',    () => console.log('%c[APV Socket] ✅ Connected — live send events active', 'color:#4ade80'));
     s.on('disconnect', () => console.warn('[APV Socket] ⚠ Disconnected'));
 
+    // Step-by-step debug trace from server
+    const _debugGroups = {};
+    s.on('apv_debug', ({ campaign, phone, step, detail, ts }) => {
+      const key = `${campaign}|${phone}`;
+      const isSkip = step.startsWith('❌');
+      const isStart = step.startsWith('4.');
+
+      if (isStart && !_debugGroups[key]) {
+        console.group(`%c📡 APV FLOW  ${phone}  |  ${campaign}  [${ts}]`, 'color:#818cf8;font-size:12px;font-weight:bold');
+        _debugGroups[key] = true;
+      }
+
+      const color = isSkip ? '#f87171' : '#94a3b8';
+      const prefix = isSkip ? '❌' : '→';
+      console.log(`%c  ${prefix} ${step}`, `color:${color};font-weight:${isSkip?'bold':'normal'}`, '|', detail);
+
+      if (isSkip) {
+        console.groupEnd();
+        delete _debugGroups[key];
+      }
+    });
+
     s.on('apv_sending', (data) => {
+      // Close debug trace group if open
+      const _key = `${data.campaign_name}|${data.phone}`;
+      if (_debugGroups[_key]) { console.groupEnd(); delete _debugGroups[_key]; }
       console.group(`%c⚡ APV SENDING  stage-${data.stage}  →  +${data.phone}`, 'color:#4ade80;font-size:13px;font-weight:bold');
       console.log('%cCampaign :', 'color:#818cf8', data.campaign_name);
       console.log('%cPhone    :', 'color:#818cf8', data.phone);
