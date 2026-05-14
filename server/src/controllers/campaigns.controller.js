@@ -1138,7 +1138,7 @@ export const campaignsController = {
       if (campaign.campaign_type === 'abandoned_product_view') {
 
         const locks = (db.campaign_locks || []).filter(l =>
-          l.channel_id === effectiveChannelId && String(l.campaign_id) === String(id)
+          String(l.campaign_id) === String(id)
         );
         const lockedPhones = new Set(locks.map(l => l.phone));
 
