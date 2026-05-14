@@ -306,7 +306,8 @@ async function checkLockedUsers() {
         const archNow1 = new Date().toISOString();
         (db.abandoned_cart_executions || []).forEach(x => {
           if (String(x.campaign_id) === String(lock.campaign_id) &&
-              x.phone === lock.phone && x.status === 'sent') {
+              x.phone === lock.phone &&
+              (x.status === 'sent' || x.status === 'failed' || x.status === 'reset_for_retry')) {
             x.status = 'archived_reentry'; x.archived_at = archNow1;
           }
         });
@@ -338,7 +339,8 @@ async function checkLockedUsers() {
         const archNow2 = new Date().toISOString();
         (db.abandoned_cart_executions || []).forEach(x => {
           if (String(x.campaign_id) === String(lock.campaign_id) &&
-              x.phone === lock.phone && x.status === 'sent') {
+              x.phone === lock.phone &&
+              (x.status === 'sent' || x.status === 'failed' || x.status === 'reset_for_retry')) {
             x.status = 'archived_reentry'; x.archived_at = archNow2;
           }
         });
@@ -524,6 +526,7 @@ async function apvQuickCheck() {
       console.log(`[APV Quick] "${cam.name}" stage 1 — ${stage1Locks.length} overdue lock(s)`);
       const events = stage1Locks.map(l => ({ ...buildEvent(l), followup_count: 0, whatsapp_sent: 0 }));
       await sendMultiple(db, cam, events, 'view', channelId);
+      db.save();
     } else {
       dbg('3. STAGE1 OVERDUE', '0 lock(s) ready — nothing to send');
     }
@@ -542,6 +545,7 @@ async function apvQuickCheck() {
         followup_count: 1, whatsapp_sent: 1, whatsapp_sent_at: l.stage_1_sent_at,
       }));
       await sendMultiple(db, cam, events, 'view', channelId);
+      db.save();
     }
   }
 }
@@ -2128,6 +2132,7 @@ async function sendMultiple(db, cam, events, type, credChannelId) {
 
         cam.total_sent = (cam.total_sent || 0) + 1;
         cam.last_run_at = new Date().toISOString();
+        if (cam.campaign_type === 'abandoned_product_view') db.save();
         console.log(`[Automation] ${cam.name} meta-template stage-${currentStage} → ${evt.phone}`);
         continue;  // skip PATH B
       }
