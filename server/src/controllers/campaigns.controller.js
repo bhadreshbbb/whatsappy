@@ -1212,6 +1212,12 @@ export const campaignsController = {
 
           let s1, s2;
           if (lockAnchor) {
+            // If re-entry happened after stage was sent, those timestamps are from old cycle — treat as null
+            const reentryMs = lockAnchor.reentry_at ? new Date(lockAnchor.reentry_at).getTime() : 0;
+            const s1Ts = lockAnchor.stage_1_sent_at && (!reentryMs || new Date(lockAnchor.stage_1_sent_at).getTime() >= reentryMs)
+              ? lockAnchor.stage_1_sent_at : null;
+            const s2Ts = lockAnchor.stage_2_sent_at && (!reentryMs || new Date(lockAnchor.stage_2_sent_at).getTime() >= reentryMs)
+              ? lockAnchor.stage_2_sent_at : null;
             const findNear = (lockTs, stageNum) => {
               const stageExecs = allExecs.filter(x => (x.stage || 1) === stageNum);
               // If lock timestamp exists, match within 5 min window
@@ -1221,10 +1227,10 @@ export const campaignsController = {
                 if (near) return near;
               }
               // No lock timestamp yet (stage not sent) — return any failed/pending exec so UI shows it
-              return stageExecs.find(x => x.status === 'failed') || stageExecs[0] || null;
+              return stageExecs.find(x => x.status === 'failed') || (lockTs ? stageExecs[0] : null);
             };
-            s1 = findNear(lockAnchor.stage_1_sent_at, 1);
-            s2 = findNear(lockAnchor.stage_2_sent_at, 2);
+            s1 = findNear(s1Ts, 1);
+            s2 = findNear(s2Ts, 2);
           } else {
             s1 = allExecs.find(x => (x.stage || 1) === 1) || null;
             s2 = allExecs.find(x => x.stage === 2) || null;
@@ -1234,11 +1240,11 @@ export const campaignsController = {
             stage1_status:      s1?.status      || null,
             stage1_error:       s1?.error       || null,
             stage1_retry_count: s1?.retry_count || 0,
-            stage1_sent_at: lockAnchor ? lockAnchor.stage_1_sent_at : (s1?.sent_at || null),
+            stage1_sent_at: lockAnchor ? (s1?.sent_at || null) : (s1?.sent_at || null),
             stage2_status:      s2?.status      || null,
             stage2_error:       s2?.error       || null,
             stage2_retry_count: s2?.retry_count || 0,
-            stage2_sent_at: lockAnchor ? lockAnchor.stage_2_sent_at : (s2?.sent_at || null),
+            stage2_sent_at: lockAnchor ? (s2?.sent_at || null) : (s2?.sent_at || null),
           };
         };
 

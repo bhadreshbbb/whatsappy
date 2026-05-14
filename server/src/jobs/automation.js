@@ -526,6 +526,18 @@ async function apvQuickCheck() {
     if (stage1Locks.length > 0) {
       dbg('3. STAGE1 OVERDUE', `${stage1Locks.length} lock(s) ready → calling sendMultiple`);
       console.log(`[APV Quick] "${cam.name}" stage 1 — ${stage1Locks.length} overdue lock(s)`);
+      // Belt-and-suspenders: archive any stale execs for re-entered locks so dedup never blocks
+      const archNow = new Date().toISOString();
+      for (const l of stage1Locks) {
+        if (l.reentry_at || (l.cycle_count || 0) > 0) {
+          (db.abandoned_cart_executions || []).forEach(x => {
+            if (String(x.campaign_id) === String(cam.id) && x.phone === l.phone &&
+                (x.status === 'sent' || x.status === 'failed' || x.status === 'reset_for_retry')) {
+              x.status = 'archived_reentry'; x.archived_at = archNow;
+            }
+          });
+        }
+      }
       const events = stage1Locks.map(l => ({ ...buildEvent(l), followup_count: 0, whatsapp_sent: 0 }));
       await sendMultiple(db, cam, events, 'view', channelId);
       db.save();
