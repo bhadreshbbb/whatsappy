@@ -438,10 +438,12 @@ async function apvQuickCheck() {
     for (const old of allApvCampaigns) {
       if (String(old.id) === String(newestApv?.id)) continue;
       if (old.is_active) { old.is_active = 0; old.updated_at = new Date().toISOString(); }
-      // Migrate active locks from this stale campaign → newest campaign
+      // Migrate all non-terminal locks from this stale campaign → newest campaign
+      // (include shifted_recommendation so re-entry after cycle completion works)
       if (newestApv) {
         for (const lock of (db.campaign_locks || [])) {
-          if (String(lock.campaign_id) === String(old.id) && lock.lock_status === 'active') {
+          if (String(lock.campaign_id) === String(old.id) &&
+              ['active', 'shifted_recommendation'].includes(lock.lock_status)) {
             lock.campaign_id = newestApv.id;
             migratedLocks++;
           }

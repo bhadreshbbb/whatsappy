@@ -958,7 +958,65 @@ export const trackingController = {
               } else if (_isMidCycleRefresh) {
                 console.log(`[APV] ${v.phone || sessionId} → mid-cycle refresh ignored (stage ${apvLock.stage}, same product) — stage 2 preserved`);
               } else {
-                console.log(`[APV] ${v.phone || sessionId} → product_view_lock (re-entry, no lock to reset) from ${prevStatus}`);
+                // apvLock null: lock has a non-resettable status (cart_added/purchased)
+                // or is missing. Forcibly archive stale execs and ensure a stage-0 lock
+                // exists so apvQuickCheck can fire the new cycle.
+                const activeApvCamp = (db.abandoned_cart_campaigns || []).find(c =>
+                  c.campaign_type === 'abandoned_product_view' && c.is_active && c.channel_id !== 'demo'
+                );
+                if (activeApvCamp) {
+                  (db.abandoned_cart_executions || []).forEach(x => {
+                    if (String(x.campaign_id) === String(activeApvCamp.id) &&
+                        x.phone === v.phone &&
+                        (x.status === 'sent' || x.status === 'failed' || x.status === 'reset_for_retry')) {
+                      x.status = 'archived_reentry'; x.archived_at = now;
+                    }
+                  });
+                  const forceResetLock = (db.campaign_locks || []).find(l =>
+                    l.phone === v.phone && String(l.campaign_id) === String(activeApvCamp.id)
+                  );
+                  if (forceResetLock) {
+                    const prevLockStatus = forceResetLock.lock_status;
+                    if (!forceResetLock.send_history) forceResetLock.send_history = [];
+                    forceResetLock.send_history.push({
+                      cycle: (forceResetLock.cycle_count || 0) + 1,
+                      stage1_sent_at: forceResetLock.stage_1_sent_at || null,
+                      stage2_sent_at: forceResetLock.stage_2_sent_at || null,
+                      archived_at: now, exit_reason: 'reentry_forced_reset',
+                      reentry_from_status: prevStatus,
+                    });
+                    forceResetLock.cycle_count     = (forceResetLock.cycle_count || 0) + 1;
+                    forceResetLock.stage           = 0;
+                    forceResetLock.stage_1_sent_at = null;
+                    forceResetLock.stage_2_sent_at = null;
+                    forceResetLock.lock_status     = 'active';
+                    forceResetLock.unlock_reason   = null;
+                    forceResetLock.shifted_at      = null;
+                    forceResetLock.reentry_at      = now;
+                    if (product_url)   forceResetLock.product_url   = product_url;
+                    if (product_name)  forceResetLock.product_name  = product_name;
+                    if (product_image) forceResetLock.product_image = product_image;
+                    if (product_price) forceResetLock.product_price = product_price;
+                    console.log(`[APV Re-entry] ${v.phone} forced lock reset (was "${prevLockStatus}") from ${prevStatus} — timer starts NOW`);
+                  } else {
+                    if (!db.campaign_locks) db.campaign_locks = [];
+                    db.campaign_locks.push({
+                      id: `lock_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
+                      channel_id: cid, phone: v.phone,
+                      campaign_id: activeApvCamp.id, campaign_type: 'abandoned_product_view',
+                      locked_at: now, reentry_at: now,
+                      product_url: product_url || '', product_name: product_name || '',
+                      product_price: product_price || '', product_image: product_image || '',
+                      stage: 0, stage_1_sent_at: null, stage_2_sent_at: null,
+                      lock_status: 'active', revenue: 0,
+                      last_status_check: now, last_known_status: 'product_view_lock',
+                      unlock_reason: null, cycle_count: 1,
+                    });
+                    console.log(`[APV Re-entry] ${v.phone} created fresh lock from ${prevStatus} (no prior lock) — timer starts NOW`);
+                  }
+                } else {
+                  console.log(`[APV] ${v.phone || sessionId} → product_view_lock (re-entry, no active APV camp) from ${prevStatus}`);
+                }
               }
               // Always reset product_view send flags on re-entry so FLOW 2b treats this as fresh
               (db.product_views || []).filter(pv => pv.phone === v.phone && pv.channel_id === cid)
