@@ -904,7 +904,7 @@ export const trackingController = {
               const _sameProduct = apvLock && apvLock.product_url && product_url &&
                 _cleanUrl(apvLock.product_url) === _cleanUrl(product_url);
               const _isMidCycleRefresh = apvLock &&
-                apvLock.lock_status === 'active' && apvLock.stage >= 1 &&
+                apvLock.lock_status === 'active' && apvLock.stage >= 0 &&
                 prevStatus === 'product_view_lock' && _sameProduct;
               if (apvLock && !_isMidCycleRefresh) {
                 const cycleNum = (apvLock.cycle_count || 0) + 1;
