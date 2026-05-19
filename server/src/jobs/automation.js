@@ -1963,19 +1963,21 @@ async function sendMultiple(db, cam, events, type, credChannelId) {
                     emit('9e. IMAGE UPLOADED ✅', evt.phone, `media_id="${productMediaId}"`);
                     console.log(`[AbandonedProductView] Image uploaded for ${evt.phone} → media_id: ${productMediaId}`);
                   } catch (imgErr) {
-                    emit('9e. IMAGE UPLOAD FAILED', evt.phone, `${imgErr.message} — will use image URL directly (link mode)`);
-                    console.warn(`[AbandonedProductView] Image upload failed for ${evt.phone}: ${imgErr.message} — using image URL as link`);
-                    // Leave productMediaId = '' — buildSendMessagePayload will use productImage URL via { link: url }
-                    productMediaId = '';
+                    // Fall back to template's pre-uploaded header image (same logic as test-send).
+                    // Using the raw Shopify/CDN URL as { link: url } causes Meta to try downloading
+                    // it — if the CDN rejects public access, Meta returns 403 #131005.
+                    productMediaId = metaTpl.header_image_id || '';
+                    emit('9e. IMAGE UPLOAD FAILED', evt.phone, `${imgErr.message} — fallback to template header_image_id="${productMediaId || 'none'}"`);
+                    console.warn(`[AbandonedProductView] Image upload failed for ${evt.phone}: ${imgErr.message} — using template header_image_id as fallback`);
                   }
                 }
               } else {
-                // No product image URL — proceed without image.
-                // buildSendMessagePayload will send with empty header; if Meta rejects it, we
-                // capture the real API error in a 'failed' exec so the UI shows what went wrong.
-                productMediaId = '';
-                emit('9e. NO IMAGE', evt.phone, `productImage empty header_type="${metaTpl.header_type}" — attempting send, Meta will reject if image required`);
-                console.warn(`[AbandonedProductView] ${evt.phone} — no product image URL, attempting send without image`);
+                // No product image URL — fall back to template's pre-uploaded header image,
+                // same as the test-send path. If that's also empty, send without image and
+                // let Meta return the real error.
+                productMediaId = metaTpl.header_image_id || '';
+                emit('9e. NO IMAGE', evt.phone, `productImage empty — fallback to template header_image_id="${productMediaId || 'none'}" header_type="${metaTpl.header_type}"`);
+                console.warn(`[AbandonedProductView] ${evt.phone} — no product image URL, using template header_image_id="${productMediaId || 'none'}"`);
               }
 
               if (!_apvSkip) {
