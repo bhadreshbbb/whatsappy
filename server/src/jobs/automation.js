@@ -302,15 +302,19 @@ async function checkLockedUsers() {
         });
         (db.product_views || []).filter(v => v.phone === lock.phone)
           .forEach(v => { v.whatsapp_sent = 0; v.followup_count = 0; v.whatsapp_sent_at = null; });
-        // Update product to the latest view for this phone
+        // Update product to the latest view for this phone.
+        // If the URL changed, clear old image so apvQuickCheck scrapes the new product
+        // instead of uploading a stale/wrong image from the previous cycle.
         const _latestPV = (db.product_views || [])
           .filter(v => v.phone === lock.phone)
           .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
         if (_latestPV) {
+          const _urlChanged = _latestPV.product_url && _latestPV.product_url !== lock.product_url;
           if (_latestPV.product_url)   lock.product_url   = _latestPV.product_url;
           if (_latestPV.product_name)  lock.product_name  = _latestPV.product_name;
-          if (_latestPV.product_image) lock.product_image = _latestPV.product_image;
           if (_latestPV.product_price) lock.product_price = _latestPV.product_price;
+          // Use new image if available; clear stale image if URL changed (triggers fresh scrape)
+          lock.product_image = _latestPV.product_image || (_urlChanged ? '' : lock.product_image);
         }
         changed = true;
         console.log(`[LockCheck] ${lock.phone} shifted_recommendation → product_view_lock detected — reset for cycle ${cycleNum}`);
@@ -613,14 +617,21 @@ async function apvQuickCheck() {
     if (stage1Locks.length > 0) {
       dbg('3. STAGE1 OVERDUE', `${stage1Locks.length} lock(s) ready → calling sendMultiple`);
       console.log(`[APV Quick] "${cam.name}" stage 1 — ${stage1Locks.length} overdue lock(s)`);
-      // Belt-and-suspenders: archive any stale execs for re-entered locks so dedup never blocks
+      // Belt-and-suspenders: archive stale execs from PREVIOUS cycles only so dedup never blocks.
+      // Only archive execs created before reentry_at — current-cycle failures must NOT be archived
+      // so retry count accumulates and the 3-retry limit can pause before hitting the API again.
       const archNow = new Date().toISOString();
       for (const l of stage1Locks) {
         if (l.reentry_at || (l.cycle_count || 0) > 0) {
+          const reentryMs = l.reentry_at ? new Date(l.reentry_at).getTime() : 0;
           (db.abandoned_cart_executions || []).forEach(x => {
             if (String(x.campaign_id) === String(cam.id) && x.phone === l.phone &&
                 (x.status === 'sent' || x.status === 'failed' || x.status === 'reset_for_retry')) {
-              x.status = 'archived_reentry'; x.archived_at = archNow;
+              // Only archive if exec predates this cycle's reentry_at
+              const execMs = x.sent_at ? new Date(x.sent_at).getTime() : 0;
+              if (!reentryMs || execMs < reentryMs) {
+                x.status = 'archived_reentry'; x.archived_at = archNow;
+              }
             }
           });
         }
