@@ -179,24 +179,25 @@ export const campaignsController = {
           );
           const affectedPhones = new Set(allCamLocks.map(l => l.phone));
 
-          // Release every affected visitor back to a clean re-enterable state:
-          // • product_view_lock  → product_view  (was mid-campaign)
-          // • product_recommendation / followup_complete → active (completed cycle — fully reset
-          //   so they re-enter from scratch with the new campaign, no stale cycle baggage)
+          // Reset each affected visitor:
+          // • product_view_lock  → KEEP as product_view_lock. The apvQuickCheck safety net
+          //   will create a fresh lock for the new campaign within ≤15s automatically.
+          //   Resetting to product_view caused the safety net to skip them entirely
+          //   (it only watches product_view_lock), leaving them stuck forever.
+          // • product_recommendation / followup_complete → active (completed cycle)
+          // Search by phone without channel_id filter — multi-channel: visitor may be stored
+          // under a different channel than the campaign's channel_id.
           for (const phone of affectedPhones) {
-            const visitor = (db.website_visitors || []).find(v =>
-              v.phone === phone && v.channel_id === channelId
-            );
-            if (!visitor) continue;
-            const prev = visitor.status;
-            if (visitor.status === 'product_view_lock') {
-              visitor.status = 'product_view';
-            } else if (visitor.status === 'product_recommendation' || visitor.status === 'followup_complete') {
-              visitor.status = 'active';
+            const allVisitors = (db.website_visitors || []).filter(v => v.phone === phone);
+            for (const visitor of allVisitors) {
+              const prev = visitor.status;
+              if (visitor.status === 'product_recommendation' || visitor.status === 'followup_complete') {
+                visitor.status = 'active';
+                visitor.updated_at = now;
+                console.log(`[Campaign Delete] ${phone} → active (was ${prev}, released from deleted campaign)`);
+              }
+              // product_view_lock: leave as-is — safety net auto-creates new lock within ≤15s
             }
-            visitor.updated_at = now;
-            if (visitor.status !== prev)
-              console.log(`[Campaign Delete] ${phone} → ${visitor.status} (was ${prev}, released from deleted campaign)`);
             // Reset product_view send flags so a new campaign can target them fresh
             (db.product_views || []).forEach(pv => {
               if (pv.phone === phone) {
