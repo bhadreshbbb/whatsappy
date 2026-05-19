@@ -617,17 +617,17 @@ async function apvQuickCheck() {
     if (stage1Locks.length > 0) {
       dbg('3. STAGE1 OVERDUE', `${stage1Locks.length} lock(s) ready → calling sendMultiple`);
       console.log(`[APV Quick] "${cam.name}" stage 1 — ${stage1Locks.length} overdue lock(s)`);
-      // Belt-and-suspenders: archive stale execs from PREVIOUS cycles only so dedup never blocks.
-      // Only archive execs created before reentry_at — current-cycle failures must NOT be archived
-      // so retry count accumulates and the 3-retry limit can pause before hitting the API again.
+      // Belt-and-suspenders: archive SENT execs from previous cycles so dedup never blocks.
+      // NEVER archive 'failed' here — failed execs must survive so retry count accumulates
+      // and the 3-retry limit can pause. Cycle-resets (trackProductView / checkLockedUsers /
+      // identify) already archive failed execs at the correct transition point.
       const archNow = new Date().toISOString();
       for (const l of stage1Locks) {
         if (l.reentry_at || (l.cycle_count || 0) > 0) {
           const reentryMs = l.reentry_at ? new Date(l.reentry_at).getTime() : 0;
           (db.abandoned_cart_executions || []).forEach(x => {
             if (String(x.campaign_id) === String(cam.id) && x.phone === l.phone &&
-                (x.status === 'sent' || x.status === 'failed' || x.status === 'reset_for_retry')) {
-              // Only archive if exec predates this cycle's reentry_at
+                (x.status === 'sent' || x.status === 'reset_for_retry')) {
               const execMs = x.sent_at ? new Date(x.sent_at).getTime() : 0;
               if (!reentryMs || execMs < reentryMs) {
                 x.status = 'archived_reentry'; x.archived_at = archNow;
@@ -1958,17 +1958,12 @@ async function sendMultiple(db, cam, events, type, credChannelId) {
                   }
                 }
               } else {
-                // No product image URL available — productMediaId stays '' so buildSendMessagePayload
-                // won't use the template's header image (wrong product) as fallback.
-                // If header is required and truly no image can be found, skip.
+                // No product image URL — proceed without image.
+                // buildSendMessagePayload will send with empty header; if Meta rejects it, we
+                // capture the real API error in a 'failed' exec so the UI shows what went wrong.
                 productMediaId = '';
-                if (metaTpl.header_type === 'IMAGE') {
-                  emit('9e. NO IMAGE — SKIP', evt.phone, `no product image URL and header_type=IMAGE — skip to avoid sending wrong product image`);
-                  console.warn(`[AbandonedProductView] SKIP ${evt.phone} — no product image available`);
-                  _apvSkip = true;
-                } else {
-                  emit('9e. NO IMAGE', evt.phone, `header_type="${metaTpl.header_type}" — no image needed`);
-                }
+                emit('9e. NO IMAGE', evt.phone, `productImage empty header_type="${metaTpl.header_type}" — attempting send, Meta will reject if image required`);
+                console.warn(`[AbandonedProductView] ${evt.phone} — no product image URL, attempting send without image`);
               }
 
               if (!_apvSkip) {
