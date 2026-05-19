@@ -986,10 +986,15 @@ export const trackingController = {
                 ['active', 'shifted_recommendation'].includes(l.lock_status)
               );
               const _cleanUrl = (u) => { try { return u ? new URL(u).origin + new URL(u).pathname : ''; } catch { return (u || '').split('?')[0]; } };
-              // 15-second cooldown: skip if the lock anchor was just set (duplicate tracker fire guard).
-              // Any genuine re-view after 15 s restarts the cycle regardless of same/different product.
+              // 15-second cooldown guard: only blocks reset when the SAME product was just seen
+              // (prevents duplicate tracker fires on page-reload/SPA navigation for the same URL).
+              // A genuinely DIFFERENT product URL always restarts the cycle immediately — the user
+              // is signalling a new intent and we want the fresh product + fresh delay.
               const _lockAnchor = apvLock && (apvLock.reentry_at || apvLock.locked_at);
-              const _recentLock = _lockAnchor && (Date.now() - new Date(_lockAnchor).getTime()) < 15_000;
+              const _isRecentFire = _lockAnchor && (Date.now() - new Date(_lockAnchor).getTime()) < 15_000;
+              const _isSameProduct = product_url && apvLock?.product_url &&
+                _cleanUrl(product_url) === _cleanUrl(apvLock.product_url);
+              const _recentLock = _isRecentFire && _isSameProduct;
               if (apvLock && !_recentLock) {
                 const cycleNum = (apvLock.cycle_count || 0) + 1;
                 if (!apvLock.send_history) apvLock.send_history = [];
@@ -1040,7 +1045,7 @@ export const trackingController = {
                 apvLock.product_price = product_price || bestPV?.product_price  || apvLock.product_price;
                 console.log(`[APV Re-entry] ${v.phone} ${prevStatus} → product_view_lock — cycle ${cycleNum}, product: "${apvLock.product_name || apvLock.product_url}", timer starts NOW`);
               } else if (_recentLock) {
-                console.log(`[APV] ${v.phone || sessionId} → duplicate fire guard (lock set ${Math.round((Date.now()-new Date(_lockAnchor).getTime())/1000)}s ago) — skipping`);
+                console.log(`[APV] ${v.phone || sessionId} → duplicate fire guard (same product, lock set ${Math.round((Date.now()-new Date(_lockAnchor).getTime())/1000)}s ago) — skipping`);
               } else {
                 // apvLock null: lock has a non-resettable status (cart_added/purchased)
                 // or is missing. Forcibly archive stale execs and ensure a stage-0 lock

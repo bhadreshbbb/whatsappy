@@ -1739,10 +1739,15 @@ async function sendMultiple(db, cam, events, type, credChannelId) {
       emit('7. STAGE', evt.phone, `currentStage=${currentStage}`);
 
       // ── DEDUP CHECK ──
-      const alreadySent = db.abandoned_cart_executions.find(x =>
-        x.campaign_id === cam.id && x.phone === evt.phone &&
-        (x.stage || 1) === currentStage && x.status === 'sent'
-      );
+      // cycleStart: only consider execs from the CURRENT cycle — execs before reentry_at
+      // belong to a previous cycle and must never block the current cycle's send.
+      const cycleStart = evt._lock?.reentry_at ? new Date(evt._lock.reentry_at).getTime() : null;
+      const alreadySent = db.abandoned_cart_executions.find(x => {
+        if (String(x.campaign_id) !== String(cam.id) || x.phone !== evt.phone) return false;
+        if ((x.stage || 1) !== currentStage || x.status !== 'sent') return false;
+        if (cycleStart && x.sent_at && new Date(x.sent_at).getTime() < cycleStart) return false;
+        return true;
+      });
       if (alreadySent) {
         emit('❌ SKIP dedup', evt.phone, `stage ${currentStage} already sent at ${alreadySent.sent_at}`);
         console.log(`[De-dupe] Already sent stage ${currentStage} of ${cam.name} to ${evt.phone}`);
@@ -1750,10 +1755,16 @@ async function sendMultiple(db, cam, events, type, credChannelId) {
       }
 
       let _retryCount = 0;
-      const failedExec = db.abandoned_cart_executions.find(x =>
-        x.campaign_id === cam.id && x.phone === evt.phone &&
-        (x.stage || 1) === currentStage && (x.status === 'failed' || x.status === 'reset_for_retry')
-      );
+      const failedExec = db.abandoned_cart_executions.find(x => {
+        if (String(x.campaign_id) !== String(cam.id) || x.phone !== evt.phone) return false;
+        if ((x.stage || 1) !== currentStage) return false;
+        if (x.status !== 'failed' && x.status !== 'reset_for_retry') return false;
+        // Cross-cycle guard: ignore failed execs from before the current cycle's reentry_at.
+        // Without this, stale 3-retry-exhausted execs from old cycles silently block new cycles
+        // (sendMultiple skips without creating a new exec → UI shows "sending now" forever).
+        if (cycleStart && x.sent_at && new Date(x.sent_at).getTime() < cycleStart) return false;
+        return true;
+      });
       if (failedExec) {
         const retries = failedExec.retry_count || 0;
         const ageMs = failedExec.sent_at ? Date.now() - new Date(failedExec.sent_at).getTime() : 0;
