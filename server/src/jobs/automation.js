@@ -603,6 +603,53 @@ async function apvQuickCheck() {
     const allLocksForCam = (db.campaign_locks || []).filter(l => String(l.campaign_id) === String(cam.id));
     dbg('2. ALL LOCKS', `total=${allLocksForCam.length} | ${allLocksForCam.map(l=>`${l.phone} stage=${l.stage} status=${l.lock_status}`).join(' | ')}`);
 
+    // ── Safety net: create locks for orphaned product_view_lock visitors ─────
+    // Handles post-delete/recreate: locks were deleted but visitor status was
+    // reset to product_view_lock. Without this, apvQuickCheck never fires for
+    // them and they stay at "⏳ Queued · fires in ≤15s" forever.
+    {
+      const lockedPhonesSet = new Set(allLocksForCam.map(l => l.phone));
+      const MAX_VIEW_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+      const orphans = (db.website_visitors || []).filter(v =>
+        v.phone && v.status === 'product_view_lock' && !lockedPhonesSet.has(v.phone)
+      );
+      let orphanCreated = 0;
+      for (const v of orphans) {
+        // Use visitor's last_product_* fields, or fall back to most recent product_view record
+        const recentPV = (db.product_views || [])
+          .filter(pv => pv.phone === v.phone && new Date(pv.created_at).getTime() > (now - MAX_VIEW_AGE_MS))
+          .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
+        const lockNow = new Date(now).toISOString();
+        if (!db.campaign_locks) db.campaign_locks = [];
+        db.campaign_locks.push({
+          id: `lock_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
+          channel_id: v.channel_id || channelId,
+          phone: v.phone,
+          campaign_id: cam.id,
+          campaign_type: 'abandoned_product_view',
+          locked_at:  lockNow,
+          reentry_at: lockNow,
+          product_url:   v.last_product_url   || recentPV?.product_url   || '',
+          product_name:  v.last_product_name  || recentPV?.product_name  || '',
+          product_image: v.last_product_image || recentPV?.product_image || '',
+          product_price: v.last_product_price || recentPV?.product_price || '',
+          stage: 0, stage_1_sent_at: null, stage_2_sent_at: null,
+          lock_status: 'active', revenue: 0, cycle_count: 0,
+          last_status_check: lockNow, last_known_status: 'product_view_lock',
+          unlock_reason: null,
+        });
+        // Push into allLocksForCam so this tick's stage1 check can pick it up immediately
+        allLocksForCam.push(db.campaign_locks[db.campaign_locks.length - 1]);
+        lockedPhonesSet.add(v.phone);
+        orphanCreated++;
+        console.log(`[APVQuick] Safety net: created lock for ${v.phone} (product_view_lock with no lock — delay starts now)`);
+      }
+      if (orphanCreated > 0) {
+        dbg('2a. ORPHAN LOCKS', `Created ${orphanCreated} safety-net lock(s) for product_view_lock visitors with no lock`);
+        db.save();
+      }
+    }
+
     const stage1Locks = allLocksForCam.filter(l => {
       if (l.lock_status !== 'active') return false;
       if ((l.stage || 0) !== 0) return false;

@@ -173,30 +173,43 @@ export const campaignsController = {
         // Release all visitors currently locked by this campaign back to product_view
         // so they are no longer stuck in a campaign that no longer exists.
         if (type === 'abandoned_product_view') {
-          const activeLocks = (db.campaign_locks || []).filter(l =>
-            String(l.campaign_id) === String(id) && l.lock_status === 'active'
+          // Collect ALL phones that had any lock for this campaign (active + completed cycles)
+          const allCamLocks = (db.campaign_locks || []).filter(l =>
+            String(l.campaign_id) === String(id)
           );
-          for (const lock of activeLocks) {
+          const affectedPhones = new Set(allCamLocks.map(l => l.phone));
+
+          // Release every affected visitor back to a clean re-enterable state:
+          // • product_view_lock  → product_view  (was mid-campaign)
+          // • product_recommendation / followup_complete → active (completed cycle — fully reset
+          //   so they re-enter from scratch with the new campaign, no stale cycle baggage)
+          for (const phone of affectedPhones) {
             const visitor = (db.website_visitors || []).find(v =>
-              v.phone === lock.phone && v.channel_id === channelId && v.status === 'product_view_lock'
+              v.phone === phone && v.channel_id === channelId
             );
-            if (visitor) {
-              visitor.status     = 'product_view';
-              visitor.updated_at = now;
-              console.log(`[Campaign Delete] ${visitor.phone} → product_view (released from deleted campaign)`);
+            if (!visitor) continue;
+            const prev = visitor.status;
+            if (visitor.status === 'product_view_lock') {
+              visitor.status = 'product_view';
+            } else if (visitor.status === 'product_recommendation' || visitor.status === 'followup_complete') {
+              visitor.status = 'active';
             }
-            // Reset product_view send flags for this phone so they can re-enter a new campaign
+            visitor.updated_at = now;
+            if (visitor.status !== prev)
+              console.log(`[Campaign Delete] ${phone} → ${visitor.status} (was ${prev}, released from deleted campaign)`);
+            // Reset product_view send flags so a new campaign can target them fresh
             (db.product_views || []).forEach(pv => {
-              if (pv.phone === lock.phone && pv.channel_id === channelId) {
+              if (pv.phone === phone) {
                 pv.whatsapp_sent = 0; pv.followup_count = 0; pv.whatsapp_sent_at = null;
                 delete pv.campaign_id;
               }
             });
           }
-          // Remove all campaign_locks for this campaign
+          // Remove all campaign_locks for this campaign (active + completed)
           db.campaign_locks = (db.campaign_locks || []).filter(l =>
             String(l.campaign_id) !== String(id)
           );
+          console.log(`[Campaign Delete] Cleared ${allCamLocks.length} lock(s) and reset ${affectedPhones.size} visitor(s)`);
         }
 
         // Reset product_view records that were sent by this campaign (mid-flight only)
