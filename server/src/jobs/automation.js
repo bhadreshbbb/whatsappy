@@ -477,6 +477,9 @@ async function checkLockedUsers() {
 // On first run, expired stage-0 locks have their anchor reset to NOW so the
 // configured delay starts fresh — prevents messages firing immediately after restart.
 let _apvFirstRun = true;
+// Prevents concurrent apvQuickCheck runs: if an image upload or API call takes
+// longer than 15s, the next timer tick must wait rather than sending duplicates.
+let _apvRunning = false;
 
 /**
  * APV Quick Check — runs every 15 seconds.
@@ -485,6 +488,12 @@ let _apvFirstRun = true;
  * so multi-login channel_id mismatches can never block message delivery.
  */
 async function apvQuickCheck() {
+  if (_apvRunning) {
+    console.log('[APVQuick] Already running — skipping this tick (previous send still in-flight)');
+    return;
+  }
+  _apvRunning = true;
+  try {
   const db = getDb();
   const now = Date.now();
 
@@ -620,6 +629,10 @@ async function apvQuickCheck() {
           .filter(pv => pv.phone === v.phone && new Date(pv.created_at).getTime() > (now - MAX_VIEW_AGE_MS))
           .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
         const lockNow = new Date(now).toISOString();
+        // Use the actual product view time as the lock anchor so if the delay
+        // has already passed, apvQuickCheck fires on the very next tick (≤15s).
+        // Do NOT set reentry_at — it stays null so the anchor is locked_at.
+        const lockAnchor = recentPV?.created_at || v.last_seen || lockNow;
         if (!db.campaign_locks) db.campaign_locks = [];
         db.campaign_locks.push({
           id: `lock_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
@@ -627,8 +640,7 @@ async function apvQuickCheck() {
           phone: v.phone,
           campaign_id: cam.id,
           campaign_type: 'abandoned_product_view',
-          locked_at:  lockNow,
-          reentry_at: lockNow,
+          locked_at: lockAnchor,
           product_url:   v.last_product_url   || recentPV?.product_url   || '',
           product_name:  v.last_product_name  || recentPV?.product_name  || '',
           product_image: v.last_product_image || recentPV?.product_image || '',
@@ -706,6 +718,9 @@ async function apvQuickCheck() {
       await sendMultiple(db, cam, events, 'view', channelId);
       db.save();
     }
+  }
+  } finally {
+    _apvRunning = false;
   }
 }
 
@@ -2126,6 +2141,12 @@ async function sendMultiple(db, cam, events, type, credChannelId) {
           });
         }
 
+        // Snapshot lock state before the async send.
+        // If the user views a different product (tracking re-entry) WHILE the API
+        // call is in-flight, the lock will be reset (new reentry_at, stage→0, new product).
+        // After the send we detect this and archive the exec so the new cycle isn't blocked.
+        const _lockSnapReentryAt = evt._lock?.reentry_at ?? null;
+
         let sendResult;
         try {
           sendResult = await whatsappService.sendTemplateMessage(evt.phone, sendPayload, channelId);
@@ -2179,7 +2200,13 @@ async function sendMultiple(db, cam, events, type, credChannelId) {
           templateName: metaTpl.name,
         });
 
-        db.abandoned_cart_executions.push({
+        // Detect re-entry race: did the user view a different product while this
+        // API call was in-flight? If so, the lock was reset (new reentry_at) and
+        // we must NOT update it to stage=currentStage — that would clobber the new
+        // cycle and permanently block stage 1 of the new product.
+        const _lockResetDuringSend = evt._lock && (evt._lock.reentry_at ?? null) !== _lockSnapReentryAt;
+        const execSentAt = new Date().toISOString();
+        const execRecord = {
           id: (db.abandoned_cart_executions.length || 0) + 1,
           campaign_id: cam.id,
           campaign_name: cam.name,
@@ -2189,8 +2216,9 @@ async function sendMultiple(db, cam, events, type, credChannelId) {
           template_name: metaTpl.name,
           stage: currentStage,
           language: metaLangCode,
-          status: sendResult.messageId ? 'sent' : 'failed',
-          sent_at: new Date().toISOString(),
+          // If lock was reset mid-send, archive this exec so the new cycle isn't blocked
+          status: _lockResetDuringSend ? 'archived_reentry' : (sendResult.messageId ? 'sent' : 'failed'),
+          sent_at: execSentAt,
           is_meta_template: true,
           cards_sent: sentCards.map(c => ({
             title:    c.title    || '',
@@ -2200,20 +2228,29 @@ async function sendMultiple(db, cam, events, type, credChannelId) {
             image:    c._hot_image_url || c.image || '',
           })),
           payload_sent: JSON.stringify(sendPayload),
-        });
+        };
+        if (_lockResetDuringSend) {
+          execRecord.archived_at = execSentAt;
+          emit('⚠ REENTRY RACE', evt.phone, `lock reset during send (reentry_at changed) — exec archived, lock NOT updated`);
+          console.warn(`[APV] ${evt.phone} re-entered mid-send — exec archived, skipping lock update to protect new cycle`);
+        }
+        db.abandoned_cart_executions.push(execRecord);
 
-        if (type === 'upsell') {
-          evt.upsell_sent    = 1;
-          evt.upsell_count   = currentStage;
-          evt.upsell_sent_at = new Date().toISOString();
-        } else {
-          evt.whatsapp_sent    = 1;
-          evt.followup_count   = currentStage;
-          evt.whatsapp_sent_at = new Date().toISOString();
+        if (!_lockResetDuringSend) {
+          if (type === 'upsell') {
+            evt.upsell_sent    = 1;
+            evt.upsell_count   = currentStage;
+            evt.upsell_sent_at = execSentAt;
+          } else {
+            evt.whatsapp_sent    = 1;
+            evt.followup_count   = currentStage;
+            evt.whatsapp_sent_at = execSentAt;
+          }
         }
 
         // ── Campaign lock: create on stage 1, update stage on follow-up ──────
-        if (cam.campaign_type === 'abandoned_product_view' && sendResult?.messageId) {
+        // Skip if lock was reset mid-send (re-entry race) — new cycle must run fresh.
+        if (cam.campaign_type === 'abandoned_product_view' && sendResult?.messageId && !_lockResetDuringSend) {
           if (!db.campaign_locks) db.campaign_locks = [];
           const nowIso = new Date().toISOString();
           const existingLock = db.campaign_locks.find(l => l.phone === evt.phone && String(l.campaign_id) === String(cam.id));
