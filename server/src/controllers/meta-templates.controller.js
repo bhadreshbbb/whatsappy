@@ -1607,7 +1607,8 @@ export async function createTemplate(req, res) {
 
           if (!tpl.header_file_handle) {
             // Meta REQUIRES example.header_handle for IMAGE headers — abort before submitting.
-            db.meta_templates = (db.meta_templates || []).filter(t => t.id !== tpl.id);
+            const tplKept = (db.meta_templates || []).filter(t => t.id !== tpl.id);
+            db.meta_templates.splice(0, db.meta_templates.length, ...tplKept);
             db.save();
             const detail = resumableErr
               ? `Meta API error: ${resumableErr}`

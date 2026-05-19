@@ -143,7 +143,8 @@ export function deleteFolder(req, res) {
   if (idx === -1) return res.status(404).json({ error: 'Folder not found' });
 
   // Remove all images in folder
-  db.gallery_images = (db.gallery_images || []).filter(img => img.folder_id !== id);
+  const imgKept = (db.gallery_images || []).filter(img => img.folder_id !== id);
+  db.gallery_images.splice(0, db.gallery_images.length, ...imgKept);
   db.gallery_folders.splice(idx, 1);
   db.save();
   res.json({ success: true });

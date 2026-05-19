@@ -459,7 +459,8 @@ async function checkLockedUsers() {
     );
     if (stale.length) {
       const staleIds = new Set(stale.map(l => l.id));
-      db.campaign_locks = db.campaign_locks.filter(l => !staleIds.has(l.id));
+      const staleKept = db.campaign_locks.filter(l => !staleIds.has(l.id));
+      db.campaign_locks.splice(0, db.campaign_locks.length, ...staleKept);
       (db.product_views || []).forEach(v => {
         if (v.phone === vis.phone && v.channel_id === vis.channel_id) {
           v.whatsapp_sent = 0; v.followup_count = 0; v.whatsapp_sent_at = null;
@@ -2176,7 +2177,8 @@ async function sendMultiple(db, cam, events, type, credChannelId) {
             const imgUrl = evt.product_image || '';
             if (imgUrl && db.gallery_images) {
               const before = db.gallery_images.length;
-              db.gallery_images = db.gallery_images.filter(g => g.source_url !== imgUrl);
+              const imgKept = db.gallery_images.filter(g => g.source_url !== imgUrl);
+              db.gallery_images.splice(0, db.gallery_images.length, ...imgKept);
               if (db.gallery_images.length < before)
                 console.log(`[APV] Cleared ${before - db.gallery_images.length} stale media_id cache entry(ies) for ${imgUrl} (token refresh 403)`);
             }

@@ -158,10 +158,10 @@ export const campaignsController = {
       const campaign = db.abandoned_cart_campaigns[idx];
 
       // 1. Remove execution history for this campaign
+      // NOTE: db.x = filter(...) does NOT update the module-level array — use splice to mutate in-place.
       if (db.abandoned_cart_executions) {
-        db.abandoned_cart_executions = db.abandoned_cart_executions.filter(
-          e => String(e.campaign_id) !== String(id)
-        );
+        const exeToKeep = db.abandoned_cart_executions.filter(e => String(e.campaign_id) !== String(id));
+        db.abandoned_cart_executions.splice(0, db.abandoned_cart_executions.length, ...exeToKeep);
       }
 
       // 2. For automation campaigns — reset the whatsapp_sent flags so automation
@@ -207,9 +207,10 @@ export const campaignsController = {
             });
           }
           // Remove all campaign_locks for this campaign (active + completed)
-          db.campaign_locks = (db.campaign_locks || []).filter(l =>
-            String(l.campaign_id) !== String(id)
-          );
+          // NOTE: db.campaign_locks = filter(...) only updates the wrapper — splice mutates in-place
+          // so the module-level array (used by automation.js) is actually updated.
+          const locksToKeep = (db.campaign_locks || []).filter(l => String(l.campaign_id) !== String(id));
+          db.campaign_locks.splice(0, db.campaign_locks.length, ...locksToKeep);
           console.log(`[Campaign Delete] Cleared ${allCamLocks.length} lock(s) and reset ${affectedPhones.size} visitor(s)`);
         }
 
