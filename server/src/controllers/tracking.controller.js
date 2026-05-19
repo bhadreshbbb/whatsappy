@@ -460,6 +460,32 @@ export const trackingController = {
                 (db.product_views || []).filter(pv => pv.phone === phone && pv.channel_id === cid)
                   .forEach(pv => { pv.whatsapp_sent = 0; pv.followup_count = 0; pv.whatsapp_sent_at = null; });
                 console.log(`[APV Re-entry] ${phone} identified on new session → cycle ${cycleNum} reset, timer starts NOW`);
+              } else {
+                // No existing lock — first-time APV entry where phone was null when trackProductView
+                // ran (race condition). Create a fresh stage-0 lock now that phone is known.
+                const activeApvCampId = (db.abandoned_cart_campaigns || []).find(c =>
+                  c.campaign_type === 'abandoned_product_view' && c.is_active && c.channel_id !== 'demo'
+                );
+                if (activeApvCampId) {
+                  const now = new Date().toISOString();
+                  const latestPV = (db.product_views || [])
+                    .filter(pv => pv.phone === phone && pv.channel_id === cid)
+                    .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
+                  if (!db.campaign_locks) db.campaign_locks = [];
+                  db.campaign_locks.push({
+                    id: `lock_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
+                    channel_id: cid, phone,
+                    campaign_id: activeApvCampId.id, campaign_type: 'abandoned_product_view',
+                    locked_at: latestPV?.created_at || now,
+                    product_url: latestPV?.product_url || '', product_name: latestPV?.product_name || '',
+                    product_price: latestPV?.product_price || '', product_image: latestPV?.product_image || '',
+                    stage: 0, stage_1_sent_at: null, stage_2_sent_at: null,
+                    lock_status: 'active', revenue: 0, cycle_count: 0,
+                    last_status_check: now, last_known_status: 'product_view_lock',
+                    unlock_reason: null,
+                  });
+                  console.log(`[APV] ${phone} → stage-0 lock created from identify (race condition recovery)`);
+                }
               }
             }
           }
@@ -1090,6 +1116,36 @@ export const trackingController = {
               });
             } else {
               console.log(`[APV] ${v.phone || sessionId} → product_view_lock immediately (from ${prevStatus})`);
+              // First-time APV entry with phone already known: create stage-0 lock immediately so
+              // apvQuickCheck can fire after the configured delay. Without this, apvQuickCheck
+              // finds no lock and the message never sends ("sending now" forever).
+              if (v.phone) {
+                const activeApvCampFT = (db.abandoned_cart_campaigns || []).find(c =>
+                  c.campaign_type === 'abandoned_product_view' && c.is_active && c.channel_id !== 'demo'
+                );
+                if (activeApvCampFT) {
+                  const existingFTLock = (db.campaign_locks || []).find(l =>
+                    l.phone === v.phone && String(l.campaign_id) === String(activeApvCampFT.id) &&
+                    ['active', 'shifted_recommendation'].includes(l.lock_status)
+                  );
+                  if (!existingFTLock) {
+                    if (!db.campaign_locks) db.campaign_locks = [];
+                    db.campaign_locks.push({
+                      id: `lock_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
+                      channel_id: cid, phone: v.phone,
+                      campaign_id: activeApvCampFT.id, campaign_type: 'abandoned_product_view',
+                      locked_at: now,
+                      product_url: product_url || '', product_name: product_name || '',
+                      product_price: product_price || '', product_image: product_image || '',
+                      stage: 0, stage_1_sent_at: null, stage_2_sent_at: null,
+                      lock_status: 'active', revenue: 0, cycle_count: 0,
+                      last_status_check: now, last_known_status: 'product_view_lock',
+                      unlock_reason: null,
+                    });
+                    console.log(`[APV] ${v.phone} → stage-0 lock created for first-time APV entry`);
+                  }
+                }
+              }
             }
           } else {
             // No active APV campaign — standard status upgrade
