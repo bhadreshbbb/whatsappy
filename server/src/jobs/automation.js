@@ -264,8 +264,45 @@ async function checkLockedUsers() {
     lock.last_status_check = new Date().toISOString();
     const currStatus = visitor.status;
 
-    // ── Still locked — nothing to do ──────────────────────────────────────────
+    // ── product_view_lock ─────────────────────────────────────────────────────
     if (currStatus === 'product_view_lock') {
+      // Cycle re-entry: user viewed a new product (product_view_lock) but lock is
+      // still shifted_recommendation (cycle 1 done). This happens when trackProductView
+      // fires before trackVisitor links the phone (race condition) — the instant
+      // re-entry path in tracking.controller was skipped. Reset here so cycle 2 fires.
+      if (lock.lock_status === 'shifted_recommendation') {
+        const cycleNum = (lock.cycle_count || 0) + 1;
+        if (!lock.send_history) lock.send_history = [];
+        lock.send_history.push({
+          cycle:          cycleNum,
+          product_name:   lock.product_name   || '',
+          stage1_sent_at: lock.stage_1_sent_at || null,
+          stage2_sent_at: lock.stage_2_sent_at || null,
+          archived_at:    new Date().toISOString(),
+          exit_reason:    'reentry_product_view_lock',
+        });
+        lock.cycle_count     = cycleNum;
+        lock.stage           = 0;
+        lock.stage_1_sent_at = null;
+        lock.stage_2_sent_at = null;
+        lock.lock_status     = 'active';
+        lock.unlock_reason   = null;
+        lock.shifted_at      = null;
+        lock.reentry_at      = new Date().toISOString();
+        (db.abandoned_cart_executions || []).forEach(x => {
+          if (String(x.campaign_id) === String(lock.campaign_id) &&
+              x.phone === lock.phone &&
+              (x.status === 'sent' || x.status === 'failed' || x.status === 'reset_for_retry')) {
+            x.status = 'archived_reentry'; x.archived_at = lock.reentry_at;
+          }
+        });
+        (db.product_views || []).filter(v => v.phone === lock.phone)
+          .forEach(v => { v.whatsapp_sent = 0; v.followup_count = 0; v.whatsapp_sent_at = null; });
+        changed = true;
+        console.log(`[LockCheck] ${lock.phone} shifted_recommendation → product_view_lock detected — reset for cycle ${cycleNum}`);
+        continue;
+      }
+      // Still mid-cycle (active lock) — nothing to do
       if (lock.last_known_status !== currStatus) {
         lock.last_known_status = currStatus;
         changed = true;
@@ -347,7 +384,7 @@ async function checkLockedUsers() {
             x.status = 'archived_reentry'; x.archived_at = archNow2;
           }
         });
-        (db.product_views || []).filter(v => v.phone === lock.phone && v.channel_id === lock.channel_id)
+        (db.product_views || []).filter(v => v.phone === lock.phone)
           .forEach(v => { v.whatsapp_sent = 0; v.followup_count = 0; v.whatsapp_sent_at = null; });
         changed = true;
         console.log(`[LockCheck] ${lock.phone} re-entered APV after full cycle — lock reset for new cycle ${cycleNum}`);
