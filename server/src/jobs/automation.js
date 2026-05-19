@@ -255,7 +255,10 @@ async function checkLockedUsers() {
   for (const lock of db.campaign_locks) {
     if (!['active', 'shifted_recommendation'].includes(lock.lock_status)) continue;
 
-    const visitor = db.website_visitors.find(v => v.phone === lock.phone && v.channel_id === lock.channel_id);
+    // Find visitor by phone only — channel_id on the lock may be stale after multilogin
+    // migrations, but phone is always the stable cross-channel identity key.
+    const visitor = db.website_visitors.find(v => v.phone === lock.phone && v.channel_id !== 'demo')
+      || db.website_visitors.find(v => v.phone === lock.phone);
     if (!visitor) continue;
 
     lock.last_status_check = new Date().toISOString();

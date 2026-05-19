@@ -369,6 +369,8 @@ export const trackingController = {
       const cid = channelId || 'demo';
       const idx = db.website_visitors.findIndex(v => v.channel_id === cid && v.session_id === sessionId);
       if (idx >= 0) {
+        // Track whether phone is being linked for the first time on this session
+        const wasPhoneNull = !db.website_visitors[idx].phone;
         db.website_visitors[idx].phone = phone || db.website_visitors[idx].phone;
         db.website_visitors[idx].email = email || db.website_visitors[idx].email;
         db.website_visitors[idx].name  = name  || db.website_visitors[idx].name;
@@ -401,6 +403,66 @@ export const trackingController = {
 
           // Sync best status across all phone sessions to the current session
           _syncBestStatus(db, cid, idx, phone);
+
+          // ── APV cycle re-entry recovery ─────────────────────────────────────
+          // trackProductView ran before this identify set the phone, so the
+          // lock-reset check (isReentry && v.phone) was skipped — v.phone was null.
+          // Now that phone is linked on a product_view_lock session, check for a
+          // stale APV lock that needs resetting so cycle 2+ can fire.
+          const currVisitor = db.website_visitors[idx];
+          if (wasPhoneNull && currVisitor.status === 'product_view_lock') {
+            const hasActiveAPV = (db.abandoned_cart_campaigns || []).some(c =>
+              c.campaign_type === 'abandoned_product_view' && c.is_active && c.channel_id !== 'demo'
+            );
+            if (hasActiveAPV) {
+              const apvLock = (db.campaign_locks || []).find(l =>
+                l.phone === phone &&
+                l.campaign_type === 'abandoned_product_view' &&
+                (l.lock_status === 'shifted_recommendation' ||
+                 (l.lock_status === 'active' && (l.stage || 0) >= 1))
+              );
+              if (apvLock) {
+                const now = new Date().toISOString();
+                const cycleNum = (apvLock.cycle_count || 0) + 1;
+                if (!apvLock.send_history) apvLock.send_history = [];
+                apvLock.send_history.push({
+                  cycle:          cycleNum,
+                  product_name:   apvLock.product_name   || '',
+                  stage1_sent_at: apvLock.stage_1_sent_at || null,
+                  stage2_sent_at: apvLock.stage_2_sent_at || null,
+                  archived_at:    now,
+                  exit_reason:    'reentry_identify_new_session',
+                });
+                apvLock.cycle_count = cycleNum;
+                (db.abandoned_cart_executions || []).forEach(x => {
+                  if (String(x.campaign_id) === String(apvLock.campaign_id) &&
+                      x.phone === phone &&
+                      (x.status === 'sent' || x.status === 'failed' || x.status === 'reset_for_retry')) {
+                    x.status = 'archived_reentry'; x.archived_at = now;
+                  }
+                });
+                apvLock.stage           = 0;
+                apvLock.stage_1_sent_at = null;
+                apvLock.stage_2_sent_at = null;
+                apvLock.lock_status     = 'active';
+                apvLock.unlock_reason   = null;
+                apvLock.shifted_at      = null;
+                apvLock.reentry_at      = now;
+                // Update product to current view if available
+                const latestPV = (db.product_views || [])
+                  .filter(pv => pv.phone === phone && pv.channel_id === cid)
+                  .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
+                if (latestPV?.product_url)   apvLock.product_url   = latestPV.product_url;
+                if (latestPV?.product_name)  apvLock.product_name  = latestPV.product_name;
+                if (latestPV?.product_image) apvLock.product_image = latestPV.product_image;
+                if (latestPV?.product_price) apvLock.product_price = latestPV.product_price;
+                // Reset product_view send flags so FLOW 2b / apvQuickCheck treats this as fresh
+                (db.product_views || []).filter(pv => pv.phone === phone && pv.channel_id === cid)
+                  .forEach(pv => { pv.whatsapp_sent = 0; pv.followup_count = 0; pv.whatsapp_sent_at = null; });
+                console.log(`[APV Re-entry] ${phone} identified on new session → cycle ${cycleNum} reset, timer starts NOW`);
+              }
+            }
+          }
         }
         db.save();
       }
