@@ -966,9 +966,19 @@ export const trackingController = {
                   l.campaign_type === 'abandoned_product_view' &&
                   l.lock_status === 'active' && l.stage >= 1)
               : null;
+            // Pending-lock re-entry: phone has active lock at stage 0 (countdown running, stage 1
+            // not yet sent). New browser session / tab views a different product — prevStatus is
+            // 'active' so the checks above miss this. Treat as re-entry so the lock is reset with
+            // the new product and a fresh delay.
+            const pendingLock = v.phone
+              ? (db.campaign_locks || []).find(l =>
+                  l.phone === v.phone &&
+                  l.campaign_type === 'abandoned_product_view' &&
+                  l.lock_status === 'active' && (l.stage || 0) === 0)
+              : null;
             const isReentry = prevStatus === 'product_view_lock' || prevStatus === 'product_recommendation'
               || prevStatus === 'followup_complete'
-              || phoneCompletedAPV || !!completedLock || !!inProgressLock;
+              || phoneCompletedAPV || !!completedLock || !!inProgressLock || !!pendingLock;
 
             // Post-cycle re-entry: increment funnel_cycle
             if (prevStatus === 'product_recommendation' || prevStatus === 'followup_complete' ||
