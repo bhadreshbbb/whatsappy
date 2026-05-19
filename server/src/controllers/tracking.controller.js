@@ -959,16 +959,12 @@ export const trackingController = {
                 l.campaign_type === 'abandoned_product_view' &&
                 ['active', 'shifted_recommendation'].includes(l.lock_status)
               );
-              // Guard: don't reset a mid-cycle lock (stage 1 sent, awaiting stage 2) when the user
-              // re-views the same product on the same session. A page refresh or duplicate tracking
-              // fire must not clear stage_1_sent_at and silently break stage 2.
               const _cleanUrl = (u) => { try { return u ? new URL(u).origin + new URL(u).pathname : ''; } catch { return (u || '').split('?')[0]; } };
-              const _sameProduct = apvLock && apvLock.product_url && product_url &&
-                _cleanUrl(apvLock.product_url) === _cleanUrl(product_url);
-              const _isMidCycleRefresh = apvLock &&
-                apvLock.lock_status === 'active' && apvLock.stage >= 0 &&
-                prevStatus === 'product_view_lock' && _sameProduct;
-              if (apvLock && !_isMidCycleRefresh) {
+              // 15-second cooldown: skip if the lock anchor was just set (duplicate tracker fire guard).
+              // Any genuine re-view after 15 s restarts the cycle regardless of same/different product.
+              const _lockAnchor = apvLock && (apvLock.reentry_at || apvLock.locked_at);
+              const _recentLock = _lockAnchor && (Date.now() - new Date(_lockAnchor).getTime()) < 15_000;
+              if (apvLock && !_recentLock) {
                 const cycleNum = (apvLock.cycle_count || 0) + 1;
                 if (!apvLock.send_history) apvLock.send_history = [];
                 apvLock.send_history.push({
@@ -1017,8 +1013,8 @@ export const trackingController = {
                 apvLock.product_image = product_image || bestPV?.product_image  || (urlChanged ? '' : apvLock.product_image);
                 apvLock.product_price = product_price || bestPV?.product_price  || apvLock.product_price;
                 console.log(`[APV Re-entry] ${v.phone} ${prevStatus} → product_view_lock — cycle ${cycleNum}, product: "${apvLock.product_name || apvLock.product_url}", timer starts NOW`);
-              } else if (_isMidCycleRefresh) {
-                console.log(`[APV] ${v.phone || sessionId} → mid-cycle refresh ignored (stage ${apvLock.stage}, same product) — stage 2 preserved`);
+              } else if (_recentLock) {
+                console.log(`[APV] ${v.phone || sessionId} → duplicate fire guard (lock set ${Math.round((Date.now()-new Date(_lockAnchor).getTime())/1000)}s ago) — skipping`);
               } else {
                 // apvLock null: lock has a non-resettable status (cart_added/purchased)
                 // or is missing. Forcibly archive stale execs and ensure a stage-0 lock

@@ -256,9 +256,13 @@ async function checkLockedUsers() {
     if (!['active', 'shifted_recommendation'].includes(lock.lock_status)) continue;
 
     // Find visitor by phone only — channel_id on the lock may be stale after multilogin
-    // migrations, but phone is always the stable cross-channel identity key.
-    const visitor = db.website_visitors.find(v => v.phone === lock.phone && v.channel_id !== 'demo')
-      || db.website_visitors.find(v => v.phone === lock.phone);
+    // migrations. Use the most-recently-updated session: after re-entry a new session has
+    // product_view_lock while the old session retains the prior cycle's terminal status.
+    const _byRecent = (arr) => arr.slice().sort((a, b) =>
+      new Date(b.updated_at || b.visited_at || 0) - new Date(a.updated_at || a.visited_at || 0)
+    )[0];
+    const visitor = _byRecent(db.website_visitors.filter(v => v.phone === lock.phone && v.channel_id !== 'demo'))
+      || _byRecent(db.website_visitors.filter(v => v.phone === lock.phone));
     if (!visitor) continue;
 
     lock.last_status_check = new Date().toISOString();
@@ -298,6 +302,16 @@ async function checkLockedUsers() {
         });
         (db.product_views || []).filter(v => v.phone === lock.phone)
           .forEach(v => { v.whatsapp_sent = 0; v.followup_count = 0; v.whatsapp_sent_at = null; });
+        // Update product to the latest view for this phone
+        const _latestPV = (db.product_views || [])
+          .filter(v => v.phone === lock.phone)
+          .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
+        if (_latestPV) {
+          if (_latestPV.product_url)   lock.product_url   = _latestPV.product_url;
+          if (_latestPV.product_name)  lock.product_name  = _latestPV.product_name;
+          if (_latestPV.product_image) lock.product_image = _latestPV.product_image;
+          if (_latestPV.product_price) lock.product_price = _latestPV.product_price;
+        }
         changed = true;
         console.log(`[LockCheck] ${lock.phone} shifted_recommendation → product_view_lock detected — reset for cycle ${cycleNum}`);
         continue;
@@ -455,6 +469,11 @@ async function checkLockedUsers() {
   if (changed) db.save();
 }
 
+// Tracks whether this is the first apvQuickCheck run after server start.
+// On first run, expired stage-0 locks have their anchor reset to NOW so the
+// configured delay starts fresh — prevents messages firing immediately after restart.
+let _apvFirstRun = true;
+
 /**
  * APV Quick Check — runs every 15 seconds.
  * Fires stage-1 and stage-2 messages for APV locks whose delay has expired.
@@ -464,6 +483,34 @@ async function checkLockedUsers() {
 async function apvQuickCheck() {
   const db = getDb();
   const now = Date.now();
+
+  // On first run after server start: reset any expired stage-0 locks so their
+  // configured delay starts fresh from server startup, not from original lock time.
+  if (_apvFirstRun) {
+    _apvFirstRun = false;
+    let resetCount = 0;
+    const apvCampsForReset = (db.abandoned_cart_campaigns || []).filter(c =>
+      c.is_active && c.campaign_type === 'abandoned_product_view'
+    );
+    for (const cam of apvCampsForReset) {
+      const DELAY_MS = (cam.apv_delay_min != null ? cam.apv_delay_min : 2) * 60 * 1000;
+      for (const lock of (db.campaign_locks || [])) {
+        if (String(lock.campaign_id) !== String(cam.id)) continue;
+        if (lock.lock_status !== 'active' || (lock.stage || 0) !== 0) continue;
+        const anchor = lock.reentry_at || lock.locked_at;
+        const ageMs = anchor ? (now - new Date(anchor).getTime()) : Infinity;
+        if (ageMs >= DELAY_MS) {
+          lock.reentry_at = new Date(now).toISOString();
+          resetCount++;
+        }
+      }
+    }
+    if (resetCount > 0) {
+      db.save();
+      console.log(`[APVQuick] server-start: reset ${resetCount} expired stage-0 lock(s) — delay restarted from now`);
+    }
+    return; // let reset take effect on next tick (15 s later)
+  }
 
   let apvCampaigns = (db.abandoned_cart_campaigns || []).filter(c =>
     c.is_active && c.campaign_type === 'abandoned_product_view'
