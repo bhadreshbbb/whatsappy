@@ -1929,11 +1929,12 @@ async function sendMultiple(db, cam, events, type, credChannelId) {
               // ── Step 3: Upload product image to Meta media API → media_id ──
               let productMediaId = '';
               if (productImage) {
-                // Check gallery cache — no channel_id filter (multilogin: image may have been
-                // uploaded under a different channel; media_id is global to the WhatsApp account)
-                const cached = (db.gallery_images || []).find(
-                  g => g.source_url === productImage && g.media_id
-                );
+                // Skip gallery cache on retries — media_ids are tied to the WhatsApp token.
+                // After a token refresh the cached id is stale and Meta returns 403 (#131005).
+                // Re-uploading on each retry costs one extra API call but guarantees a fresh id.
+                const cached = _retryCount === 0
+                  ? (db.gallery_images || []).find(g => g.source_url === productImage && g.media_id)
+                  : null;
                 if (cached) {
                   productMediaId = cached.media_id;
                   emit('9e. IMAGE CACHE HIT ✅', evt.phone, `media_id="${productMediaId}"`);
@@ -2098,6 +2099,17 @@ async function sendMultiple(db, cam, events, type, credChannelId) {
               phone: evt.phone, campaign_id: cam.id, campaign_name: cam.name,
               stage: currentStage, error: sendErr.message, timestamp: failedAt,
             });
+          }
+          // 403 "Access denied" (#131005) = stale media_id (token was refreshed).
+          // Remove the cached gallery entry so next attempt re-uploads with the new token.
+          if (sendErr.message.includes('403') || sendErr.message.includes('131005') || sendErr.message.toLowerCase().includes('access denied')) {
+            const imgUrl = evt.product_image || '';
+            if (imgUrl && db.gallery_images) {
+              const before = db.gallery_images.length;
+              db.gallery_images = db.gallery_images.filter(g => g.source_url !== imgUrl);
+              if (db.gallery_images.length < before)
+                console.log(`[APV] Cleared ${before - db.gallery_images.length} stale media_id cache entry(ies) for ${imgUrl} (token refresh 403)`);
+            }
           }
           // Keep lock at stage=0 — apvQuickCheck retries every 15s automatically
           db.save();
