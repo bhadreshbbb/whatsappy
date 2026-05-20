@@ -895,20 +895,35 @@ export const campaignsController = {
           }
         });
 
-      // ── Purchases ─────────────────────────────────────────────────────────────
-      const purchasedPhones = new Set(
-        locks.filter(l => l.lock_status === 'purchased').map(l => l.phone)
-      );
+      // ── Revenue & purchase attribution ────────────────────────────────────────
       const revenueByPhone = {};
       locks.forEach(l => {
         if (l.lock_status === 'purchased' && l.revenue) {
           revenueByPhone[l.phone] = (revenueByPhone[l.phone] || 0) + parseFloat(l.revenue || 0);
         }
       });
-      // Also pull from purchase_history
       (db.purchase_history || []).filter(p => p.channel_id === channelId && lockedPhones.has(p.phone)).forEach(p => {
         if (!revenueByPhone[p.phone]) revenueByPhone[p.phone] = 0;
         revenueByPhone[p.phone] += parseFloat(p.total_amount || 0);
+      });
+
+      // ── Pre-index cart events and purchases for fast per-user lookup ──────────
+      const cartsByPhone = {};
+      (db.cart_events || []).filter(c => c.channel_id === channelId && lockedPhones.has(c.phone || '')).forEach(c => {
+        if (!cartsByPhone[c.phone]) cartsByPhone[c.phone] = [];
+        cartsByPhone[c.phone].push(c);
+      });
+      const purchasesByPhone = {};
+      (db.purchase_history || []).filter(p => p.channel_id === channelId && lockedPhones.has(p.phone || '')).forEach(p => {
+        if (!purchasesByPhone[p.phone]) purchasesByPhone[p.phone] = [];
+        purchasesByPhone[p.phone].push(p);
+      });
+      const productViewsByPhone = {};
+      (db.product_views || []).filter(pv => pv.channel_id === channelId).forEach(pv => {
+        const ph = pv.phone || (db.website_visitors.find(v => v.session_id === pv.session_id && v.channel_id === channelId))?.phone;
+        if (!ph || !lockedPhones.has(ph)) return;
+        if (!productViewsByPhone[ph]) productViewsByPhone[ph] = [];
+        productViewsByPhone[ph].push({ ...pv, phone: ph });
       });
 
       // ── Per-user data — only locked users (those who entered the campaign) ──────
@@ -917,57 +932,84 @@ export const campaignsController = {
         const visitor = visitorByPhone[phone] || {};
         const viewRec = latestViewByPhone[phone] || null;
 
-        // Current-cycle timestamps from the lock (null = not sent / reset by re-entry)
         const s1At = lock.stage_1_sent_at || null;
         const s2At = lock.stage_2_sent_at || null;
+        const s1Ms = s1At ? new Date(s1At).getTime() : null;
 
-        // Match execution to current cycle by timestamp proximity
         const s1Exec = findExecForLock(s1At, 1);
         const s2Exec = findExecForLock(s2At, 2);
 
-        // Replies: only AFTER current-cycle stage 1 send (ignores pre-campaign replies)
         const msgs = getInbound(phone, s1At);
         const lastMsg = msgs[0] || null;
 
-        // Clicked: product viewed > 1 min after current-cycle stage 1 send
-        const s1Ms = s1At ? new Date(s1At).getTime() : null;
-        const clicked = s1Ms
-          ? (db.product_views || []).some(pv =>
-              pv.phone === phone && pv.channel_id === channelId &&
-              new Date(pv.created_at).getTime() > s1Ms + 60000
-            )
-          : false;
+        // ── Product views AFTER stage-1 send (proxy for link click) ─────────
+        const pvAfterMsg = s1Ms
+          ? (productViewsByPhone[phone] || [])
+              .filter(pv => new Date(pv.created_at).getTime() > s1Ms + 60_000)
+              .sort((a, b) => new Date(a.created_at) - new Date(b.created_at))
+          : [];
+        const clicked    = pvAfterMsg.length > 0;
+        const clicked_at = pvAfterMsg[0]?.created_at || null;
+        const click_count = pvAfterMsg.length;
+        // Product viewed (most recent product name/url from these views, or fallback)
+        const clickedView = pvAfterMsg[pvAfterMsg.length - 1] || null;
+
+        // ── First cart add AFTER stage-1 send ───────────────────────────────
+        const cartAfterMsg = s1Ms
+          ? (cartsByPhone[phone] || [])
+              .filter(c => new Date(c.created_at || c.timestamp).getTime() > s1Ms)
+              .sort((a, b) => new Date(a.created_at || a.timestamp) - new Date(b.created_at || b.timestamp))
+          : [];
+        const cart_added_at = cartAfterMsg[0]?.created_at || cartAfterMsg[0]?.timestamp || null;
+        const carted = cart_added_at !== null || ['cart_added', 'purchased'].includes(lock.lock_status);
+
+        // ── First purchase AFTER stage-1 send ───────────────────────────────
+        const purAfterMsg = s1Ms
+          ? (purchasesByPhone[phone] || [])
+              .filter(p => new Date(p.created_at || p.timestamp).getTime() > s1Ms)
+              .sort((a, b) => new Date(a.created_at || a.timestamp) - new Date(b.created_at || b.timestamp))
+          : [];
+        const purchased_at = purAfterMsg[0]?.created_at || purAfterMsg[0]?.timestamp || null;
+
+        // Total follow-ups sent this cycle
+        const followups_sent = (s1At ? 1 : 0) + (s2At ? 1 : 0);
 
         return {
           phone,
-          name:         lock.name        || visitor.name || 'Unknown',
-          city:         visitor.city     || '',
-          device:       visitor.device   || '',
+          name:          lock.name || visitor.name || 'Unknown',
+          city:          visitor.city  || '',
+          device:        visitor.device || '',
           product_name:  viewRec?.product_name  || lock.product_name  || '',
           product_url:   lock.product_url  || viewRec?.product_url  || '',
           product_price: viewRec?.product_price || lock.product_price || '',
-          // Stage 1: use lock timestamp as truth; exec for status/error
           stage1_sent_at: s1At,
           stage1_status:  s1At ? (s1Exec?.status || 'sent') : null,
           stage1_error:   s1Exec?.error || null,
-          // Stage 2: same
           stage2_sent_at: s2At,
           stage2_status:  s2At ? (s2Exec?.status || 'sent') : null,
           stage2_error:   s2Exec?.error || null,
-          // Responses — current cycle only
+          followups_sent,
           responded:        msgs.length > 0,
           response_count:   msgs.length,
           last_response:    lastMsg?.text || null,
           last_response_at: lastMsg ? (lastMsg.timestamp || lastMsg.created_at) : null,
           all_responses:    msgs.slice(0, 10).map(m => ({ text: m.text || '', at: m.timestamp || m.created_at })),
+          // Link click / product view tracking
           clicked,
+          clicked_at,
+          click_count,
+          clicked_product: clickedView?.product_name || clickedView?.product_url || null,
+          // Cart & purchase after message
+          carted,
+          cart_added_at,
+          purchased_at,
           lock_status:  lock.lock_status || 'active',
-          purchased:    lock.lock_status === 'purchased',
+          purchased:    lock.lock_status === 'purchased' || !!purchased_at,
           revenue:      revenueByPhone[phone] || 0,
-          locked_at:    lock.locked_at || null,
-          cycle_count:  lock.cycle_count || 1,
+          locked_at:    lock.locked_at    || null,
+          reentry_at:   lock.reentry_at   || null,
+          cycle_count:  lock.cycle_count  || 0,
           send_history: lock.send_history || [],
-          // Campaign attribution — stored on visitor when APV stage 2 completes
           apv_source_campaign_id:   visitor.apv_source_campaign_id   || null,
           apv_source_campaign_name: visitor.apv_source_campaign_name || null,
           apv_completed_at:         visitor.apv_completed_at         || lock.stage_2_sent_at || null,
@@ -975,36 +1017,51 @@ export const campaignsController = {
         };
       });
 
-      // ── Summary — based on current-cycle lock state, not raw execution count ────
-      const stage1Sent   = users.filter(u => u.stage1_status === 'sent').length;
-      const stage2Sent   = users.filter(u => u.stage2_status === 'sent').length;
-      const totalFailed  = users.filter(u => u.stage1_status === 'failed' || u.stage2_status === 'failed').length;
+      // ── Summary ──────────────────────────────────────────────────────────────
+      const stage1Sent     = users.filter(u => u.stage1_status === 'sent').length;
+      const stage2Sent     = users.filter(u => u.stage2_status === 'sent').length;
+      const totalFailed    = users.filter(u => u.stage1_status === 'failed' || u.stage2_status === 'failed').length;
       const respondedCount = users.filter(u => u.responded).length;
       const clickedCount   = users.filter(u => u.clicked).length;
-      const cartAdds       = locks.filter(l => ['cart_added', 'purchased'].includes(l.lock_status)).length;
-      const purchasesCount = locks.filter(l => l.lock_status === 'purchased').length;
+      const cartedCount    = users.filter(u => u.carted).length;
+      const purchasesCount = users.filter(u => u.purchased).length;
       const totalRevenue   = locks.reduce((s, l) => s + parseFloat(l.revenue || 0), 0);
       const responseRate   = users.length > 0 ? +((respondedCount / users.length) * 100).toFixed(1) : 0;
 
+      // Cycle stats
+      const totalCycles     = users.reduce((s, u) => s + (u.cycle_count || 0), 0);
+      const multiCycleUsers = users.filter(u => (u.cycle_count || 0) > 1).length;
+      const avgCycles       = users.length > 0 ? +(totalCycles / users.length).toFixed(1) : 0;
+      const totalFollowups  = users.reduce((s, u) => s + u.followups_sent, 0);
+
       const summary = {
-        total_users:   users.length,
-        stage1_sent:   stage1Sent,
-        stage2_sent:   stage2Sent,
-        total_failed:  totalFailed,
-        responded:     respondedCount,
-        clicked:       clickedCount,
-        cart_adds:     cartAdds,
-        purchases:     purchasesCount,
-        revenue:       totalRevenue,
-        response_rate: responseRate,
-        // legacy fields kept for existing analytics panel
+        total_users:      users.length,
+        stage1_sent:      stage1Sent,
+        stage2_sent:      stage2Sent,
+        total_failed:     totalFailed,
+        responded:        respondedCount,
+        clicked:          clickedCount,
+        carted:           cartedCount,
+        cart_adds:        cartedCount,
+        purchases:        purchasesCount,
+        revenue:          totalRevenue,
+        response_rate:    responseRate,
+        // Funnel percentages (relative to stage1_sent)
+        click_rate:    stage1Sent > 0 ? +((clickedCount   / stage1Sent) * 100).toFixed(1) : 0,
+        cart_rate:     stage1Sent > 0 ? +((cartedCount    / stage1Sent) * 100).toFixed(1) : 0,
+        purchase_rate: stage1Sent > 0 ? +((purchasesCount / stage1Sent) * 100).toFixed(1) : 0,
+        // Cycle stats
+        total_cycles:      totalCycles,
+        avg_cycles:        avgCycles,
+        multi_cycle_users: multiCycleUsers,
+        total_followups:   totalFollowups,
+        // Legacy aliases
         total_sent:    stage1Sent,
         msg_clicked:   clickedCount,
         clicks:        clickedCount,
-        add_to_carts:  cartAdds,
-        open_rate:     stage1Sent > 0 ? +((clickedCount / stage1Sent) * 100).toFixed(1) : 0,
-        cart_rate:     clickedCount > 0 ? +((cartAdds / clickedCount) * 100).toFixed(1) : 0,
-        buy_rate:      clickedCount > 0 ? +((purchasesCount / clickedCount) * 100).toFixed(1) : 0,
+        add_to_carts:  cartedCount,
+        open_rate:     stage1Sent > 0 ? +((clickedCount   / stage1Sent) * 100).toFixed(1) : 0,
+        buy_rate:      stage1Sent > 0 ? +((purchasesCount / stage1Sent) * 100).toFixed(1) : 0,
       };
 
       res.json({

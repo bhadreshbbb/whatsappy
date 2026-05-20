@@ -3750,34 +3750,75 @@ export default function Campaigns() {
             ) : (() => {
               const { summary, users } = analyticsModal.data;
               const fmtTime = (iso) => iso ? new Date(iso).toLocaleString('en-IN', { day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit', hour12:true }) : '—';
+              const pct = (n, d) => d > 0 ? Math.round((n / d) * 100) : 0;
+
+              // Funnel steps
+              const funnelSteps = [
+                { label: 'Msg Sent',   icon: '📤', count: summary.stage1_sent,  color: '#22d3ee' },
+                { label: 'Viewed',     icon: '🖱️', count: summary.clicked,      color: '#a78bfa' },
+                { label: 'Add to Cart',icon: '🛒', count: summary.carted ?? summary.cart_adds, color: '#fb923c' },
+                { label: 'Purchased',  icon: '✅', count: summary.purchases,    color: '#4ade80' },
+              ];
+              const funnelMax = summary.stage1_sent || 1;
+
               return (
                 <>
-                  {/* Summary Cards */}
-                  <div className="px-6 py-4 grid grid-cols-4 gap-3" style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+                  {/* ── Summary cards ── */}
+                  <div className="px-6 pt-4 pb-3 grid grid-cols-4 gap-2" style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
                     {[
-                      { label: 'Msg 1 Sent', value: summary.stage1_sent, color: '#4ade80' },
-                      { label: 'Msg 2 Sent', value: summary.stage2_sent, color: '#60a5fa' },
-                      { label: 'Failed', value: summary.total_failed, color: summary.total_failed > 0 ? '#f87171' : '#334155' },
-                      { label: 'Responded', value: `${summary.responded} (${summary.response_rate}%)`, color: '#a78bfa' },
-                      { label: 'Link Clicked', value: summary.clicked, color: '#fbbf24' },
-                      { label: 'Cart Adds', value: summary.cart_adds, color: '#fb923c' },
-                      { label: 'Purchases', value: summary.purchases, color: '#4ade80' },
-                      { label: 'Revenue', value: summary.revenue > 0 ? `₹${summary.revenue.toLocaleString('en-IN')}` : '₹0', color: '#4ade80' },
+                      { label: 'Msg 1 Sent',  value: summary.stage1_sent,  color: '#22d3ee' },
+                      { label: 'Msg 2 Sent',  value: summary.stage2_sent,  color: '#60a5fa' },
+                      { label: 'Failed',       value: summary.total_failed, color: summary.total_failed > 0 ? '#f87171' : '#334155' },
+                      { label: 'Responded',    value: `${summary.responded} (${summary.response_rate}%)`, color: '#a78bfa' },
+                      { label: 'Total Cycles', value: summary.total_cycles ?? '—', color: '#818cf8' },
+                      { label: 'Avg Cycles',   value: summary.avg_cycles   ?? '—', color: '#818cf8' },
+                      { label: 'Multi-cycle',  value: summary.multi_cycle_users ?? '—', color: '#c084fc' },
+                      { label: 'Revenue',      value: summary.revenue > 0 ? `₹${summary.revenue.toLocaleString('en-IN')}` : '₹0', color: '#4ade80' },
                     ].map(({ label, value, color }) => (
                       <div key={label} className="rounded-xl p-3" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.05)' }}>
                         <p className="text-[9px] uppercase tracking-wide mb-1" style={{ color: '#475569' }}>{label}</p>
-                        <p className="text-lg font-bold" style={{ color }}>{value}</p>
+                        <p className="text-sm font-bold" style={{ color }}>{value}</p>
                       </div>
                     ))}
                   </div>
 
-                  {/* Per-user table */}
-                  <div className="overflow-x-auto" style={{ maxHeight: '60vh', overflowY: 'auto' }}>
+                  {/* ── Conversion funnel ── */}
+                  <div className="px-6 py-4" style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                    <p className="text-[9px] font-semibold uppercase tracking-widest mb-3" style={{ color: '#475569' }}>Conversion Funnel</p>
+                    <div className="space-y-2">
+                      {funnelSteps.map((step, si) => {
+                        const w = pct(step.count, funnelMax);
+                        const dropPct = si > 0 ? pct(step.count, funnelSteps[si-1].count) : 100;
+                        return (
+                          <div key={step.label}>
+                            <div className="flex items-center justify-between mb-1">
+                              <span className="text-[10px] font-medium" style={{ color: step.color }}>{step.icon} {step.label}</span>
+                              <span className="text-[10px] font-bold" style={{ color: step.color }}>
+                                {step.count}
+                                {si > 0 && <span className="text-[9px] ml-1.5" style={{ color: '#475569' }}>({dropPct}% of prev)</span>}
+                              </span>
+                            </div>
+                            <div className="h-2 rounded-full overflow-hidden" style={{ background: 'rgba(255,255,255,0.04)' }}>
+                              <div className="h-full rounded-full transition-all" style={{ width: `${Math.max(w, step.count > 0 ? 2 : 0)}%`, background: step.color, opacity: 0.7 }}/>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                    <div className="flex gap-4 mt-3 text-[9px]" style={{ color: '#475569' }}>
+                      {summary.click_rate   > 0 && <span>View rate: <span style={{ color: '#a78bfa' }}>{summary.click_rate}%</span></span>}
+                      {summary.cart_rate    > 0 && <><span>·</span><span>Cart rate: <span style={{ color: '#fb923c' }}>{summary.cart_rate}%</span></span></>}
+                      {summary.purchase_rate > 0 && <><span>·</span><span>Buy rate: <span style={{ color: '#4ade80' }}>{summary.purchase_rate}%</span></span></>}
+                    </div>
+                  </div>
+
+                  {/* ── Per-user table ── */}
+                  <div className="overflow-x-auto" style={{ maxHeight: '55vh', overflowY: 'auto' }}>
                     <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
                       <thead style={{ position: 'sticky', top: 0, background: '#0d1929', zIndex: 1 }}>
                         <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
-                          {['User', 'Product', 'Msg 1', 'Msg 2', 'Response', 'Clicked', 'Status'].map(h => (
-                            <th key={h} className="text-left px-4 py-2 text-[9px] font-semibold uppercase tracking-wide" style={{ color: '#475569' }}>{h}</th>
+                          {['User', 'Product', 'Msg 1', 'Msg 2', 'Viewed Link', 'Cart', 'Status / Cycles'].map(h => (
+                            <th key={h} className="text-left px-3 py-2 text-[9px] font-semibold uppercase tracking-wide" style={{ color: '#475569', whiteSpace: 'nowrap' }}>{h}</th>
                           ))}
                         </tr>
                       </thead>
@@ -3786,80 +3827,101 @@ export default function Campaigns() {
                           <React.Fragment key={i}>
                           <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.03)', background: i % 2 === 0 ? 'rgba(255,255,255,0.01)' : 'transparent' }}>
                             {/* User */}
-                            <td className="px-4 py-2.5">
+                            <td className="px-3 py-2.5" style={{ minWidth: 110 }}>
                               <p className="text-[10px] font-semibold text-white">{u.name}</p>
                               <p className="text-[9px] font-mono" style={{ color: '#4ade80' }}>{u.phone}</p>
                               {u.city && <p className="text-[8px]" style={{ color: '#334155' }}>📍{u.city}</p>}
                             </td>
                             {/* Product */}
-                            <td className="px-4 py-2.5 max-w-[140px]">
+                            <td className="px-3 py-2.5" style={{ maxWidth: 130 }}>
                               <p className="text-[9px] truncate" style={{ color: '#94a3b8' }}>{u.product_name || '—'}</p>
                               {u.product_price && <p className="text-[9px]" style={{ color: '#fbbf24' }}>₹{u.product_price}</p>}
                             </td>
                             {/* Msg 1 */}
-                            <td className="px-4 py-2.5">
+                            <td className="px-3 py-2.5" style={{ minWidth: 90 }}>
                               {u.stage1_status === 'sent'
                                 ? <div><p className="text-[9px]" style={{ color: '#4ade80' }}>✅ Sent</p><p className="text-[8px]" style={{ color: '#334155' }}>{fmtTime(u.stage1_sent_at)}</p></div>
                                 : u.stage1_status === 'failed'
-                                  ? <div><p className="text-[9px]" style={{ color: '#f87171' }}>❌ Failed</p><p className="text-[8px] max-w-[100px] truncate" style={{ color: '#475569' }}>{u.stage1_error || 'API error'}</p></div>
-                                  : <span className="text-[9px]" style={{ color: '#334155' }}>⏳ Pending</span>
-                              }
+                                  ? <div><p className="text-[9px]" style={{ color: '#f87171' }}>❌ Failed</p><p className="text-[8px] truncate max-w-[90px]" style={{ color: '#475569' }}>{u.stage1_error || 'API error'}</p></div>
+                                  : <span className="text-[9px]" style={{ color: '#334155' }}>⏳ Pending</span>}
                             </td>
                             {/* Msg 2 */}
-                            <td className="px-4 py-2.5">
+                            <td className="px-3 py-2.5" style={{ minWidth: 90 }}>
                               {u.stage2_status === 'sent'
                                 ? <div><p className="text-[9px]" style={{ color: '#4ade80' }}>✅ Sent</p><p className="text-[8px]" style={{ color: '#334155' }}>{fmtTime(u.stage2_sent_at)}</p></div>
                                 : u.stage2_status === 'failed'
                                   ? <div><p className="text-[9px]" style={{ color: '#f87171' }}>❌ Failed</p><p className="text-[8px]" style={{ color: '#475569' }}>{u.stage2_error || 'API error'}</p></div>
                                   : u.stage1_status === 'sent'
                                     ? <span className="text-[9px]" style={{ color: '#475569' }}>⏳ Waiting</span>
-                                    : <span className="text-[9px]" style={{ color: '#334155' }}>—</span>
-                              }
+                                    : <span className="text-[9px]" style={{ color: '#334155' }}>—</span>}
                             </td>
-                            {/* Response */}
-                            <td className="px-4 py-2.5 max-w-[160px]">
-                              {u.responded
-                                ? <div>
-                                    <p className="text-[9px] truncate" style={{ color: '#c084fc' }}>💬 "{u.last_response}"</p>
-                                    <p className="text-[8px]" style={{ color: '#334155' }}>{fmtTime(u.last_response_at)}</p>
-                                    {u.response_count > 1 && <p className="text-[8px]" style={{ color: '#475569' }}>{u.response_count} replies total</p>}
-                                  </div>
-                                : <span className="text-[9px]" style={{ color: '#334155' }}>—</span>
-                              }
+                            {/* Viewed Link (product view after msg) */}
+                            <td className="px-3 py-2.5" style={{ minWidth: 110 }}>
+                              {u.clicked ? (
+                                <div>
+                                  <p className="text-[9px]" style={{ color: '#a78bfa' }}>🖱️ Viewed</p>
+                                  <p className="text-[8px]" style={{ color: '#334155' }}>{fmtTime(u.clicked_at)}</p>
+                                  {u.click_count > 1 && <p className="text-[8px]" style={{ color: '#475569' }}>{u.click_count}x visits</p>}
+                                  {u.clicked_product && <p className="text-[8px] truncate max-w-[100px]" style={{ color: '#64748b' }}>{u.clicked_product}</p>}
+                                  {u.responded && (
+                                    <p className="text-[8px] truncate max-w-[100px] mt-0.5" style={{ color: '#c084fc' }}>💬 "{u.last_response}"</p>
+                                  )}
+                                </div>
+                              ) : u.responded ? (
+                                <div>
+                                  <p className="text-[9px]" style={{ color: '#c084fc' }}>💬 Replied</p>
+                                  <p className="text-[8px] truncate max-w-[100px]" style={{ color: '#334155' }}>"{u.last_response}"</p>
+                                  <p className="text-[8px]" style={{ color: '#1e293b' }}>{fmtTime(u.last_response_at)}</p>
+                                </div>
+                              ) : <span className="text-[9px]" style={{ color: '#1e293b' }}>—</span>}
                             </td>
-                            {/* Clicked */}
-                            <td className="px-4 py-2.5 text-center">
-                              <span className="text-[10px]" style={{ color: u.clicked ? '#fbbf24' : '#334155' }}>
-                                {u.clicked ? '✓' : '—'}
-                              </span>
+                            {/* Cart */}
+                            <td className="px-3 py-2.5" style={{ minWidth: 100 }}>
+                              {u.purchased ? (
+                                <div>
+                                  <p className="text-[9px] font-semibold" style={{ color: '#4ade80' }}>✅ Purchased</p>
+                                  {u.purchased_at && <p className="text-[8px]" style={{ color: '#334155' }}>{fmtTime(u.purchased_at)}</p>}
+                                  {u.revenue > 0 && <p className="text-[8px]" style={{ color: '#fbbf24' }}>₹{u.revenue.toLocaleString('en-IN')}</p>}
+                                </div>
+                              ) : u.carted ? (
+                                <div>
+                                  <p className="text-[9px]" style={{ color: '#fb923c' }}>🛒 Added to Cart</p>
+                                  {u.cart_added_at && <p className="text-[8px]" style={{ color: '#334155' }}>{fmtTime(u.cart_added_at)}</p>}
+                                </div>
+                              ) : <span className="text-[9px]" style={{ color: '#1e293b' }}>—</span>}
                             </td>
-                            {/* Status + cycle */}
-                            <td className="px-4 py-2.5">
+                            {/* Status + cycles */}
+                            <td className="px-3 py-2.5" style={{ minWidth: 100 }}>
                               <span className="text-[9px] px-1.5 py-0.5 rounded" style={{
                                 background: u.lock_status === 'purchased' ? 'rgba(74,222,128,0.1)' : u.lock_status === 'cart_added' ? 'rgba(251,146,60,0.1)' : u.lock_status === 'active' ? 'rgba(99,102,241,0.1)' : 'rgba(100,116,139,0.1)',
-                                color: u.lock_status === 'purchased' ? '#4ade80' : u.lock_status === 'cart_added' ? '#fb923c' : u.lock_status === 'active' ? '#818cf8' : '#64748b',
-                              }}>
-                                {u.lock_status}
-                              </span>
-                              {u.cycle_count > 1 && (
-                                <p className="text-[8px] mt-0.5" style={{ color: '#475569' }}>🔄 cycle {u.cycle_count}</p>
+                                color:      u.lock_status === 'purchased' ? '#4ade80'  : u.lock_status === 'cart_added' ? '#fb923c'  : u.lock_status === 'active' ? '#818cf8'  : '#64748b',
+                              }}>{u.lock_status}</span>
+                              {(u.cycle_count || 0) > 0 && (
+                                <p className="text-[8px] mt-0.5" style={{ color: '#475569' }}>
+                                  🔄 {u.cycle_count} cycle{u.cycle_count !== 1 ? 's' : ''}
+                                  {u.followups_sent > 0 && ` · ${u.followups_sent} msg`}
+                                </p>
                               )}
                             </td>
                           </tr>
 
+                          {/* Previous cycle history rows */}
                           {(u.send_history || []).map((h, hi) => (
-                            <tr key={`hist-${i}-${hi}`} style={{ background: 'rgba(99,102,241,0.04)', borderBottom: '1px solid rgba(255,255,255,0.02)' }}>
-                              <td className="px-4 py-1.5 pl-8" colSpan={2}>
+                            <tr key={`hist-${i}-${hi}`} style={{ background: 'rgba(99,102,241,0.03)', borderBottom: '1px solid rgba(255,255,255,0.02)' }}>
+                              <td className="px-3 py-1.5 pl-7" colSpan={2}>
                                 <span className="text-[8px]" style={{ color: '#334155' }}>↳ Cycle {hi + 1} · {h.product_name || '—'}</span>
                               </td>
-                              <td className="px-4 py-1.5">
+                              <td className="px-3 py-1.5">
                                 <span className="text-[8px]" style={{ color: '#334155' }}>{h.stage1_sent_at ? `✅ ${fmtTime(h.stage1_sent_at)}` : '—'}</span>
                               </td>
-                              <td className="px-4 py-1.5">
+                              <td className="px-3 py-1.5">
                                 <span className="text-[8px]" style={{ color: '#334155' }}>{h.stage2_sent_at ? `✅ ${fmtTime(h.stage2_sent_at)}` : '—'}</span>
                               </td>
-                              <td className="px-4 py-1.5" colSpan={3}>
-                                <span className="text-[8px]" style={{ color: '#1e293b' }}>↩ re-entered: {h.reentry_product || '—'}</span>
+                              <td className="px-3 py-1.5" colSpan={3}>
+                                <span className="text-[8px]" style={{ color: '#1e293b' }}>
+                                  {h.exit_reason === 'reentry_new_product' ? '↩ re-entered new product' : h.exit_reason === 'reentry_cross_device' ? '↩ cross-device re-entry' : '↩ re-entered'}
+                                  {h.reentry_product ? `: ${h.reentry_product}` : ''}
+                                </span>
                               </td>
                             </tr>
                           ))}
