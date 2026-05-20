@@ -1251,6 +1251,10 @@ export const campaignsController = {
           p.channel_id === effectiveChannelId && String(p.source_campaign_id) === camIdStr
         );
         const attrRevenue = attrPurchases.reduce((s, p) => s + (parseFloat(p.total_amount) || 0), 0);
+        // attributed_views: product views stamped with source_campaign_id = this campaign
+        const attrProductViews = (db.product_views || []).filter(pv =>
+          pv.channel_id === effectiveChannelId && String(pv.source_campaign_id) === camIdStr
+        );
 
         const stage1SentExecs = allExecsForCampaign.filter(x => (x.stage || 1) === 1 && x.status === 'sent');
         const stage2SentExecs = allExecsForCampaign.filter(x => x.stage === 2 && x.status === 'sent');
@@ -1262,6 +1266,7 @@ export const campaignsController = {
           total_failed:   allExecsForCampaign.filter(x => x.status === 'failed').length,
           conversations:  metricReplied,                                        // unique users who replied
           clicked:        attrClicks.length,                                    // clicked campaign URL (ww_cam)
+          views:          attrProductViews.length,                              // product views attributed to this campaign
           cart_adds:      attrCartsRecovered.length,                            // cart adds attributed to this campaign
           purchases:      attrPurchases.length,                                 // purchases attributed to this campaign
           revenue:        attrRevenue,                                          // attributed revenue
@@ -1372,6 +1377,11 @@ export const campaignsController = {
             p.phone === l.phone && p.channel_id === effectiveChannelId &&
             String(p.source_campaign_id) === camIdStr
           );
+          // Attribution: product view after campaign click
+          const attrProductView = (db.product_views || []).find(pv =>
+            pv.phone === l.phone && pv.channel_id === effectiveChannelId &&
+            String(pv.source_campaign_id) === camIdStr
+          );
 
           const execs = getExecs(l.phone, l);  // lock-anchored: null lock ts → null status
           return {
@@ -1405,6 +1415,7 @@ export const campaignsController = {
             // Attribution fields
             clicked: clickedCampaign,          // clicked the campaign URL (ww_cam)
             clicked_at: clickedAt,             // when they clicked
+            attributed_view: !!attrProductView, // viewed product after clicking campaign link
             attributed_cart: !!attrCart,       // added to cart after clicking
             attributed_cart_amount: attrCart ? parseFloat(attrCart.total_amount || 0) : 0,
             attributed_purchase: !!attrPurch,  // purchased after clicking

@@ -886,6 +886,15 @@ export const trackingController = {
       // Find visitor to link phone immediately if available
       const visitor = db.website_visitors.find(v => v.channel_id === cid && v.session_id === sessionId);
 
+      // ── Campaign attribution: stamp source_campaign_id if visitor clicked a campaign link recently ──
+      const _ATTR_WINDOW_MS = 24 * 60 * 60 * 1000;
+      const _pvCamAttr = (() => {
+        if (!visitor?.last_click_campaign_id) return null;
+        const clickedMs = visitor.last_click_at ? new Date(visitor.last_click_at).getTime() : 0;
+        if (Date.now() - clickedMs > _ATTR_WINDOW_MS) return null;
+        return String(visitor.last_click_campaign_id);
+      })();
+
       // Deduplicate: Don't track multiple distinct events for exact same product URL by same session
       const existingIdx = db.product_views.findIndex(v =>
         v.channel_id === cid && v.session_id === sessionId &&
@@ -907,6 +916,7 @@ export const trackingController = {
         whatsapp_sent:  0,
         followup_count: 0,
         created_at:     new Date().toISOString(),
+        source_campaign_id: _pvCamAttr || (existingIdx >= 0 ? db.product_views[existingIdx].source_campaign_id : null) || null,
       };
 
       if (existingIdx < 0) db.product_views.push(record);
