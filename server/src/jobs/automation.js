@@ -2200,6 +2200,21 @@ async function sendMultiple(db, cam, events, type, credChannelId) {
           });
         }
 
+        // Pre-send lock-stage guard (APV only).
+        // Re-entry can reset the lock (stage→0, reentry_at=NOW) in the gap between
+        // the outer `await sendMultiple` yield and the snapshot below.  When that
+        // happens, evt._lock.reentry_at is ALREADY updated, so the post-send
+        // snapshot comparison finds them equal and misses the race entirely —
+        // resulting in the lock being clobbered back to stage=2/shifted_recommendation.
+        // Checking the live stage HERE (no yield between this and the send) catches it.
+        if (cam.campaign_type === 'abandoned_product_view' && evt._lock) {
+          const _expectedLockStage = currentStage - 1; // 0 before stage-1, 1 before stage-2
+          if (evt._lock.stage !== _expectedLockStage || evt._lock.lock_status !== 'active') {
+            console.log(`[APV/PathA] ${evt.phone} pre-send stage guard: expected lock.stage=${_expectedLockStage} got ${evt._lock.stage} (${evt._lock.lock_status}) — re-entry raced, skipping send`);
+            continue;
+          }
+        }
+
         // Snapshot lock state before the async send.
         // If the user views a different product (tracking re-entry) WHILE the API
         // call is in-flight, the lock will be reset (new reentry_at, stage→0, new product).
@@ -2345,7 +2360,7 @@ async function sendMultiple(db, cam, events, type, credChannelId) {
         }
 
         // ── Update product_views record for APV so follow-up tracking is correct ──
-        if (cam.campaign_type === 'abandoned_product_view' && evt._viewRec) {
+        if (cam.campaign_type === 'abandoned_product_view' && evt._viewRec && !_lockResetDuringSend) {
           const pvIdx = db.product_views.findIndex(v => v.id === evt._viewRec.id);
           if (pvIdx >= 0) {
             db.product_views[pvIdx].whatsapp_sent    = 1;
@@ -2508,6 +2523,16 @@ async function sendMultiple(db, cam, events, type, credChannelId) {
           stage: currentStage, channel_id: channelId,
           timestamp: new Date().toISOString(),
         });
+      }
+
+      // Pre-send lock-stage guard — mirrors PATH A.  Catches re-entry that raced
+      // in the outer sendMultiple yield gap before this snapshot was taken.
+      if (cam.campaign_type === 'abandoned_product_view' && evt._lock) {
+        const _expectedLockStageB = currentStage - 1;
+        if (evt._lock.stage !== _expectedLockStageB || evt._lock.lock_status !== 'active') {
+          console.log(`[APV/PathB] ${evt.phone} pre-send stage guard: expected lock.stage=${_expectedLockStageB} got ${evt._lock.stage} (${evt._lock.lock_status}) — re-entry raced, skipping send`);
+          continue;
+        }
       }
 
       // Snapshot lock re-entry state before async send — same guard as PATH A.
