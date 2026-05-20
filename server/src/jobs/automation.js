@@ -2308,7 +2308,8 @@ async function sendMultiple(db, cam, events, type, credChannelId) {
         // APV stage 2 complete — move to product_recommendation and close the lock immediately.
         // Status product_recommendation = both follow-ups sent, user in recommendation pool.
         // Any new product_view will restart the cycle via statusMachine re-entry rules.
-        if (currentStage === 2 && cam.campaign_type === 'abandoned_product_view') {
+        // Guard: skip if lock was reset mid-send (re-entry race) — new cycle must stay at stage 0.
+        if (currentStage === 2 && cam.campaign_type === 'abandoned_product_view' && !_lockResetDuringSend) {
           // Upgrade ALL sessions for this phone — a stale 'active' session on another channel
           // must not leave 'product_view_lock' sessions behind after cycle completion.
           const nowIso = new Date().toISOString();
@@ -2451,7 +2452,15 @@ async function sendMultiple(db, cam, events, type, credChannelId) {
         });
       }
 
+      // Snapshot lock re-entry state before async send — same guard as PATH A.
+      const _lockSnapReentryAtB = evt._lock?.reentry_at ?? null;
+
       const sendResult = await whatsappService.sendMessage(evt.phone, components, variables, channelId);
+
+      // Detect re-entry race: did the user view a different product while this
+      // API call was in-flight? If so the lock was reset (new reentry_at) and we
+      // must NOT update it to stage=currentStage — that would clobber the new cycle.
+      const _lockResetDuringSendB = evt._lock && (evt._lock.reentry_at ?? null) !== _lockSnapReentryAtB;
 
       // ── SAVE TO CHAT INBOX (live update) ──
       saveChatMessage(db, evt.phone, sendResult.resolvedText || '', channelId, {
@@ -2461,7 +2470,9 @@ async function sendMultiple(db, cam, events, type, credChannelId) {
       });
 
       // ── LOG EXECUTION ──
-      const _execStatus = sendResult.messageId ? 'sent' : 'failed';
+      const _execStatus = _lockResetDuringSendB
+        ? 'archived_reentry'
+        : (sendResult.messageId ? 'sent' : 'failed');
       db.abandoned_cart_executions.push({
         id: (db.abandoned_cart_executions.length || 0) + 1,
         campaign_id: cam.id,
@@ -2476,9 +2487,14 @@ async function sendMultiple(db, cam, events, type, credChannelId) {
         error: _execStatus === 'failed' ? 'Message send failed — check WhatsApp credentials' : null,
         retry_count: _retryCount,
         sent_at: new Date().toISOString(),
+        archived_at: _lockResetDuringSendB ? new Date().toISOString() : undefined,
         product_image: variables.product_image || ''
       });
       if (_execStatus === 'failed') { db.save(); continue; }
+      if (_lockResetDuringSendB) {
+        console.warn(`[APV/PathB] ${evt.phone} re-entered mid-send — exec archived, skipping lock update to protect new cycle`);
+        db.save(); continue;
+      }
 
       if (global.io) {
         global.io.emit('apv_sent', {
