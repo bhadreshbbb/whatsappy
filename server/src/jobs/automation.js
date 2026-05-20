@@ -320,7 +320,56 @@ async function checkLockedUsers() {
         console.log(`[LockCheck] ${lock.phone} shifted_recommendation → product_view_lock detected — reset for cycle ${cycleNum}`);
         continue;
       }
-      // Still mid-cycle (active lock) — nothing to do
+      // Active lock at stage≥1 (stage 1 sent, waiting for stage 2) — check if the visitor
+      // has moved to a different product. If so, reset so the new product gets stage 1.
+      // This is the safety-net for cases where trackProduct's reset was skipped because
+      // the session didn't have a phone yet (v.phone was null at trackProduct time).
+      if (lock.lock_status === 'active' && (lock.stage || 0) >= 1) {
+        const _cleanLockUrl = (u) => { try { return new URL(u || '').origin + new URL(u || '').pathname; } catch { return (u || '').split('?')[0]; } };
+        const visitorUrl  = visitor.last_product_url;
+        const lockUrl     = lock.product_url;
+        const productChanged = visitorUrl && lockUrl &&
+          _cleanLockUrl(visitorUrl) !== _cleanLockUrl(lockUrl);
+        if (productChanged) {
+          const cycleNum = (lock.cycle_count || 0) + 1;
+          if (!lock.send_history) lock.send_history = [];
+          lock.send_history.push({
+            cycle:          cycleNum,
+            product_name:   lock.product_name   || '',
+            product_url:    lock.product_url    || '',
+            stage1_sent_at: lock.stage_1_sent_at || null,
+            stage2_sent_at: lock.stage_2_sent_at || null,
+            archived_at:    new Date().toISOString(),
+            exit_reason:    'reentry_product_changed_lockcheck',
+          });
+          lock.cycle_count     = cycleNum;
+          lock.stage           = 0;
+          lock.stage_1_sent_at = null;
+          lock.stage_2_sent_at = null;
+          lock.lock_status     = 'active';
+          lock.unlock_reason   = null;
+          lock.shifted_at      = null;
+          lock.reentry_at      = new Date().toISOString();
+          // Update lock to the new product
+          if (visitor.last_product_url)   lock.product_url   = visitor.last_product_url;
+          if (visitor.last_product_name)  lock.product_name  = visitor.last_product_name;
+          if (visitor.last_product_image) lock.product_image = visitor.last_product_image;
+          if (visitor.last_product_price) lock.product_price = visitor.last_product_price;
+          (db.abandoned_cart_executions || []).forEach(x => {
+            if (String(x.campaign_id) === String(lock.campaign_id) &&
+                x.phone === lock.phone &&
+                (x.status === 'sent' || x.status === 'failed' || x.status === 'reset_for_retry')) {
+              x.status = 'archived_reentry'; x.archived_at = lock.reentry_at;
+            }
+          });
+          (db.product_views || []).filter(v => v.phone === lock.phone)
+            .forEach(v => { v.whatsapp_sent = 0; v.followup_count = 0; v.whatsapp_sent_at = null; });
+          changed = true;
+          console.log(`[LockCheck] ${lock.phone} product changed mid-cycle (stage ${lock.stage + 1}→0) → "${visitor.last_product_url}" — lock reset, stage 1 will restart`);
+          continue;
+        }
+      }
+      // Still mid-cycle on the same product — nothing to do
       if (lock.last_known_status !== currStatus) {
         lock.last_known_status = currStatus;
         changed = true;
@@ -579,8 +628,17 @@ async function apvQuickCheck() {
       const cleanUrl = (u) => { try { return new URL(u).origin + new URL(u).pathname; } catch { return (u || '').split('?')[0]; } };
       const allViews = (db.product_views || []).filter(v => v.phone === l.phone);
       const lockCleanUrl = l.product_url ? cleanUrl(l.product_url) : '';
+      // Pick the BEST matching view for this URL: prefer records that have an image,
+      // then a name, then the most recent — avoids using an older session's empty record
+      // when a newer scraped record for the same URL already has the product image.
       const matchedView = lockCleanUrl
-        ? allViews.find(v => cleanUrl(v.product_url) === lockCleanUrl)
+        ? (allViews
+            .filter(v => cleanUrl(v.product_url) === lockCleanUrl)
+            .sort((a, b) =>
+              ((b.product_image ? 1 : 0) - (a.product_image ? 1 : 0)) ||
+              ((b.product_name  ? 1 : 0) - (a.product_name  ? 1 : 0)) ||
+              (new Date(b.created_at) - new Date(a.created_at))
+            )[0] || null)
         : null;
       const latestView = [...allViews].sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
       const viewRec = matchedView || latestView;

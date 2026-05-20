@@ -1296,6 +1296,23 @@ export const trackingController = {
               url: product_url, updated_at: new Date().toISOString(),
             });
           }
+          // Patch the active APV campaign lock so buildEvent uses the scraped image
+          // directly from the lock (l.product_image) rather than relying on viewRec fallback.
+          const phone = db2.website_visitors[vi >= 0 ? vi : -1]?.phone
+            || db2.product_views[idx >= 0 ? idx : -1]?.phone;
+          if (phone) {
+            const apvLock = (db2.campaign_locks || []).find(l =>
+              l.phone === phone &&
+              l.campaign_type === 'abandoned_product_view' &&
+              l.lock_status === 'active' &&
+              l.product_url === product_url
+            );
+            if (apvLock) {
+              if (!apvLock.product_image && scraped.image) apvLock.product_image = scraped.image;
+              if (!apvLock.product_name  && scraped.name)  apvLock.product_name  = scraped.name;
+              if (!apvLock.product_price && scraped.price) apvLock.product_price = scraped.price;
+            }
+          }
           db2.save();
           console.log(`[Scrape] Product enriched: "${scraped.name}" ${scraped.price} ${product_url}`);
         }).catch(() => {});
