@@ -2056,13 +2056,19 @@ async function sendMultiple(db, cam, events, type, credChannelId) {
               _apvSkip = true;
             }
 
-            if (!_apvSkip && productUrl && (!productName || !productPrice || !productImage)) {
-              emit('9c. SCRAPING', evt.phone, `missing fields — scraping ${productUrl.slice(0, 80)}`);
+            // Scrape if data is missing OR if we don't yet have a lock-verified image.
+            // Tracker sends OG meta images which are often store-wide (not product-specific).
+            // Once lock.product_image is set (after stage-1 scrape), we trust it and skip.
+            const _needsImageScrape = !evt._lock?.product_image;
+            if (!_apvSkip && productUrl && (!productName || !productPrice || !productImage || _needsImageScrape)) {
+              emit('9c. SCRAPING', evt.phone, `missing fields or unverified image — scraping ${productUrl.slice(0, 80)}`);
               try {
                 const scraped = await scrapeProductData(productUrl);
-                if (!productName  && (scraped.title || scraped.name))      productName  = scraped.title || scraped.name;
-                if (!productPrice && scraped.price)                         productPrice = scraped.price;
-                if (!productImage && (scraped.image_url || scraped.image))  productImage = scraped.image_url || scraped.image;
+                if (!productName  && (scraped.title || scraped.name)) productName  = scraped.title || scraped.name;
+                if (!productPrice && scraped.price)                    productPrice = scraped.price;
+                // ALWAYS prefer scraped image over tracker's OG image — scraper returns
+                // the product-specific image; tracker OG often returns the store's default.
+                if (scraped.image_url || scraped.image)                productImage = scraped.image_url || scraped.image;
 
                 // Patch the product_views record so future sends skip scraping.
                 // Use session-based lookup — view may be stored under phone=null from pre-login browse.
@@ -2076,7 +2082,7 @@ async function sendMultiple(db, cam, events, type, credChannelId) {
                 if (pvIdx >= 0) {
                   if (!db.product_views[pvIdx].product_name  && productName)  db.product_views[pvIdx].product_name  = productName;
                   if (!db.product_views[pvIdx].product_price && productPrice) db.product_views[pvIdx].product_price = productPrice;
-                  if (!db.product_views[pvIdx].product_image && productImage) db.product_views[pvIdx].product_image = productImage;
+                  if (productImage) db.product_views[pvIdx].product_image = productImage; // always update with scraped
                 }
                 emit('9c. SCRAPED ✅', evt.phone, `name="${productName}" price="${productPrice}" image=${!!productImage}`);
                 console.log(`[AbandonedProductView] Scraped: "${productName}" ${productPrice} img=${!!productImage}`);
@@ -2085,6 +2091,8 @@ async function sendMultiple(db, cam, events, type, credChannelId) {
                 console.warn(`[AbandonedProductView] Scrape failed for ${evt.phone}: ${scrapeErr.message} — continuing with available data`);
               }
             }
+            // Expose resolved image URL on evt so gallery-cleanup in send-error handler uses it
+            evt._resolvedProductImage = productImage;
 
             if (!_apvSkip) {
               // ── Step 2: Resolve stage variables — never send empty strings to Meta ──
@@ -2251,7 +2259,21 @@ async function sendMultiple(db, cam, events, type, credChannelId) {
         // Log credentials being used
         emit('10. CREDENTIALS', evt.phone, `channelId="${channelId}" → getCredentials() will try this channel first, then fallback to others on 401`);
 
-        // Emit real-time event to browser — fires the EXACT moment API call is made
+        // Pre-send lock-stage guard (APV only) — MUST run BEFORE emitting apv_sending so
+        // the UI never shows "Sending now" for a send that will be skipped (which would
+        // leave the UI stuck forever since no apv_sent/apv_failed fires after continue).
+        // Re-entry can reset the lock (stage→0, reentry_at=NOW) in the gap between earlier
+        // awaits (scrape, download, upload) and here. Checking stage now catches that race.
+        if (cam.campaign_type === 'abandoned_product_view' && evt._lock) {
+          const _expectedLockStage = currentStage - 1; // 0 before stage-1, 1 before stage-2
+          if (evt._lock.stage !== _expectedLockStage || evt._lock.lock_status !== 'active') {
+            console.log(`[APV/PathA] ${evt.phone} pre-send stage guard: expected lock.stage=${_expectedLockStage} got ${evt._lock.stage} (${evt._lock.lock_status}) — re-entry raced, skipping send`);
+            continue;
+          }
+        }
+
+        // Emit real-time event to browser — fires immediately before the API call.
+        // Guard must run before this so we only show "Sending now" if we'll actually send.
         if (global.io) {
           global.io.emit('apv_sending', {
             phone: evt.phone, name: evt.name || '',
@@ -2259,21 +2281,6 @@ async function sendMultiple(db, cam, events, type, credChannelId) {
             stage: currentStage, channel_id: channelId,
             payload: sendPayload, timestamp: new Date().toISOString(),
           });
-        }
-
-        // Pre-send lock-stage guard (APV only).
-        // Re-entry can reset the lock (stage→0, reentry_at=NOW) in the gap between
-        // the outer `await sendMultiple` yield and the snapshot below.  When that
-        // happens, evt._lock.reentry_at is ALREADY updated, so the post-send
-        // snapshot comparison finds them equal and misses the race entirely —
-        // resulting in the lock being clobbered back to stage=2/shifted_recommendation.
-        // Checking the live stage HERE (no yield between this and the send) catches it.
-        if (cam.campaign_type === 'abandoned_product_view' && evt._lock) {
-          const _expectedLockStage = currentStage - 1; // 0 before stage-1, 1 before stage-2
-          if (evt._lock.stage !== _expectedLockStage || evt._lock.lock_status !== 'active') {
-            console.log(`[APV/PathA] ${evt.phone} pre-send stage guard: expected lock.stage=${_expectedLockStage} got ${evt._lock.stage} (${evt._lock.lock_status}) — re-entry raced, skipping send`);
-            continue;
-          }
         }
 
         // Snapshot lock state before the async send.
@@ -2308,7 +2315,9 @@ async function sendMultiple(db, cam, events, type, credChannelId) {
           // 403 "Access denied" (#131005) = stale media_id (token was refreshed).
           // Remove the cached gallery entry so next attempt re-uploads with the new token.
           if (sendErr.message.includes('403') || sendErr.message.includes('131005') || sendErr.message.toLowerCase().includes('access denied')) {
-            const imgUrl = evt.product_image || '';
+            // Use the resolved/scraped image URL (saved on evt by APV block) — may differ
+            // from evt.product_image if the scraper found a different URL
+            const imgUrl = evt._resolvedProductImage || evt.product_image || '';
             if (imgUrl && db.gallery_images) {
               const before = db.gallery_images.length;
               const imgKept = db.gallery_images.filter(g => g.source_url !== imgUrl);
@@ -2322,8 +2331,8 @@ async function sendMultiple(db, cam, events, type, credChannelId) {
           continue;
         }
 
-        // Build human-readable text from actual cards (not the generic '[Carousel: name]')
-        const sentCards = (metaTpl.product_config?.cards || []);
+        // Build human-readable text from actual per-user cards (not the generic template cards)
+        const sentCards = (perUserProductConfig?.cards || metaTpl.product_config?.cards || []);
         const carouselText = sentCards.length
           ? `[Carousel: ${metaTpl.name}]\n` + sentCards.map((c, i) =>
               `Card ${i + 1}: ${c.title || '—'}${c.price ? ' • ' + c.price : ''}${c.link ? '\n' + c.link : ''}`
@@ -2577,6 +2586,16 @@ async function sendMultiple(db, cam, events, type, credChannelId) {
         console.log(`[Lang] Translating to ${userLang} for ${evt.phone} (${evt.name || 'user'})`);
       }
 
+      // Pre-send lock-stage guard BEFORE apv_sending — same reason as PATH A:
+      // if guard fires we never emitted apv_sending, so UI won't get stuck on "Sending now".
+      if (cam.campaign_type === 'abandoned_product_view' && evt._lock) {
+        const _expectedLockStageB = currentStage - 1;
+        if (evt._lock.stage !== _expectedLockStageB || evt._lock.lock_status !== 'active') {
+          console.log(`[APV/PathB] ${evt.phone} pre-send stage guard: expected lock.stage=${_expectedLockStageB} got ${evt._lock.stage} (${evt._lock.lock_status}) — re-entry raced, skipping send`);
+          continue;
+        }
+      }
+
       if (global.io) {
         global.io.emit('apv_sending', {
           phone: evt.phone, name: evt.name || '',
@@ -2584,16 +2603,6 @@ async function sendMultiple(db, cam, events, type, credChannelId) {
           stage: currentStage, channel_id: channelId,
           timestamp: new Date().toISOString(),
         });
-      }
-
-      // Pre-send lock-stage guard — mirrors PATH A.  Catches re-entry that raced
-      // in the outer sendMultiple yield gap before this snapshot was taken.
-      if (cam.campaign_type === 'abandoned_product_view' && evt._lock) {
-        const _expectedLockStageB = currentStage - 1;
-        if (evt._lock.stage !== _expectedLockStageB || evt._lock.lock_status !== 'active') {
-          console.log(`[APV/PathB] ${evt.phone} pre-send stage guard: expected lock.stage=${_expectedLockStageB} got ${evt._lock.stage} (${evt._lock.lock_status}) — re-entry raced, skipping send`);
-          continue;
-        }
       }
 
       // Snapshot lock re-entry state before async send — same guard as PATH A.
@@ -2737,8 +2746,8 @@ async function sendMultiple(db, cam, events, type, credChannelId) {
         const alreadyHasExec = (db.abandoned_cart_executions || []).some(x =>
           String(x.campaign_id) === String(cam.id) && x.phone === evt.phone && (x.stage || 1) === fallbackStage
         );
+        const failedAt = new Date().toISOString();
         if (!alreadyHasExec) {
-          const failedAt = new Date().toISOString();
           db.abandoned_cart_executions.push({
             id: (db.abandoned_cart_executions.length || 0) + 1,
             campaign_id: cam.id, campaign_name: cam.name,
@@ -2749,6 +2758,14 @@ async function sendMultiple(db, cam, events, type, credChannelId) {
           });
           // Keep lock at stage=0 — apvQuickCheck retries every 15s
           db.save();
+        }
+        // Clear any "Sending now" UI state — this fires regardless of alreadyHasExec
+        if (global.io) {
+          global.io.emit('apv_failed', {
+            phone: evt.phone, campaign_id: cam.id, campaign_name: cam.name,
+            stage: fallbackStage, error: e.message || 'Unexpected error',
+            timestamp: failedAt,
+          });
         }
       } catch (_) {}
     }
