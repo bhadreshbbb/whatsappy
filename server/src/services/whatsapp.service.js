@@ -56,6 +56,7 @@ async function callMetaApi(phoneId, token, body) {
       'Authorization': `Bearer ${token}`,
     },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(30000),
   });
   const data = await res.json();
   if (!res.ok) {
@@ -228,6 +229,7 @@ export const whatsappService = {
         method: 'POST',
         headers: { Authorization: `Bearer ${creds.token}` },
         body: form,
+        signal: AbortSignal.timeout(30000),
       }
     );
     const data = await res.json();
@@ -262,6 +264,7 @@ export const whatsappService = {
           file_type: mimeType,
           file_length: buffer.length,
         }),
+        signal: AbortSignal.timeout(30000),
       }
     );
     const sessionData = await sessionRes.json();
@@ -282,6 +285,7 @@ export const whatsappService = {
           'Content-Type': mimeType,
         },
         body: buffer,
+        signal: AbortSignal.timeout(30000),
       }
     );
     const uploadData = await uploadRes.json();
@@ -296,7 +300,7 @@ export const whatsappService = {
 
   async downloadImage(url) {
     console.log(`[WhatsApp] Downloading image: ${url}`);
-    const res = await fetch(url);
+    const res = await fetch(url, { signal: AbortSignal.timeout(15000) });
     if (!res.ok) throw new Error(`Failed to download image from ${url}`);
     const buffer = Buffer.from(await res.arrayBuffer());
     
