@@ -349,7 +349,13 @@ async function checkLockedUsers() {
           lock.lock_status     = 'active';
           lock.unlock_reason   = null;
           lock.shifted_at      = null;
-          lock.reentry_at      = new Date().toISOString();
+          // Use the product_view's created_at as the delay anchor so the STAGE1_DELAY_MS
+          // counts from when the user actually viewed the new product, not when this check ran
+          // (which can be up to 60s later). Fall back to now if no view record exists yet.
+          const _newViewForAnchor = (db.product_views || [])
+            .filter(v => (v.phone === lock.phone) && v.product_url === visitor.last_product_url)
+            .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
+          lock.reentry_at = _newViewForAnchor?.created_at || new Date().toISOString();
           // Update lock to the new product.
           // For the image: look up from product_views for the new URL (no channel filter —
           // multilogin may have stored views under a different channel). If not found, clear
@@ -357,8 +363,15 @@ async function checkLockedUsers() {
           if (visitor.last_product_url)   lock.product_url   = visitor.last_product_url;
           if (visitor.last_product_name)  lock.product_name  = visitor.last_product_name;
           if (visitor.last_product_price) lock.product_price = visitor.last_product_price;
+          // Session-based lookup for new URL image — view may be stored under phone=null from pre-login browse
+          const _lockCheckSessions = new Set(
+            (db.website_visitors || []).filter(v => v.phone === lock.phone).map(v => v.session_id).filter(Boolean)
+          );
           const _newUrlPV = (db.product_views || [])
-            .filter(v => v.phone === lock.phone && v.product_url === visitor.last_product_url)
+            .filter(v =>
+              (v.phone === lock.phone || (v.session_id && _lockCheckSessions.has(v.session_id))) &&
+              v.product_url === visitor.last_product_url
+            )
             .sort((a, b) => ((b.product_image ? 1 : 0) - (a.product_image ? 1 : 0)) || (new Date(b.created_at) - new Date(a.created_at)))[0];
           lock.product_image = _newUrlPV?.product_image || '';
           (db.abandoned_cart_executions || []).forEach(x => {
@@ -657,7 +670,8 @@ async function apvQuickCheck() {
         phone:         l.phone,
         name:          visitor?.name || '',
         product_name:  l.product_name  || viewRec?.product_name  || '',
-        product_image: l.product_image || viewRec?.product_image || '',
+        // Only use URL-matched view for image — latestView may belong to a different (previous) product
+        product_image: l.product_image || matchedView?.product_image || '',
         product_url:   l.product_url   || viewRec?.product_url   || '',
         product_price: l.product_price || viewRec?.product_price || '',
         followup_count: 0,       // overridden per stage below
@@ -777,11 +791,14 @@ async function apvQuickCheck() {
     const stage2Locks = allLocksForCam.filter(l => {
       if (l.lock_status !== 'active') return false;
       if (l.stage !== 1 || !l.stage_1_sent_at) return false;
-      // If the visitor has moved to a different product URL, skip — re-entry will reset the lock.
-      // This catches the phone=null case where trackProduct couldn't reset the lock immediately.
-      const _vis = (db.website_visitors || []).find(v => v.phone === l.phone);
-      if (_vis?.last_product_url && l.product_url &&
-          _cleanLockUrlS2(_vis.last_product_url) !== _cleanLockUrlS2(l.product_url)) return false;
+      // If ANY visitor with this phone has moved to a different product URL, skip.
+      // Use filter (not find) to cover multilogin where multiple visitors share the same phone.
+      const _visAll = (db.website_visitors || []).filter(v => v.phone === l.phone);
+      const _prodChanged = _visAll.some(v =>
+        v.last_product_url && l.product_url &&
+        _cleanLockUrlS2(v.last_product_url) !== _cleanLockUrlS2(l.product_url)
+      );
+      if (_prodChanged) return false;
       return (now - new Date(l.stage_1_sent_at).getTime()) >= STAGE2_GAP_MS;
     });
 
@@ -1444,6 +1461,12 @@ async function runAutomation() {
             // If lock was reset to stage=0 (re-entry from product view), DO NOT fire stage-2.
             // apvQuickCheck will fire stage-1 fresh after STAGE1_DELAY_MS from reentry_at.
             if (v._lock && v._lock.stage < 1) return false;
+            // If the visitor has moved to a different product since stage-1 was sent, skip.
+            // checkLockedUsers may not have run yet (up to 60s delay), so guard here too.
+            if (v._lock?.product_url && v._visitor?.last_product_url) {
+              const _cleanS2 = (u) => { try { return new URL(u).origin + new URL(u).pathname; } catch { return (u || '').split('?')[0]; } };
+              if (_cleanS2(v._visitor.last_product_url) !== _cleanS2(v._lock.product_url)) return false;
+            }
             // Gap from stage 1: use campaign's apv_followup_min (default 4 min test / 24h prod)
             const sentAt = v._lock?.stage_1_sent_at || v.whatsapp_sent_at;
             // If sentAt is unknown we can't verify the gap — skip to avoid instant send.
@@ -2038,14 +2061,23 @@ async function sendMultiple(db, cam, events, type, credChannelId) {
                 if (!productPrice && scraped.price)                         productPrice = scraped.price;
                 if (!productImage && (scraped.image_url || scraped.image))  productImage = scraped.image_url || scraped.image;
 
-                // Patch the product_views record so future sends skip scraping
-                // No channel_id filter — multilogin may have stored views under different channel
-                const pvIdx = db.product_views.findIndex(v => v.phone === evt.phone && v.product_url === productUrl);
+                // Patch the product_views record so future sends skip scraping.
+                // Use session-based lookup — view may be stored under phone=null from pre-login browse.
+                const _scrapeVisitorSessions = new Set(
+                  (db.website_visitors || []).filter(v => v.phone === evt.phone).map(v => v.session_id).filter(Boolean)
+                );
+                const pvIdx = db.product_views.findIndex(v =>
+                  (v.phone === evt.phone || (v.session_id && _scrapeVisitorSessions.has(v.session_id))) &&
+                  v.product_url === productUrl
+                );
                 if (pvIdx >= 0) {
                   if (!db.product_views[pvIdx].product_name  && productName)  db.product_views[pvIdx].product_name  = productName;
                   if (!db.product_views[pvIdx].product_price && productPrice) db.product_views[pvIdx].product_price = productPrice;
                   if (!db.product_views[pvIdx].product_image && productImage) db.product_views[pvIdx].product_image = productImage;
                 }
+                // Also save scraped image back to the lock so buildEvent can use it next time without re-scraping
+                const existingLock = (db.campaign_locks || []).find(lk => lk.phone === evt.phone && String(lk.campaign_id) === String(cam.id));
+                if (existingLock && productImage && !existingLock.product_image) existingLock.product_image = productImage;
                 emit('9c. SCRAPED ✅', evt.phone, `name="${productName}" price="${productPrice}" image=${!!productImage}`);
                 console.log(`[AbandonedProductView] Scraped: "${productName}" ${productPrice} img=${!!productImage}`);
               } catch (scrapeErr) {
@@ -2076,7 +2108,7 @@ async function sendMultiple(db, cam, events, type, credChannelId) {
                 // After a token refresh the cached id is stale and Meta returns 403 (#131005).
                 // Re-uploading on each retry costs one extra API call but guarantees a fresh id.
                 const cached = _retryCount === 0
-                  ? (db.gallery_images || []).find(g => g.source_url === productImage && g.media_id)
+                  ? (db.gallery_images || []).find(g => g.source_url === productImage && g.media_id && g.channel_id === channelId)
                   : null;
                 if (cached) {
                   productMediaId = cached.media_id;
