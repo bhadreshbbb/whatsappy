@@ -626,7 +626,12 @@ async function apvQuickCheck() {
       // Normalize URLs before matching: strip query params so UTM-tagged lock URLs
       // still match clean product_view URLs stored by the tracker.
       const cleanUrl = (u) => { try { return new URL(u).origin + new URL(u).pathname; } catch { return (u || '').split('?')[0]; } };
-      const allViews = (db.product_views || []).filter(v => v.phone === l.phone);
+      const visitorSessions = new Set(
+        (db.website_visitors || []).filter(v => v.phone === l.phone).map(v => v.session_id).filter(Boolean)
+      );
+      const allViews = (db.product_views || []).filter(v =>
+        v.phone === l.phone || (v.session_id && visitorSessions.has(v.session_id))
+      );
       const lockCleanUrl = l.product_url ? cleanUrl(l.product_url) : '';
       // Pick the BEST matching view for this URL: prefer records that have an image,
       // then a name, then the most recent — avoids using an older session's empty record
@@ -1387,10 +1392,10 @@ async function runAutomation() {
           return {
             phone:           vis.phone,
             name:            vis.name || '',
-            product_name:    viewRec?.product_name  || vis.last_product_name  || '',
-            product_image:   viewRec?.product_image || vis.last_product_image || '',
-            product_url:     viewRec?.product_url   || vis.last_product_url   || '',
-            product_price:   viewRec?.product_price || vis.last_product_price || '',
+            product_name:    lock?.product_name  || viewRec?.product_name  || vis.last_product_name  || '',
+            product_image:   lock?.product_image || viewRec?.product_image || vis.last_product_image || '',
+            product_url:     lock?.product_url   || viewRec?.product_url   || vis.last_product_url   || '',
+            product_price:   lock?.product_price || viewRec?.product_price || vis.last_product_price || '',
             followup_count:  followupCount,
             whatsapp_sent:   whatsappSent ? 1 : 0,
             whatsapp_sent_at: whatsappSentAt,
