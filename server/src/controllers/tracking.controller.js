@@ -1134,8 +1134,10 @@ export const trackingController = {
                   console.log(`[APV] ${v.phone || sessionId} → product_view_lock (re-entry, no active APV camp) from ${prevStatus}`);
                 }
               }
-              // Always reset product_view send flags on re-entry so FLOW 2b treats this as fresh
-              (db.product_views || []).filter(pv => pv.phone === v.phone && pv.channel_id === cid)
+              // Always reset product_view send flags on re-entry so FLOW 2b treats this as fresh.
+              // No channel_id filter — views from any channel must be reset so cross-channel stale
+              // whatsapp_sent=1 flags can't trick FLOW 2b into firing stage-2 immediately.
+              (db.product_views || []).filter(pv => pv.phone === v.phone)
                 .forEach(pv => { pv.whatsapp_sent = 0; pv.followup_count = 0; pv.whatsapp_sent_at = null; });
               // Cross-session cleanup: reset other sessions for this phone stuck at
               // product_recommendation so contacts dedup shows the new product_view_lock

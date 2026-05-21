@@ -1429,9 +1429,14 @@ async function runAutomation() {
             if ((now - new Date(productViewTime).getTime()) < STAGE1_DELAY_MS) return false;
           }
           if (isFollowup) {
+            // If lock was reset to stage=0 (re-entry from product view), DO NOT fire stage-2.
+            // apvQuickCheck will fire stage-1 fresh after STAGE1_DELAY_MS from reentry_at.
+            if (v._lock && v._lock.stage < 1) return false;
             // Gap from stage 1: use campaign's apv_followup_min (default 4 min test / 24h prod)
             const sentAt = v._lock?.stage_1_sent_at || v.whatsapp_sent_at;
-            const minsSince = sentAt ? (now - new Date(sentAt).getTime()) / 60000 : Infinity;
+            // If sentAt is unknown we can't verify the gap — skip to avoid instant send.
+            if (!sentAt) return false;
+            const minsSince = (now - new Date(sentAt).getTime()) / 60000;
             if (minsSince < STAGE2_GAP_MIN) return false;
             // Skip if user converted (cart added / purchased)
             if (v._lock && v._lock.lock_status !== 'active') return false;
