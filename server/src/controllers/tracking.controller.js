@@ -152,6 +152,10 @@ export const trackingController = {
         _utmMedium   = _utmMedium   || _u.searchParams.get('utm_medium')   || null;
         _utmCampaign = _utmCampaign || _u.searchParams.get('utm_campaign') || null;
         _wwCam       = _u.searchParams.get('ww_cam') || null;
+        // Fallback: if utm_source=whatsapp but ww_cam is absent (older messages sent before
+        // this tracking fix), treat utm_campaign as the campaign attribution ID so clicks
+        // from already-delivered messages still get source_campaign_id on views/carts/purchases.
+        if (!_wwCam && _utmSource === 'whatsapp' && _utmCampaign) _wwCam = _utmCampaign;
       } catch (_) {}
       // Server-side decode of ww_src → phone (base64url, injected by _tagUrl in automation.js)
       // Works in incognito / any browser — no localStorage needed.

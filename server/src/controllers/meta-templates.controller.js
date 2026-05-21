@@ -1110,6 +1110,19 @@ export function buildSendMessagePayload(tpl, productConfig, recipientPhone = '{{
   }
 
   // Non-carousel URL button parameters
+  // Tracking params appended to every button URL so clicks are fully attributed.
+  // ww_src: base64url phone → tracker auto-identifies the user on click (works in incognito).
+  // ww_cam: campaign ID → trackVisitor sets last_click_campaign_id → product views / carts /
+  //         purchases get source_campaign_id stamped → funnel analytics show correct counts.
+  const _isRealPhone = recipientPhone && !String(recipientPhone).includes('{{');
+  const _ww_src = _isRealPhone
+    ? Buffer.from(String(recipientPhone).replace(/\D/g, '')).toString('base64')
+        .replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '')
+    : null;
+  const _trackSuffix = campaignId
+    ? `&ww_cam=${encodeURIComponent(campaignId)}${_ww_src ? '&ww_src=' + _ww_src : ''}`
+    : '';
+
   if (!tpl.is_carousel) {
     const buttons = Array.isArray(tpl.buttons)
       ? tpl.buttons
@@ -1130,10 +1143,10 @@ export function buildSendMessagePayload(tpl, productConfig, recipientPhone = '{{
             seg = firstCard.order_id || firstCard.order_number || encodeURIComponent(seg);
           }
           paramVal = seg || (fullLink ? (() => { try { return new URL(fullLink).pathname.split('/').filter(Boolean).pop() || ''; } catch { return ''; } })() : '');
-          if (paramVal && campaignId) paramVal += `?utm_source=whatsapp&utm_medium=single_product&utm_campaign=${campaignId}`;
+          if (paramVal && campaignId) paramVal += `?utm_source=whatsapp&utm_medium=single_product&utm_campaign=${campaignId}${_trackSuffix}`;
         } else {
           paramVal = fullLink || getFieldValue(urlVars[0], stdVarMap, firstCard);
-          if (paramVal && campaignId) { const sep = paramVal.includes('?') ? '&' : '?'; paramVal += `${sep}utm_source=whatsapp&utm_medium=single_product&utm_campaign=${campaignId}`; }
+          if (paramVal && campaignId) { const sep = paramVal.includes('?') ? '&' : '?'; paramVal += `${sep}utm_source=whatsapp&utm_medium=single_product&utm_campaign=${campaignId}${_trackSuffix}`; }
         }
         if (paramVal) {
           components.push({ type: 'button', sub_type: 'url', index: String(bi), parameters: [{ type: 'text', text: paramVal }] });
@@ -1215,16 +1228,16 @@ export function buildSendMessagePayload(tpl, productConfig, recipientPhone = '{{
               ? (() => { try { return new URL(rawFallback).pathname.split('/').filter(Boolean).pop() || ''; } catch { return ''; } })()
               : rawFallback;
             paramVal = slug || fallbackSlug;
-            // Append UTM to slug so Meta builds: staticPrefix + slug?utm_...
+            // Append UTM + tracking to slug so Meta builds: staticPrefix + slug?utm_...
             if (paramVal && campaignId) {
-              paramVal += `?utm_source=whatsapp&utm_medium=carousel&utm_campaign=${campaignId}`;
+              paramVal += `?utm_source=whatsapp&utm_medium=carousel&utm_campaign=${campaignId}${_trackSuffix}`;
             }
           } else {
             // Entire URL is the variable — send the full product URL so the button is clickable
             paramVal = fullLink || getFieldValue(urlVars[0], vm, pd) || String(exV[urlVars[0]] || '');
             if (paramVal && campaignId) {
               const sep = paramVal.includes('?') ? '&' : '?';
-              paramVal += `${sep}utm_source=whatsapp&utm_medium=carousel&utm_campaign=${campaignId}`;
+              paramVal += `${sep}utm_source=whatsapp&utm_medium=carousel&utm_campaign=${campaignId}${_trackSuffix}`;
             }
           }
 
