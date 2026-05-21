@@ -350,11 +350,17 @@ async function checkLockedUsers() {
           lock.unlock_reason   = null;
           lock.shifted_at      = null;
           lock.reentry_at      = new Date().toISOString();
-          // Update lock to the new product
+          // Update lock to the new product.
+          // For the image: look up from product_views for the new URL (no channel filter —
+          // multilogin may have stored views under a different channel). If not found, clear
+          // so PATH A scrapes fresh rather than carrying over the old product's image.
           if (visitor.last_product_url)   lock.product_url   = visitor.last_product_url;
           if (visitor.last_product_name)  lock.product_name  = visitor.last_product_name;
-          if (visitor.last_product_image) lock.product_image = visitor.last_product_image;
           if (visitor.last_product_price) lock.product_price = visitor.last_product_price;
+          const _newUrlPV = (db.product_views || [])
+            .filter(v => v.phone === lock.phone && v.product_url === visitor.last_product_url)
+            .sort((a, b) => ((b.product_image ? 1 : 0) - (a.product_image ? 1 : 0)) || (new Date(b.created_at) - new Date(a.created_at)))[0];
+          lock.product_image = _newUrlPV?.product_image || '';
           (db.abandoned_cart_executions || []).forEach(x => {
             if (String(x.campaign_id) === String(lock.campaign_id) &&
                 x.phone === lock.phone &&
@@ -767,9 +773,15 @@ async function apvQuickCheck() {
     }
 
     // ── Stage 2: locks at stage=1 whose follow-up gap has passed ───────────
+    const _cleanLockUrlS2 = (u) => { try { return new URL(u || '').origin + new URL(u || '').pathname; } catch { return (u || '').split('?')[0]; } };
     const stage2Locks = allLocksForCam.filter(l => {
       if (l.lock_status !== 'active') return false;
       if (l.stage !== 1 || !l.stage_1_sent_at) return false;
+      // If the visitor has moved to a different product URL, skip — re-entry will reset the lock.
+      // This catches the phone=null case where trackProduct couldn't reset the lock immediately.
+      const _vis = (db.website_visitors || []).find(v => v.phone === l.phone);
+      if (_vis?.last_product_url && l.product_url &&
+          _cleanLockUrlS2(_vis.last_product_url) !== _cleanLockUrlS2(l.product_url)) return false;
       return (now - new Date(l.stage_1_sent_at).getTime()) >= STAGE2_GAP_MS;
     });
 

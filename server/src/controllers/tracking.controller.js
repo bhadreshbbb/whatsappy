@@ -926,8 +926,9 @@ export const trackingController = {
       const vIdx = db.website_visitors.findIndex(v => v.channel_id === cid && v.session_id === sessionId);
       if (vIdx >= 0) {
         const v = db.website_visitors[vIdx];
-        v.last_product_name  = product_name  || v.last_product_name;
-        v.last_product_image = product_image || v.last_product_image;
+        const _urlChanging = product_url && product_url !== v.last_product_url;
+        v.last_product_name  = product_name  || (_urlChanging ? null : v.last_product_name);
+        v.last_product_image = product_image || (_urlChanging ? null : v.last_product_image);
         v.last_product_url   = product_url   || v.last_product_url;
         v.last_product_price = product_price || v.last_product_price;
 
@@ -1061,9 +1062,9 @@ export const trackingController = {
                 const urlChanged = product_url && product_url !== apvLock.product_url;
                 const bestPV = urlChanged
                   ? (db.product_views || [])
-                      .filter(pv => pv.channel_id === cid && pv.product_url === product_url &&
+                      .filter(pv => pv.product_url === product_url &&
                         (pv.phone === v.phone ||
-                         (db.website_visitors.find(vis => vis.session_id === pv.session_id && vis.channel_id === cid))?.phone === v.phone))
+                         (db.website_visitors.find(vis => vis.session_id === pv.session_id))?.phone === v.phone))
                       .sort((a, b) => ((b.product_name ? 1 : 0) - (a.product_name ? 1 : 0)) || (new Date(b.created_at) - new Date(a.created_at)))[0]
                   : null;
                 apvLock.product_url   = newUrl;
