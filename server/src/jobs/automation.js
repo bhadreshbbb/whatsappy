@@ -2056,10 +2056,12 @@ async function sendMultiple(db, cam, events, type, credChannelId) {
               _apvSkip = true;
             }
 
-            // Scrape if data is missing OR if we don't yet have a lock-verified image.
-            // Tracker sends OG meta images which are often store-wide (not product-specific).
-            // Once lock.product_image is set (after stage-1 scrape), we trust it and skip.
-            const _needsImageScrape = !evt._lock?.product_image;
+            // Always scrape on stage-1 (lock.stage=0) — the lock may already have an image
+            // URL from the tracker's OG meta tag, but that is often the store-wide logo/banner,
+            // not the product-specific image. The Shopify JSON endpoint (.json) or page JSON-LD
+            // always returns the real product image. Stage-2 (lock.stage=1) skips the scrape
+            // because PATH A already ran during stage-1 and saved the verified URL to the lock.
+            const _needsImageScrape = !evt._lock || evt._lock.stage === 0;
             if (!_apvSkip && productUrl && (!productName || !productPrice || !productImage || _needsImageScrape)) {
               emit('9c. SCRAPING', evt.phone, `missing fields or unverified image — scraping ${productUrl.slice(0, 80)}`);
               try {
