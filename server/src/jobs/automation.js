@@ -349,13 +349,12 @@ async function checkLockedUsers() {
           lock.lock_status     = 'active';
           lock.unlock_reason   = null;
           lock.shifted_at      = null;
-          // Use the product_view's created_at as the delay anchor so the STAGE1_DELAY_MS
-          // counts from when the user actually viewed the new product, not when this check ran
-          // (which can be up to 60s later). Fall back to now if no view record exists yet.
-          const _newViewForAnchor = (db.product_views || [])
-            .filter(v => (v.phone === lock.phone) && v.product_url === visitor.last_product_url)
-            .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
-          lock.reentry_at = _newViewForAnchor?.created_at || new Date().toISOString();
+          // Use NOW as the delay anchor, not the product_view's created_at.
+          // The product_view record can belong to a previous session (user viewed this product
+          // days ago then revisited anonymously now) — using that old created_at makes the
+          // delay pass immediately and fires stage-1 instantly.  Detection lag is ≤60s which
+          // is acceptable vs. the instant-fire risk of using a stale timestamp.
+          lock.reentry_at = new Date().toISOString();
           // Update lock to the new product.
           // For the image: look up from product_views for the new URL (no channel filter —
           // multilogin may have stored views under a different channel). If not found, clear
@@ -1329,184 +1328,70 @@ async function runAutomation() {
       // the edge case where the campaign was inactive at view time.
       // ────────────────────────────────────────────────────────────────────
       else if (cam.campaign_type === 'abandoned_product_view') {
-        const settingsRow = (db.channel_settings || []).find(s => s.channel_id === channelId);
-        const channelSettings = settingsRow ? (() => { try { return JSON.parse(settingsRow.settings || '{}'); } catch(_) { return {}; } })() : {};
-        const productSlug = channelSettings.product_url_slug || '/products';
-        // Stage 1 delay: use campaign setting; fall back to 2 min only when unset (null/undefined)
-        const STAGE1_DELAY_MS = (cam.apv_delay_min != null ? cam.apv_delay_min : 2) * 60 * 1000;
-        // Stage 2 gap: same — fallback to 4 min only when unset
-        const STAGE2_GAP_MIN  = cam.apv_followup_min != null ? cam.apv_followup_min : 4;
-        const now = Date.now();
-
-        // Build MOST RECENT product_view per phone
-        // Accept views from ANY non-demo channel — channel_id mismatch (multi-login legacy)
-        // must not prevent sending to users whose views were recorded under a different channel.
-        const latestViewByPhoneAPV = {};
-        for (const v of (db.product_views || [])) {
-          if (!v.channel_id || v.channel_id === 'demo') continue; // skip demo only
-          const phone = v.phone
-            || (db.website_visitors.find(vis => vis.session_id === v.session_id))?.phone;
-          if (!phone) continue;
-          const vp = phone !== v.phone ? { ...v, phone } : v;
-          const cur = latestViewByPhoneAPV[phone];
-          if (!cur || new Date(vp.created_at) > new Date(cur.created_at)) {
-            latestViewByPhoneAPV[phone] = vp;
+        // apvQuickCheck (runs every 15 s, has _apvRunning mutex) is the SOLE APV send path.
+        // Processing APV here in runAutomation too causes double-sends: both fire sendMultiple
+        // for the same lock at the same tick because neither has written the execution record
+        // yet when both check eligibility concurrently.
+        // The safety-net claim (product_view → product_view_lock) and lock creation still run
+        // here so new visitors are picked up immediately, but the ACTUAL SEND is deferred to
+        // apvQuickCheck which handles dedup safely with its mutex.
+        {
+          const settingsRow = (db.channel_settings || []).find(s => s.channel_id === channelId);
+          const channelSettings = settingsRow ? (() => { try { return JSON.parse(settingsRow.settings || '{}'); } catch(_) { return {}; } })() : {};
+          const now = Date.now();
+          const MAX_VIEW_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+          const latestViewByPhoneAPV = {};
+          for (const v of (db.product_views || [])) {
+            if (!v.channel_id || v.channel_id === 'demo') continue;
+            const phone = v.phone || (db.website_visitors.find(vis => vis.session_id === v.session_id))?.phone;
+            if (!phone) continue;
+            const vp = phone !== v.phone ? { ...v, phone } : v;
+            const cur = latestViewByPhoneAPV[phone];
+            if (!cur || new Date(vp.created_at) > new Date(cur.created_at)) latestViewByPhoneAPV[phone] = vp;
           }
-        }
-
-        // Pick up product_view AND product_view_lock visitors (both are in or entering the campaign)
-        // Accept visitors from ANY non-demo channel — credentials come from getPrimaryChannelId,
-        // but visitor records might have been created under a different channel_id (multi-login issue).
-        const MAX_VIEW_AGE_MS = 7 * 24 * 60 * 60 * 1000;
-        const eligibleVisitors = (db.website_visitors || []).filter(vis => {
-          if (!vis.channel_id || vis.channel_id === 'demo' || !vis.phone) return false;
-          if (vis.status !== 'product_view' && vis.status !== 'product_view_lock') return false;
-          // Age check: uses product_view record timestamp, not visited_at
-          const latestPV = latestViewByPhoneAPV[vis.phone];
-          const lastAct = latestPV?.created_at || vis.visited_at || vis.created_at;
-          if (!lastAct || (now - new Date(lastAct).getTime()) > MAX_VIEW_AGE_MS) return false;
-          return true;
-        });
-
-        // ── Safety-net claim: product_view → product_view_lock ───────────────────
-        // Normally tracking.controller.js sets product_view_lock immediately on the
-        // product-view event. This fallback handles edge cases where that path was
-        // skipped (e.g. APV campaign was inactive at view time, then activated later).
-        let apvStatusChanged = false;
-        for (const vis of eligibleVisitors) {
-          if (vis.status === 'product_view') {
-            vis.status     = 'product_view_lock';
-            vis.updated_at = new Date().toISOString();
-            apvStatusChanged = true;
-            // Create pending lock so delay timer starts from NOW (campaign entry), not old viewRec.created_at
-            const nowEntry = new Date().toISOString();
-            const viewRec  = latestViewByPhoneAPV[vis.phone];
-            if (!db.campaign_locks) db.campaign_locks = [];
-            const alreadyLocked = db.campaign_locks.find(l =>
-              l.phone === vis.phone && String(l.campaign_id) === String(cam.id)
-            );
-            if (!alreadyLocked) {
-              db.campaign_locks.push({
-                id: uuidv4(), channel_id: channelId,
-                phone: vis.phone, campaign_id: cam.id, campaign_type: cam.campaign_type,
-                locked_at: nowEntry, reentry_at: null,
-                product_url:   viewRec?.product_url   || vis.last_product_url   || '',
-                product_name:  viewRec?.product_name  || vis.last_product_name  || '',
-                product_price: viewRec?.product_price || vis.last_product_price || '',
-                product_image: viewRec?.product_image || vis.last_product_image || '',
-                stage: 0, stage_1_sent_at: null, stage_2_sent_at: null,
-                lock_status: 'active', revenue: 0,
-                last_status_check: nowEntry, last_known_status: 'product_view_lock', unlock_reason: null,
-              });
-            }
-            console.log(`[APV] ${vis.phone} claimed → product_view_lock + entry lock created (delay starts NOW)`);
-          }
-        }
-        if (apvStatusChanged) db.save();
-
-        // Build enriched event objects using visitor + product_views + lock data
-        const views = eligibleVisitors.map(vis => {
-          const viewRec = latestViewByPhoneAPV[vis.phone];
-          const lock    = (db.campaign_locks || []).find(l =>
-            l.phone === vis.phone && String(l.campaign_id) === String(cam.id)
-          );
-          // Stage/sent state comes directly from lock + product_views flags.
-          // checkLockedUsers (runs before this in runAutomation) resets both on re-entry:
-          //   lock.stage=0, stage_1_sent_at=null, lock.reentry_at=NOW,
-          //   viewRec.whatsapp_sent=0, viewRec.followup_count=0
-          const stageFromLock = lock ? lock.stage : 0;
-          const followupCount = stageFromLock > 0 ? stageFromLock : (viewRec?.followup_count || 0);
-          const whatsappSent  = stageFromLock > 0 || !!(viewRec?.whatsapp_sent);
-          const whatsappSentAt   = lock?.stage_1_sent_at || viewRec?.whatsapp_sent_at || null;
-          return {
-            phone:           vis.phone,
-            name:            vis.name || '',
-            product_name:    lock?.product_name  || viewRec?.product_name  || vis.last_product_name  || '',
-            // Do NOT fall back to vis.last_product_image — checkLockedUsers clears the lock image
-            // on product change but does NOT update visitor.last_product_image, so that field
-            // can still hold the OLD product's image. Empty here → PATH A will scrape fresh.
-            product_image:   lock?.product_image || viewRec?.product_image || '',
-            product_url:     lock?.product_url   || viewRec?.product_url   || vis.last_product_url   || '',
-            product_price:   lock?.product_price || viewRec?.product_price || vis.last_product_price || '',
-            followup_count:  followupCount,
-            whatsapp_sent:   whatsappSent ? 1 : 0,
-            whatsapp_sent_at: whatsappSentAt,
-            created_at:      viewRec?.created_at || vis.visited_at || vis.created_at,
-            _viewRec:        viewRec,   // direct DB ref — mutating updates DB
-            _lock:           lock,
-            _visitor:        vis,
-          };
-        }).filter(v => {
-          // Must match product slug (if URL is known)
-          if (v.product_url && !v.product_url.includes(productSlug)) return false;
-          // Max 2 stages
-          if (v.followup_count >= 2) return false;
-
-          const isInitial  = !v.whatsapp_sent;
-          const isFollowup = v.whatsapp_sent && v.followup_count < 2;
-          if (!isInitial && !isFollowup) return false;
-
-          if (isInitial) {
-            // Lock guard: stage 1 already sent
-            if (v._lock && v._lock.stage >= 1) return false;
-            // Timer anchor:
-            //   Re-entered users  → lock.reentry_at (set when re-entry detected NOW)
-            //   First-time users  → product_view.created_at (set when product was viewed)
-            // We never fall back to visited_at because that refreshes on every page visit
-            // and would give a wrong (later) baseline that makes the message fire too late.
-            // Timer anchor: prefer campaign-entry time (lock) over original product-view time.
-            // Safety-net claimed: locked_at = NOW. Re-entry: reentry_at. Fresh view (no lock): viewRec.created_at.
-            const lockAnchor = v._lock ? (v._lock.reentry_at || v._lock.locked_at) : null;
-            const productViewTime = lockAnchor || v._viewRec?.created_at || v._visitor?.created_at || v.created_at;
-            if ((now - new Date(productViewTime).getTime()) < STAGE1_DELAY_MS) return false;
-          }
-          if (isFollowup) {
-            // If lock was reset to stage=0 (re-entry from product view), DO NOT fire stage-2.
-            // apvQuickCheck will fire stage-1 fresh after STAGE1_DELAY_MS from reentry_at.
-            if (v._lock && v._lock.stage < 1) return false;
-            // If the visitor has moved to a different product since stage-1 was sent, skip.
-            // checkLockedUsers may not have run yet (up to 60s delay), so guard here too.
-            if (v._lock?.product_url && v._visitor?.last_product_url) {
-              const _cleanS2 = (u) => { try { return new URL(u).origin + new URL(u).pathname; } catch { return (u || '').split('?')[0]; } };
-              if (_cleanS2(v._visitor.last_product_url) !== _cleanS2(v._lock.product_url)) return false;
-            }
-            // Gap from stage 1: use campaign's apv_followup_min (default 4 min test / 24h prod)
-            const sentAt = v._lock?.stage_1_sent_at || v.whatsapp_sent_at;
-            // If sentAt is unknown we can't verify the gap — skip to avoid instant send.
-            if (!sentAt) return false;
-            const minsSince = (now - new Date(sentAt).getTime()) / 60000;
-            if (minsSince < STAGE2_GAP_MIN) return false;
-            // Skip if user converted (cart added / purchased)
-            if (v._lock && v._lock.lock_status !== 'active') return false;
-          }
-
-          // Cart has priority — abandoned_cart campaign handles those users
-          const productInCart = v.product_url && (db.cart_events || []).some(c => {
-            if (c.phone !== v.phone || c.recovered || c.channel_id !== channelId) return false;
-            if (c.product_url && c.product_url === v.product_url) return true;
-            try {
-              const prods = JSON.parse(c.products || '[]');
-              return prods.some(p => (p.url || p.product_url || p.link || '') === v.product_url);
-            } catch (_) { return false; }
+          const eligibleVisitors = (db.website_visitors || []).filter(vis => {
+            if (!vis.channel_id || vis.channel_id === 'demo' || !vis.phone) return false;
+            if (vis.status !== 'product_view' && vis.status !== 'product_view_lock') return false;
+            const latestPV = latestViewByPhoneAPV[vis.phone];
+            const lastAct = latestPV?.created_at || vis.visited_at || vis.created_at;
+            if (!lastAct || (now - new Date(lastAct).getTime()) > MAX_VIEW_AGE_MS) return false;
+            return true;
           });
-          if (productInCart) return false;
-
-          return passesAudienceFilters(db, channelId, v.phone, cam);
-        }).slice(0, 10);
-
-        console.log(`[APV] "${cam.name}" tick — eligibleVisitors=${eligibleVisitors.length} views=${views.length} channelId=${channelId}`);
-        if (views.length > 0) {
-          console.log(`[AbandonedProductView] Campaign "${cam.name}" — ${views.length} eligible product_view(s) queued`);
-        } else if (eligibleVisitors.length > 0) {
-          for (const v of eligibleVisitors.slice(0, 3)) {
-            const lock = (db.campaign_locks || []).find(l => l.phone === v.phone && String(l.campaign_id) === String(cam.id));
-            const lockAnchor = lock ? (lock.reentry_at || lock.locked_at) : null;
-            const productViewTime = lockAnchor || latestViewByPhoneAPV[v.phone]?.created_at || v.visited_at;
-            const msSince = productViewTime ? (now - new Date(productViewTime).getTime()) : null;
-            console.log(`[APV] ${v.phone} SKIPPED — lock.stage=${lock?.stage ?? 'none'} msSince=${msSince != null ? Math.round(msSince/1000)+'s' : 'null'} delayMs=${STAGE1_DELAY_MS} url=${latestViewByPhoneAPV[v.phone]?.product_url?.slice(0,60)}`);
+          // Safety-net claim only: product_view → product_view_lock + create entry lock
+          // apvQuickCheck fires the actual messages
+          let apvStatusChanged = false;
+          for (const vis of eligibleVisitors) {
+            if (vis.status === 'product_view') {
+              vis.status = 'product_view_lock';
+              vis.updated_at = new Date().toISOString();
+              apvStatusChanged = true;
+              const nowEntry = new Date().toISOString();
+              const viewRec  = latestViewByPhoneAPV[vis.phone];
+              if (!db.campaign_locks) db.campaign_locks = [];
+              const alreadyLocked = db.campaign_locks.find(l =>
+                l.phone === vis.phone && String(l.campaign_id) === String(cam.id)
+              );
+              if (!alreadyLocked) {
+                db.campaign_locks.push({
+                  id: uuidv4(), channel_id: channelId,
+                  phone: vis.phone, campaign_id: cam.id, campaign_type: cam.campaign_type,
+                  locked_at: nowEntry, reentry_at: null,
+                  product_url:   viewRec?.product_url   || vis.last_product_url   || '',
+                  product_name:  viewRec?.product_name  || vis.last_product_name  || '',
+                  product_price: viewRec?.product_price || vis.last_product_price || '',
+                  product_image: viewRec?.product_image || vis.last_product_image || '',
+                  stage: 0, stage_1_sent_at: null, stage_2_sent_at: null,
+                  lock_status: 'active', revenue: 0,
+                  last_status_check: nowEntry, last_known_status: 'product_view_lock', unlock_reason: null,
+                });
+                console.log(`[APV/runAuto] ${vis.phone} claimed → product_view_lock + entry lock created`);
+              }
+            }
           }
+          if (apvStatusChanged) db.save();
         }
-        await sendMultiple(db, cam, views, 'view', channelId);
+        // DO NOT call sendMultiple for APV here — apvQuickCheck is the send path.
+        continue; // eslint-disable-line no-continue
       }
 
       // ────────────────────────────────────────────────────────────────────
@@ -2148,12 +2033,14 @@ async function sendMultiple(db, cam, events, type, credChannelId) {
                     emit('9e. IMAGE UPLOADED ✅', evt.phone, `media_id="${productMediaId}"`);
                     console.log(`[AbandonedProductView] Image uploaded for ${evt.phone} → media_id: ${productMediaId}`);
                   } catch (imgErr) {
-                    // Fall back to template's pre-uploaded header image (same logic as test-send).
-                    // Using the raw Shopify/CDN URL as { link: url } causes Meta to try downloading
-                    // it — if the CDN rejects public access, Meta returns 403 #131005.
-                    productMediaId = metaTpl.header_image_id || '';
-                    emit('9e. IMAGE UPLOAD FAILED', evt.phone, `${imgErr.message} — fallback to template header_image_id="${productMediaId || 'none'}"`);
-                    console.warn(`[AbandonedProductView] Image upload failed for ${evt.phone}: ${imgErr.message} — using template header_image_id as fallback`);
+                    // Upload failed but we still have the product image URL.
+                    // Leave productMediaId empty so buildSendMessagePayload sends { link: productImageUrl }
+                    // instead of the template's default header image — this sends the CORRECT product
+                    // image via direct URL rather than always showing the store's banner/logo.
+                    // Only fall back to header_image_id if productImage is also empty (handled below).
+                    productMediaId = '';
+                    emit('9e. IMAGE UPLOAD FAILED', evt.phone, `${imgErr.message} — sending product image via direct URL link`);
+                    console.warn(`[AbandonedProductView] Image upload failed for ${evt.phone}: ${imgErr.message} — sending via direct URL`);
                   }
                 }
               } else {
@@ -2186,7 +2073,9 @@ async function sendMultiple(db, cam, events, type, credChannelId) {
                 // Runs here (after full resolution) so it captures tracker-supplied
                 // images too, not just scraped ones.
                 const _evtLock = (db.campaign_locks || []).find(lk => lk.phone === evt.phone && String(lk.campaign_id) === String(cam.id));
-                if (_evtLock && productImage && !_evtLock.product_image) _evtLock.product_image = productImage;
+                // Always update — scraped image is more accurate than tracker's OG image.
+                // Stage-2 reads this value so it always sends the correct product image.
+                if (_evtLock && productImage) _evtLock.product_image = productImage;
               }
             }
           } catch (apvErr) {
