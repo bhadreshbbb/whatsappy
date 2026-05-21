@@ -1422,7 +1422,10 @@ async function runAutomation() {
             phone:           vis.phone,
             name:            vis.name || '',
             product_name:    lock?.product_name  || viewRec?.product_name  || vis.last_product_name  || '',
-            product_image:   lock?.product_image || viewRec?.product_image || vis.last_product_image || '',
+            // Do NOT fall back to vis.last_product_image — checkLockedUsers clears the lock image
+            // on product change but does NOT update visitor.last_product_image, so that field
+            // can still hold the OLD product's image. Empty here → PATH A will scrape fresh.
+            product_image:   lock?.product_image || viewRec?.product_image || '',
             product_url:     lock?.product_url   || viewRec?.product_url   || vis.last_product_url   || '',
             product_price:   lock?.product_price || viewRec?.product_price || vis.last_product_price || '',
             followup_count:  followupCount,
@@ -2075,9 +2078,6 @@ async function sendMultiple(db, cam, events, type, credChannelId) {
                   if (!db.product_views[pvIdx].product_price && productPrice) db.product_views[pvIdx].product_price = productPrice;
                   if (!db.product_views[pvIdx].product_image && productImage) db.product_views[pvIdx].product_image = productImage;
                 }
-                // Also save scraped image back to the lock so buildEvent can use it next time without re-scraping
-                const existingLock = (db.campaign_locks || []).find(lk => lk.phone === evt.phone && String(lk.campaign_id) === String(cam.id));
-                if (existingLock && productImage && !existingLock.product_image) existingLock.product_image = productImage;
                 emit('9c. SCRAPED ✅', evt.phone, `name="${productName}" price="${productPrice}" image=${!!productImage}`);
                 console.log(`[AbandonedProductView] Scraped: "${productName}" ${productPrice} img=${!!productImage}`);
               } catch (scrapeErr) {
@@ -2170,6 +2170,13 @@ async function sendMultiple(db, cam, events, type, credChannelId) {
                   }],
                 };
                 emit('9f. CONFIG BUILT ✅', evt.phone, `v1="${v1.slice(0,30)}" v2="${v2.slice(0,30)}" media_id="${productMediaId}" url="${productUrl.slice(0,40)}"`);
+
+                // Persist the resolved image URL back to the lock so future sends
+                // (stage-2, retries) can find it via buildEvent without re-scraping.
+                // Runs here (after full resolution) so it captures tracker-supplied
+                // images too, not just scraped ones.
+                const _evtLock = (db.campaign_locks || []).find(lk => lk.phone === evt.phone && String(lk.campaign_id) === String(cam.id));
+                if (_evtLock && productImage && !_evtLock.product_image) _evtLock.product_image = productImage;
               }
             }
           } catch (apvErr) {
