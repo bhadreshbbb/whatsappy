@@ -797,13 +797,16 @@ async function apvQuickCheck() {
     const stage2Locks = allLocksForCam.filter(l => {
       if (l.lock_status !== 'active') return false;
       if (l.stage !== 1 || !l.stage_1_sent_at) return false;
-      // If ANY visitor with this phone has moved to a different product URL, skip.
-      // Use filter (not find) to cover multilogin where multiple visitors share the same phone.
+      // Use the MOST RECENTLY SEEN visitor to determine current product URL.
+      // .some() was too aggressive: a stale multilogin session with an old URL
+      // would permanently block stage-2 even after the user returned to the original product.
       const _visAll = (db.website_visitors || []).filter(v => v.phone === l.phone);
-      const _prodChanged = _visAll.some(v =>
-        v.last_product_url && l.product_url &&
-        _cleanLockUrlS2(v.last_product_url) !== _cleanLockUrlS2(l.product_url)
-      );
+      const _latestVis = _visAll
+        .filter(v => v.last_product_url)
+        .sort((a, b) => new Date(b.last_seen || 0) - new Date(a.last_seen || 0))[0];
+      const _prodChanged = _latestVis &&
+        l.product_url &&
+        _cleanLockUrlS2(_latestVis.last_product_url) !== _cleanLockUrlS2(l.product_url);
       if (_prodChanged) return false;
       // Also check product_views recorded AFTER stage-1 was sent, including from anonymous
       // sessions (phone=null) that share a session_id with a known-phone visitor. This catches
@@ -2220,10 +2223,12 @@ async function sendMultiple(db, cam, events, type, credChannelId) {
             const _pgLockUrl = evt._lock?.product_url;
             const _pgLockSentAtMs = evt._lock?.stage_1_sent_at ? new Date(evt._lock.stage_1_sent_at).getTime() : 0;
             const _pgVisAll = (db.website_visitors || []).filter(v => v.phone === evt.phone);
-            const _pgProdChangedVis = _pgVisAll.some(v =>
-              v.last_product_url && _pgLockUrl &&
-              _pgClean(v.last_product_url) !== _pgClean(_pgLockUrl)
-            );
+            const _pgLatestVis = _pgVisAll
+              .filter(v => v.last_product_url)
+              .sort((a, b) => new Date(b.last_seen || 0) - new Date(a.last_seen || 0))[0];
+            const _pgProdChangedVis = _pgLatestVis &&
+              _pgLockUrl &&
+              _pgClean(_pgLatestVis.last_product_url) !== _pgClean(_pgLockUrl);
             const _pgVisSessions = new Set(_pgVisAll.map(v => v.session_id).filter(Boolean));
             const _pgPVAfterStage1 = (db.product_views || [])
               .filter(pv =>
@@ -2422,8 +2427,10 @@ async function sendMultiple(db, cam, events, type, credChannelId) {
         // APV stage 2 complete — move to product_recommendation and close the lock immediately.
         // Status product_recommendation = both follow-ups sent, user in recommendation pool.
         // Any new product_view will restart the cycle via statusMachine re-entry rules.
-        // Guard: skip if lock was reset mid-send (re-entry race) — new cycle must stay at stage 0.
-        if (currentStage === 2 && cam.campaign_type === 'abandoned_product_view' && !_lockResetDuringSend) {
+        // Guards: skip if lock was reset mid-send (re-entry race), or if Meta returned no wamid
+        // (HTTP 200 but no message ID = message likely not delivered; keep stage=1+active so retry
+        // fires on the next tick rather than silently closing a cycle that never completed).
+        if (currentStage === 2 && cam.campaign_type === 'abandoned_product_view' && !_lockResetDuringSend && sendResult?.messageId) {
           // Upgrade ALL sessions for this phone — a stale 'active' session on another channel
           // must not leave 'product_view_lock' sessions behind after cycle completion.
           const nowIso = new Date().toISOString();
@@ -2614,9 +2621,30 @@ async function sendMultiple(db, cam, events, type, credChannelId) {
         archived_at: _lockResetDuringSendB ? new Date().toISOString() : undefined,
         product_image: variables.product_image || ''
       });
-      if (_execStatus === 'failed') { db.save(); continue; }
+      if (_execStatus === 'failed') {
+        // apv_sending was already emitted — MUST emit apv_failed so UI clears "Sending now".
+        // sendMessage() catches API errors and returns { messageId: null } rather than throwing,
+        // so this path is the only signal the browser receives about the failure.
+        if (global.io) {
+          global.io.emit('apv_failed', {
+            phone: evt.phone, campaign_id: cam.id, campaign_name: cam.name,
+            stage: currentStage,
+            error: 'Send failed — check WhatsApp credentials or message template',
+            timestamp: new Date().toISOString(),
+          });
+        }
+        db.save(); continue;
+      }
       if (_lockResetDuringSendB) {
         console.warn(`[APV/PathB] ${evt.phone} re-entered mid-send — exec archived, skipping lock update to protect new cycle`);
+        // API call did complete — emit apv_sent so UI clears "Sending now" (consistent with PATH A).
+        if (global.io) {
+          global.io.emit('apv_sent', {
+            phone: evt.phone, campaign_id: cam.id, campaign_name: cam.name,
+            stage: currentStage, wamid: sendResult?.messageId,
+            timestamp: new Date().toISOString(),
+          });
+        }
         db.save(); continue;
       }
 
