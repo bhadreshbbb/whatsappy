@@ -761,6 +761,11 @@ async function apvQuickCheck() {
     if (stage1Locks.length > 0) {
       dbg('3. STAGE1 OVERDUE', `${stage1Locks.length} lock(s) ready → calling sendMultiple`);
       console.log(`[APV Quick] "${cam.name}" stage 1 — ${stage1Locks.length} overdue lock(s)`);
+      for (const l of stage1Locks) {
+        const _s1Anchor = l.reentry_at || l.locked_at;
+        const _s1AgeMs  = _s1Anchor ? (now - new Date(_s1Anchor).getTime()) : 0;
+        console.log(`[APV Stage1] ${l.phone} anchor=${_s1Anchor ? (l.reentry_at ? 'reentry_at' : 'locked_at') : 'none'} age=${Math.round(_s1AgeMs/1000)}s delay=${Math.round(STAGE1_DELAY_MS/1000)}s cycle=${l.cycle_count||0} product="${l.product_url}"`);
+      }
       // Belt-and-suspenders: archive SENT execs from previous cycles so dedup never blocks.
       // NEVER archive 'failed' here — failed execs must survive so retry count accumulates
       // and the 3-retry limit can pause. Cycle-resets (trackProductView / checkLockedUsers /
@@ -807,12 +812,19 @@ async function apvQuickCheck() {
       // created. If that view is for a different product, skip stage-2 for the old product.
       const _lockSentAtMs = new Date(l.stage_1_sent_at).getTime();
       const _visSessions  = new Set(_visAll.map(v => v.session_id).filter(Boolean));
-      const _pvProdChanged = (db.product_views || []).some(pv =>
-        (pv.phone === l.phone || (pv.session_id && _visSessions.has(pv.session_id))) &&
-        pv.product_url && l.product_url &&
-        _cleanLockUrlS2(pv.product_url) !== _cleanLockUrlS2(l.product_url) &&
-        new Date(pv.created_at).getTime() > _lockSentAtMs
-      );
+      // Use most-recent-view approach: only skip stage-2 if the user's LATEST product view
+      // after stage-1 was sent is for a DIFFERENT URL. A brief detour to another product
+      // followed by a return to the original must NOT permanently block stage-2.
+      const _pvAfterStage1 = (db.product_views || [])
+        .filter(pv =>
+          (pv.phone === l.phone || (pv.session_id && _visSessions.has(pv.session_id))) &&
+          pv.product_url &&
+          new Date(pv.created_at).getTime() > _lockSentAtMs
+        )
+        .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
+      const _pvProdChanged = _pvAfterStage1 &&
+        l.product_url &&
+        _cleanLockUrlS2(_pvAfterStage1.product_url) !== _cleanLockUrlS2(l.product_url);
       if (_pvProdChanged) return false;
       return (now - new Date(l.stage_1_sent_at).getTime()) >= STAGE2_GAP_MS;
     });
@@ -2213,12 +2225,16 @@ async function sendMultiple(db, cam, events, type, credChannelId) {
               _pgClean(v.last_product_url) !== _pgClean(_pgLockUrl)
             );
             const _pgVisSessions = new Set(_pgVisAll.map(v => v.session_id).filter(Boolean));
-            const _pgProdChangedPV = (db.product_views || []).some(pv =>
-              (pv.phone === evt.phone || (pv.session_id && _pgVisSessions.has(pv.session_id))) &&
-              pv.product_url && _pgLockUrl &&
-              _pgClean(pv.product_url) !== _pgClean(_pgLockUrl) &&
-              new Date(pv.created_at).getTime() > _pgLockSentAtMs
-            );
+            const _pgPVAfterStage1 = (db.product_views || [])
+              .filter(pv =>
+                (pv.phone === evt.phone || (pv.session_id && _pgVisSessions.has(pv.session_id))) &&
+                pv.product_url &&
+                new Date(pv.created_at).getTime() > _pgLockSentAtMs
+              )
+              .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
+            const _pgProdChangedPV = _pgPVAfterStage1 &&
+              _pgLockUrl &&
+              _pgClean(_pgPVAfterStage1.product_url) !== _pgClean(_pgLockUrl);
             if ((_pgProdChangedVis || _pgProdChangedPV) && _pgLockUrl) {
               const _pgReason = _pgProdChangedVis ? 'visitor.last_product_url changed' : 'product_views: newer view for different URL';
               console.log(`[APV/PathA] ${evt.phone} stage-2 guard (${_pgReason}): user moved off "${_pgLockUrl}" — stage-2 skipped`);
