@@ -2161,6 +2161,21 @@ async function sendMultiple(db, cam, events, type, credChannelId) {
             console.log(`[APV/PathA] ${evt.phone} pre-send stage guard: expected lock.stage=${_expectedLockStage} got ${evt._lock.stage} (${evt._lock.lock_status}) — re-entry raced, skipping send`);
             continue;
           }
+          // Stage-2 product-change guard: check if the visitor has moved to a different
+          // product DURING image download/upload (async gap above). If so, stage-2 for
+          // the old product must not fire — the user has already signalled a new intent.
+          // This catches the timing race where stage2Locks was computed before
+          // trackProductView updated visitor.last_product_url.
+          if (currentStage === 2) {
+            const _pgClean = (u) => { try { return new URL(u || '').origin + new URL(u || '').pathname; } catch { return (u || '').split('?')[0]; } };
+            const _pgVisitor = (db.website_visitors || []).find(v => v.phone === evt.phone);
+            const _pgVisUrl = _pgVisitor?.last_product_url;
+            const _pgLockUrl = evt._lock?.product_url;
+            if (_pgVisUrl && _pgLockUrl && _pgClean(_pgVisUrl) !== _pgClean(_pgLockUrl)) {
+              console.log(`[APV/PathA] ${evt.phone} stage-2 product-change guard: visitor moved to "${_pgVisUrl}" — stage-2 for "${_pgLockUrl}" skipped`);
+              continue;
+            }
+          }
         }
 
         // Emit real-time event to browser — fires immediately before the API call.

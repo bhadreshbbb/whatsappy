@@ -1073,7 +1073,14 @@ export const trackingController = {
                   : null;
                 apvLock.product_url   = newUrl;
                 apvLock.product_name  = product_name  || bestPV?.product_name  || (urlChanged ? '' : apvLock.product_name);
-                apvLock.product_image = product_image || bestPV?.product_image  || (urlChanged ? '' : apvLock.product_image);
+                // On URL change, NEVER carry over the tracker's product_image (OG meta) — it is
+                // often the store's site-wide banner/logo, identical for every page. If that URL
+                // matches a cached gallery entry (from a previous send of the OLD product), Meta
+                // would receive the old product's media_id for the new product.
+                // Use only a previously-scraped image (bestPV) or clear so PATH A re-scrapes.
+                apvLock.product_image = urlChanged
+                  ? (bestPV?.product_image || '')
+                  : (product_image || apvLock.product_image);
                 apvLock.product_price = product_price || bestPV?.product_price  || apvLock.product_price;
                 console.log(`[APV Re-entry] ${v.phone} ${prevStatus} → product_view_lock — cycle ${cycleNum}, product: "${apvLock.product_name || apvLock.product_url}", timer starts NOW`);
               } else if (_recentLock) {
@@ -1114,9 +1121,13 @@ export const trackingController = {
                     forceResetLock.unlock_reason   = null;
                     forceResetLock.shifted_at      = null;
                     forceResetLock.reentry_at      = now;
+                    const _frlUrlChanged = product_url && product_url !== forceResetLock.product_url;
                     if (product_url)   forceResetLock.product_url   = product_url;
                     if (product_name)  forceResetLock.product_name  = product_name;
-                    if (product_image) forceResetLock.product_image = product_image;
+                    // On URL change, clear image so PATH A re-scrapes — OG meta from tracker
+                    // is often the store-wide banner and would poison the gallery cache.
+                    if (_frlUrlChanged) forceResetLock.product_image = '';
+                    else if (product_image) forceResetLock.product_image = product_image;
                     if (product_price) forceResetLock.product_price = product_price;
                     console.log(`[APV Re-entry] ${v.phone} forced lock reset (was "${prevLockStatus}") from ${prevStatus} — timer starts NOW`);
                   } else {
