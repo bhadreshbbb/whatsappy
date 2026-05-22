@@ -313,8 +313,10 @@ async function checkLockedUsers() {
           if (_latestPV.product_url)   lock.product_url   = _latestPV.product_url;
           if (_latestPV.product_name)  lock.product_name  = _latestPV.product_name;
           if (_latestPV.product_price) lock.product_price = _latestPV.product_price;
-          // Use new image if available; clear stale image if URL changed (triggers fresh scrape)
-          lock.product_image = _latestPV.product_image || (_urlChanged ? '' : lock.product_image);
+          // On URL change, ALWAYS clear the image so PATH A scrapes fresh.
+          // _latestPV.product_image is the tracker's OG meta which is often the store-wide
+          // banner; carrying it over would poison the gallery cache for all future sends.
+          lock.product_image = _urlChanged ? '' : (_latestPV.product_image || lock.product_image);
         }
         changed = true;
         console.log(`[LockCheck] ${lock.phone} shifted_recommendation → product_view_lock detected — reset for cycle ${cycleNum}`);
@@ -798,6 +800,20 @@ async function apvQuickCheck() {
         _cleanLockUrlS2(v.last_product_url) !== _cleanLockUrlS2(l.product_url)
       );
       if (_prodChanged) return false;
+      // Also check product_views recorded AFTER stage-1 was sent, including from anonymous
+      // sessions (phone=null) that share a session_id with a known-phone visitor. This catches
+      // the multilogin case: new browser session views Product B before phone is linked →
+      // trackProductView can't reset the lock (v.phone=null), but a product_view record IS
+      // created. If that view is for a different product, skip stage-2 for the old product.
+      const _lockSentAtMs = new Date(l.stage_1_sent_at).getTime();
+      const _visSessions  = new Set(_visAll.map(v => v.session_id).filter(Boolean));
+      const _pvProdChanged = (db.product_views || []).some(pv =>
+        (pv.phone === l.phone || (pv.session_id && _visSessions.has(pv.session_id))) &&
+        pv.product_url && l.product_url &&
+        _cleanLockUrlS2(pv.product_url) !== _cleanLockUrlS2(l.product_url) &&
+        new Date(pv.created_at).getTime() > _lockSentAtMs
+      );
+      if (_pvProdChanged) return false;
       return (now - new Date(l.stage_1_sent_at).getTime()) >= STAGE2_GAP_MS;
     });
 
@@ -1930,6 +1946,7 @@ async function sendMultiple(db, cam, events, type, credChannelId) {
             let productName  = evt.product_name  || '';
             let productPrice = evt.product_price || '';
             let productImage = evt.product_image || '';
+            let _productImageScraped = false; // true when scraper found a product-specific image
             const productUrl = evt.product_url   || '';
 
             emit('9b. PRODUCT DATA', evt.phone, `name="${productName}" price="${productPrice}" image=${!!productImage} url="${productUrl.slice(0,60)}"`);
@@ -1955,7 +1972,10 @@ async function sendMultiple(db, cam, events, type, credChannelId) {
                 if (!productPrice && scraped.price)                    productPrice = scraped.price;
                 // ALWAYS prefer scraped image over tracker's OG image — scraper returns
                 // the product-specific image; tracker OG often returns the store's default.
-                if (scraped.image_url || scraped.image)                productImage = scraped.image_url || scraped.image;
+                if (scraped.image_url || scraped.image) {
+                  productImage = scraped.image_url || scraped.image;
+                  _productImageScraped = true; // mark as verified: from scraper, not tracker OG meta
+                }
 
                 // Patch the product_views record so future sends skip scraping.
                 // Use session-based lookup — view may be stored under phone=null from pre-login browse.
@@ -1969,7 +1989,9 @@ async function sendMultiple(db, cam, events, type, credChannelId) {
                 if (pvIdx >= 0) {
                   if (!db.product_views[pvIdx].product_name  && productName)  db.product_views[pvIdx].product_name  = productName;
                   if (!db.product_views[pvIdx].product_price && productPrice) db.product_views[pvIdx].product_price = productPrice;
-                  if (productImage) db.product_views[pvIdx].product_image = productImage; // always update with scraped
+                  // Only overwrite image with verified scraped data — don't overwrite a
+                  // previously-scraped correct image with tracker OG meta (often store banner).
+                  if (productImage && _productImageScraped) db.product_views[pvIdx].product_image = productImage;
                 }
                 emit('9c. SCRAPED ✅', evt.phone, `name="${productName}" price="${productPrice}" image=${!!productImage}`);
                 console.log(`[AbandonedProductView] Scraped: "${productName}" ${productPrice} img=${!!productImage}`);
@@ -2002,8 +2024,17 @@ async function sendMultiple(db, cam, events, type, credChannelId) {
                 // Skip gallery cache on retries — media_ids are tied to the WhatsApp token.
                 // After a token refresh the cached id is stale and Meta returns 403 (#131005).
                 // Re-uploading on each retry costs one extra API call but guarantees a fresh id.
+                // Also filter by product_url: if two products share the same OG meta image URL
+                // (e.g. store-wide banner), each gets its own cache entry so the wrong product's
+                // media_id is never returned for a different product.
+                const _cUrlGal = (u) => { try { return new URL(u || '').origin + new URL(u || '').pathname; } catch { return (u || '').split('?')[0]; } };
                 const cached = _retryCount === 0
-                  ? (db.gallery_images || []).find(g => g.source_url === productImage && g.media_id && g.channel_id === channelId)
+                  ? (db.gallery_images || []).find(g =>
+                      g.source_url === productImage &&
+                      g.media_id &&
+                      g.channel_id === channelId &&
+                      (!g.product_url || _cUrlGal(g.product_url) === _cUrlGal(productUrl))
+                    )
                   : null;
                 if (cached) {
                   productMediaId = cached.media_id;
@@ -2073,9 +2104,15 @@ async function sendMultiple(db, cam, events, type, credChannelId) {
                 // Runs here (after full resolution) so it captures tracker-supplied
                 // images too, not just scraped ones.
                 const _evtLock = (db.campaign_locks || []).find(lk => lk.phone === evt.phone && String(lk.campaign_id) === String(cam.id));
-                // Always update — scraped image is more accurate than tracker's OG image.
-                // Stage-2 reads this value so it always sends the correct product image.
-                if (_evtLock && productImage) _evtLock.product_image = productImage;
+                // Only persist the image URL back to the lock if the scraper verified it —
+                // i.e. it came from the Shopify JSON API or OG meta from the product page itself.
+                // OG meta forwarded from the tracker is often the store's default banner and
+                // would poison the gallery cache: every product sharing that OG URL would reuse
+                // the same (wrong) media_id on future sends.
+                // Stage-2 falls back to matchedView?.product_image (from product_views) if the
+                // lock image is empty — that record is updated by the scrape at line above so
+                // a successful stage-1 scrape still feeds stage-2 correctly.
+                if (_evtLock && productImage && _productImageScraped) _evtLock.product_image = productImage;
               }
             }
           } catch (apvErr) {
@@ -2164,15 +2201,27 @@ async function sendMultiple(db, cam, events, type, credChannelId) {
           // Stage-2 product-change guard: check if the visitor has moved to a different
           // product DURING image download/upload (async gap above). If so, stage-2 for
           // the old product must not fire — the user has already signalled a new intent.
-          // This catches the timing race where stage2Locks was computed before
-          // trackProductView updated visitor.last_product_url.
+          // Also catches multilogin: anonymous session viewed a different product after
+          // stage-1 was sent (trackProductView couldn't reset the lock since phone=null).
           if (currentStage === 2) {
             const _pgClean = (u) => { try { return new URL(u || '').origin + new URL(u || '').pathname; } catch { return (u || '').split('?')[0]; } };
-            const _pgVisitor = (db.website_visitors || []).find(v => v.phone === evt.phone);
-            const _pgVisUrl = _pgVisitor?.last_product_url;
             const _pgLockUrl = evt._lock?.product_url;
-            if (_pgVisUrl && _pgLockUrl && _pgClean(_pgVisUrl) !== _pgClean(_pgLockUrl)) {
-              console.log(`[APV/PathA] ${evt.phone} stage-2 product-change guard: visitor moved to "${_pgVisUrl}" — stage-2 for "${_pgLockUrl}" skipped`);
+            const _pgLockSentAtMs = evt._lock?.stage_1_sent_at ? new Date(evt._lock.stage_1_sent_at).getTime() : 0;
+            const _pgVisAll = (db.website_visitors || []).filter(v => v.phone === evt.phone);
+            const _pgProdChangedVis = _pgVisAll.some(v =>
+              v.last_product_url && _pgLockUrl &&
+              _pgClean(v.last_product_url) !== _pgClean(_pgLockUrl)
+            );
+            const _pgVisSessions = new Set(_pgVisAll.map(v => v.session_id).filter(Boolean));
+            const _pgProdChangedPV = (db.product_views || []).some(pv =>
+              (pv.phone === evt.phone || (pv.session_id && _pgVisSessions.has(pv.session_id))) &&
+              pv.product_url && _pgLockUrl &&
+              _pgClean(pv.product_url) !== _pgClean(_pgLockUrl) &&
+              new Date(pv.created_at).getTime() > _pgLockSentAtMs
+            );
+            if ((_pgProdChangedVis || _pgProdChangedPV) && _pgLockUrl) {
+              const _pgReason = _pgProdChangedVis ? 'visitor.last_product_url changed' : 'product_views: newer view for different URL';
+              console.log(`[APV/PathA] ${evt.phone} stage-2 guard (${_pgReason}): user moved off "${_pgLockUrl}" — stage-2 skipped`);
               continue;
             }
           }

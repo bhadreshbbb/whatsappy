@@ -456,9 +456,13 @@ export const trackingController = {
                 const latestPV = (db.product_views || [])
                   .filter(pv => pv.phone === phone && pv.channel_id === cid)
                   .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
+                const _idUrlChanged = latestPV?.product_url && latestPV.product_url !== apvLock.product_url;
                 if (latestPV?.product_url)   apvLock.product_url   = latestPV.product_url;
                 if (latestPV?.product_name)  apvLock.product_name  = latestPV.product_name;
-                if (latestPV?.product_image) apvLock.product_image = latestPV.product_image;
+                // On URL change, clear image so PATH A scrapes fresh — tracker OG meta is often
+                // the store-wide banner and would poison the gallery cache across products.
+                if (_idUrlChanged)             apvLock.product_image = '';
+                else if (latestPV?.product_image) apvLock.product_image = latestPV.product_image;
                 if (latestPV?.product_price) apvLock.product_price = latestPV.product_price;
                 // Reset product_view send flags so FLOW 2b / apvQuickCheck treats this as fresh
                 (db.product_views || []).filter(pv => pv.phone === phone && pv.channel_id === cid)
@@ -1073,14 +1077,12 @@ export const trackingController = {
                   : null;
                 apvLock.product_url   = newUrl;
                 apvLock.product_name  = product_name  || bestPV?.product_name  || (urlChanged ? '' : apvLock.product_name);
-                // On URL change, NEVER carry over the tracker's product_image (OG meta) — it is
-                // often the store's site-wide banner/logo, identical for every page. If that URL
-                // matches a cached gallery entry (from a previous send of the OLD product), Meta
-                // would receive the old product's media_id for the new product.
-                // Use only a previously-scraped image (bestPV) or clear so PATH A re-scrapes.
-                apvLock.product_image = urlChanged
-                  ? (bestPV?.product_image || '')
-                  : (product_image || apvLock.product_image);
+                // On URL change, ALWAYS clear product_image so PATH A scrapes the new product.
+                // Both the tracker's OG meta and bestPV.product_image are unverified and are
+                // often the store-wide banner/logo (identical for all products). Storing either
+                // URL in the lock poisons the gallery cache: the same banner media_id would be
+                // reused for every subsequent product this user views.
+                apvLock.product_image = urlChanged ? '' : (product_image || apvLock.product_image);
                 apvLock.product_price = product_price || bestPV?.product_price  || apvLock.product_price;
                 console.log(`[APV Re-entry] ${v.phone} ${prevStatus} → product_view_lock — cycle ${cycleNum}, product: "${apvLock.product_name || apvLock.product_url}", timer starts NOW`);
               } else if (_recentLock) {
