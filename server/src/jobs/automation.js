@@ -1818,6 +1818,20 @@ async function sendMultiple(db, cam, events, type, credChannelId) {
         continue;
       }
 
+      // Cart has higher priority than APV — if user added to cart while APV delay was running,
+      // skip and pause the lock so it doesn't keep re-firing every 15s tick.
+      // trackCart normally sets lock_status='cart_added' immediately, but this guard catches
+      // the race where cart is added between the stage1Locks filter and here.
+      if (isApvFromLock && (liveStatus === 'abandoned_cart' || liveStatus === 'abandoned_checkout')) {
+        const _lockToP = (db.campaign_locks || []).find(l =>
+          l.phone === evt.phone && String(l.campaign_id) === String(cam.id) && l.lock_status === 'active'
+        );
+        if (_lockToP) { _lockToP.lock_status = 'cart_added'; db.save(); }
+        emit('❌ SKIP cart_priority', evt.phone, `status="${liveStatus}" — cart has higher priority than APV, lock paused`);
+        console.log(`[APV Lock] Skipping ${evt.phone} — ${liveStatus} has higher priority than APV (lock→cart_added)`);
+        continue;
+      }
+
       const currentStage = (type === 'upsell' || type === 'broadcast')
         ? (evt.upsell_count || 0) + 1
         : (evt.followup_count || 0) + 1;

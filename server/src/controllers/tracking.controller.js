@@ -681,6 +681,19 @@ export const trackingController = {
             db.website_visitors[vCartIdx].cart_started_at = new Date().toISOString();
           }
         }
+        // Pause any active APV lock — abandoned_cart/checkout has higher priority.
+        // The APV campaign must not fire while the user is in the cart funnel.
+        // lock_status='cart_added' is excluded by stage1Locks/stage2Locks filters (require 'active').
+        // The cart-clear path already handles resuming: ['active','cart_added'] at line ~573.
+        if (phone && eventType !== 'checkout_completed') {
+          const _apvLockPause = (db.campaign_locks || []).find(l =>
+            l.phone === phone && l.campaign_type === 'abandoned_product_view' && l.lock_status === 'active'
+          );
+          if (_apvLockPause) {
+            _apvLockPause.lock_status = 'cart_added';
+            console.log(`[APV] ${phone} added to cart — APV lock paused (cart_added), will resume when cart is cleared`);
+          }
+        }
         // Always backfill phone/email/name if now available
         if (phone && !db.website_visitors[vCartIdx].phone) db.website_visitors[vCartIdx].phone = phone;
         if (email && !db.website_visitors[vCartIdx].email) db.website_visitors[vCartIdx].email = email;
