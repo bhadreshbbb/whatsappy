@@ -532,34 +532,49 @@ export const trackingController = {
       const cartIsCleared = productsArr.length === 0 && (!totalAmount || parseFloat(totalAmount) === 0);
       if (cartIsCleared) {
         const nowClear = new Date().toISOString();
+
+        // Tracker does NOT send phone in cart-change events (only in visitor/identify).
+        // Resolve it from the visitor row so all phone-dependent lookups below work.
+        let resolvedPhone = phone;
+        if (!resolvedPhone && sessionId) {
+          const _clearVis = db.website_visitors.find(v => v.channel_id === cid && v.session_id === sessionId);
+          if (_clearVis?.phone) resolvedPhone = _clearVis.phone;
+        }
+
         let cartCleared = false;
         db.cart_events.forEach(c => {
-          if (c.channel_id === cid && (c.session_id === sessionId || (phone && c.phone === phone)) && !c.recovered) {
+          if (c.channel_id === cid && (c.session_id === sessionId || (resolvedPhone && c.phone === resolvedPhone)) && !c.recovered) {
             c.recovered = 1; c.recovered_at = nowClear; c.recovery_reason = 'cart_cleared';
             cartCleared = true;
           }
         });
-        if (cartCleared) {
-          const stillHasCart = db.cart_events.some(c => c.channel_id === cid && c.phone === phone && !c.recovered);
+
+        // When phone is undefined every anonymous cart event matches c.phone === phone,
+        // so only do the multi-session check when a real phone is known.
+        const stillHasCart = resolvedPhone
+          ? db.cart_events.some(c => c.channel_id === cid && c.phone === resolvedPhone && !c.recovered)
+          : false;
+
+        if (cartCleared || !stillHasCart) {
           if (!stillHasCart) {
             const vIdx = db.website_visitors.findIndex(v =>
-              v.channel_id === cid && (v.session_id === sessionId || (phone && v.phone === phone))
+              v.channel_id === cid && (v.session_id === sessionId || (resolvedPhone && v.phone === resolvedPhone))
             );
             if (vIdx >= 0) {
-              const hasRecentView = (db.product_views || []).some(v => v.channel_id === cid && (v.phone === phone || v.session_id === sessionId));
+              const hasRecentView = (db.product_views || []).some(v => v.channel_id === cid && (v.phone === resolvedPhone || v.session_id === sessionId));
               const targetStatus = hasRecentView ? 'product_view' : 'active';
               downgradeStatus(db.website_visitors[vIdx], targetStatus);
-              console.log(`[Cart] Cleared for ${phone || sessionId} → status downgraded to ${targetStatus}`);
+              console.log(`[Cart] Cleared for ${resolvedPhone || sessionId} → status downgraded to ${targetStatus}`);
 
               // APV timer restart: when cart is emptied the full delay must restart from NOW.
               // Without this, the timer continues from the original view time — so if 2 of 3
               // mins already elapsed before cart-add, only 1 min would remain after cart-clear.
-              const hasActiveAPVCamp = phone && (db.abandoned_cart_campaigns || []).some(c =>
+              const hasActiveAPVCamp = resolvedPhone && (db.abandoned_cart_campaigns || []).some(c =>
                 c.campaign_type === 'abandoned_product_view' && c.is_active && c.channel_id !== 'demo'
               );
               if (hasActiveAPVCamp) {
                 // Reset product_view timestamps → FLOW 2b timer anchor becomes NOW
-                (db.product_views || []).filter(pv => pv.channel_id === cid && pv.phone === phone)
+                (db.product_views || []).filter(pv => pv.channel_id === cid && pv.phone === resolvedPhone)
                   .forEach(pv => {
                     pv.created_at       = nowClear;
                     pv.whatsapp_sent    = 0;
@@ -568,7 +583,7 @@ export const trackingController = {
                   });
                 // Reset APV lock so stage 1 fires fresh (handles cart_added AND mid-stage active locks)
                 const apvLock = (db.campaign_locks || []).find(l =>
-                  l.phone === phone && l.channel_id === cid &&
+                  l.phone === resolvedPhone && l.channel_id === cid &&
                   l.campaign_type === 'abandoned_product_view' &&
                   ['active', 'cart_added'].includes(l.lock_status)
                 );
@@ -583,7 +598,7 @@ export const trackingController = {
                   });
                   (db.abandoned_cart_executions || []).forEach(x => {
                     if (String(x.campaign_id) === String(apvLock.campaign_id) &&
-                        x.phone === phone &&
+                        x.phone === resolvedPhone &&
                         (x.status === 'sent' || x.status === 'failed' || x.status === 'reset_for_retry')) {
                       x.status = 'archived_reentry'; x.archived_at = nowClear;
                     }
@@ -594,7 +609,7 @@ export const trackingController = {
                   apvLock.lock_status     = 'active';
                   apvLock.unlock_reason   = null;
                   apvLock.reentry_at      = nowClear;
-                  console.log(`[APV] ${phone} cart cleared — lock reset, full APV delay restarting from NOW`);
+                  console.log(`[APV] ${resolvedPhone} cart cleared — lock reset, full APV delay restarting from NOW`);
                 }
               }
             }
